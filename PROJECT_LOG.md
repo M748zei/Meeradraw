@@ -45,8 +45,28 @@ Journal chronologique du projet. Entrée la plus récente en haut.
       `NEXT_PUBLIC_CHARIOW_STORE_URL` + Pulse webhook
       `https://meeradraw.digiafrik.shop/api/webhooks/chariow?token=<CHARIOW_WEBHOOK_SECRET>`.
 - [ ] Stripe (crédits payants) : `STRIPE_*` quand prêt.
-- [ ] Déployer règles Firestore/Storage + index (`firebase deploy --only
-      firestore:rules,firestore:indexes,storage`).
+- [x] Règles Firestore/Storage : **durcies puis déployées** (2026-07-21, voir
+      entrée suivante).
+
+---
+
+## 2026-07-21 (suite 3) — Durcissement + déploiement des règles Firebase
+
+### Réalisé
+1. **Audit** : aucun code client n'utilise Firestore/Storage
+   (`getClientDb`/`getClientStorage` jamais appelés) — tout passe par les API
+   routes + Admin SDK. Or `users/{userId}` autorisait le `write` propriétaire
+   → un utilisateur pouvait éditer ses `credits`/`chariow_license` depuis la
+   console navigateur.
+2. **`firestore.rules` durci** : `write: if false` partout côté client,
+   lecture propriétaire conservée (`storage.rules` déjà strict, inchangé).
+3. **Déploiement** : le compte CLI (`mabroukzeidane04@gmail.com`) n'a pas accès
+   au projet `bookstudioai-8eadb` et le service account Admin SDK n'a pas la
+   permission `serviceusage` exigée par le préflight de la CLI Firebase.
+   Contournement : déploiement **direct via l'API `firebaserules`** avec le
+   service account (créer ruleset → patcher les releases `cloud.firestore` et
+   `firebase.storage/<bucket>`). Releases vérifiées actives (updateTime du
+   jour). Index : aucun à déployer (`firestore.indexes.json` vide).
 
 ---
 

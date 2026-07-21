@@ -1,33 +1,41 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Toutes les écritures passent par les API routes (Admin SDK, qui
+    // contourne ces règles). Aucun code client n'écrit dans Firestore —
+    // le write client est donc interdit partout (protège notamment
+    // users.credits / users.chariow_license contre une modification
+    // directe depuis le navigateur).
     function isOwner(userId) {
       return request.auth != null && request.auth.uid == userId;
     }
 
     match /users/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read: if isOwner(userId);
+      allow write: if false;
       match /credit_ledger/{docId} {
         allow read: if isOwner(userId);
-        allow write: if false; // server only via Admin SDK
+        allow write: if false;
       }
     }
 
     match /universes/{universeId} {
-      allow read, write: if request.auth != null && resource.data.user_id == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.user_id == request.auth.uid;
+      allow read: if request.auth != null && resource.data.user_id == request.auth.uid;
+      allow write: if false;
       match /characters/{characterId} {
-        allow read, write: if request.auth != null
+        allow read: if request.auth != null
           && get(/databases/$(database)/documents/universes/$(universeId)).data.user_id == request.auth.uid;
+        allow write: if false;
       }
     }
 
     match /books/{bookId} {
-      allow read, write: if request.auth != null && resource.data.user_id == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.user_id == request.auth.uid;
+      allow read: if request.auth != null && resource.data.user_id == request.auth.uid;
+      allow write: if false;
       match /pages/{pageId} {
-        allow read, write: if request.auth != null
+        allow read: if request.auth != null
           && get(/databases/$(database)/documents/books/$(bookId)).data.user_id == request.auth.uid;
+        allow write: if false;
       }
     }
 
@@ -45,5 +53,8 @@ service cloud.firestore {
       allow read: if request.auth != null && resource.data.user_id == request.auth.uid;
       allow write: if false;
     }
+
+    // Collections serveur uniquement (licenses, chariow_events, etc.) :
+    // aucune règle → refus par défaut.
   }
 }

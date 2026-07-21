@@ -39,7 +39,10 @@ Dernière mise à jour : 2026-07-21
       `meeradraw.digiafrik.shop` (requis pour la connexion Google).
 - [ ] Test génération complète en prod avec un email `ADMIN_EMAILS`
       (idée → livre → PDF).
-- [ ] Déployer les règles Firestore + Storage + index composites.
+- [x] **[2026-07-21]** Règles Firestore + Storage **durcies** (write client
+      interdit partout — protège `credits`/`chariow_license` ; tout passe par
+      l'Admin SDK) et **déployées** via l'API firebaserules (service account).
+      Index : aucun requis pour l'instant (`firestore.indexes.json` vide).
 - [ ] Configurer le Pulse webhook Chariow (`license.*`) →
       `https://meeradraw.digiafrik.shop/api/webhooks/chariow?token=<CHARIOW_WEBHOOK_SECRET>`.
 - [ ] Créer / relier le produit licence Meeradraw sur la boutique DigiAfrik
