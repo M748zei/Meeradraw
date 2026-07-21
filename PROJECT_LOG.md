@@ -4,6 +4,45 @@ Journal chronologique du projet. Entrée la plus récente en haut.
 
 ---
 
+## 2026-07-21 (suite) — Refonte design/UX, GitHub, préparation déploiement
+
+### Réalisé
+1. **Refonte design/UX** :
+   - **Landing page** entièrement refaite (`app/page.tsx`) : hero animé avec de
+     vraies pages de coloriage (éventail + galerie), sections « Pourquoi c'est
+     différent », « Comment ça marche », parcours d'accès Chariow, CTA final.
+     Nouveaux composants `components/landing/{showcase,gallery,reveal}.tsx`
+     (Framer Motion). Validée visuellement (screenshots desktop + mobile).
+   - **Dashboard** (`app/(app)/dashboard/page.tsx`) : stats avec icônes, cartes
+     livres avec vraie cover + badge de statut coloré, tri par récence.
+   - **Page licence** (`app/(app)/license/page.tsx`) : icônes, état « actif »
+     valorisé, note de réassurance.
+   - Nouveau `components/books/status-badge.tsx`.
+2. **Images optimisées** : les rendus de test PNG (~20 Mo) convertis en JPEG
+   légers (~50 KB, dossier `public/_gentest7/*.jpg`) pour la landing. Logo
+   optimisé. `.gitignore` mis à jour pour exclure les assets de test lourds
+   (`_phase2ab/`, `_gentest7/*.png`) → dépôt léger.
+3. **GitHub** : code poussé sur **https://github.com/M748zei/Meeradraw** (privé).
+   Push réussi (234 objets, 1.12 Mo, branche `main`). Secrets (`.env.local`)
+   bien exclus.
+4. **Déploiement** : le connecteur Vercel MCP ne peut pas créer de projet
+   (403 forbidden — permissions). Décision : déploiement via **import GitHub**
+   dans l'UI Vercel (+ déploiements auto à chaque push). Guide + variables d'env
+   de production préparés (webhook secret généré, ADMIN_EMAILS complété).
+
+### État build
+TypeScript **0 erreur**, ESLint **0 erreur** (3 warnings React acceptables),
+`next build` **OK (28 routes)**.
+
+### Prochaines étapes
+- [ ] Terminer l'import Vercel (M748zei/Meeradraw) + coller les variables d'env.
+- [ ] Après 1er déploiement : mettre à jour `NEXT_PUBLIC_APP_URL` avec l'URL réelle + redéployer.
+- [ ] Créer le produit licence Meeradraw sur DigiAfrik → renseigner `CHARIOW_PRODUCT_ID`.
+- [ ] Configurer le Pulse webhook Chariow → `{APP_URL}/api/webhooks/chariow?token=<CHARIOW_WEBHOOK_SECRET>`.
+- [ ] (Option) domaine `meeradraw.digiafrik.shop`.
+
+---
+
 ## 2026-07-21 — Audit complet + correction des bugs critiques (crédits, licences, webhooks)
 
 ### Contexte
