@@ -1,0 +1,425 @@
+import { AppError } from "@/lib/errors";
+import {
+  activateLicense,
+  getLicenseByKey,
+  isChariowConfigured,
+  isLicenseUsable,
+  type ChariowLicense,
+} from "@/lib/chariow/client";
+import type { Firestore } from "firebase-admin/firestore";
+import { createHash } from "crypto";
+
+export type UserLicense = {
+  license_key: string;
+  license_id: string;
+  status: string;
+  product_id?: string | null;
+  product_name?: string | null;
+  product_slug?: string | null;
+  is_active: boolean;
+  expires_at?: string | null;
+  activated_at?: string | null;
+  last_validated_at: string;
+};
+
+export type LicenseStatusView = {
+  configured: boolean;
+  required: boolean;
+  valid: boolean;
+  license: {
+    status?: string;
+    product?: string | null;
+    expires_at?: string | null;
+    masked_key?: string | null;
+    is_active?: boolean;
+  } | null;
+  message?: string;
+};
+
+function deviceIdForUser(userId: string) {
+  return createHash("sha256").update(`aibookstudio:${userId}`).digest("hex").slice(0, 32);
+}
+
+/**
+ * Unique gateway between Meeradraw and Chariow.
+ * No other module should call the Chariow HTTP client directly for business logic.
+ */
+export class LicenseService {
+  constructor(private db: Firestore) {}
+
+  static isConfigured() {
+    return isChariowConfigured();
+  }
+
+  /** Emails listed in ADMIN_EMAILS (comma-separated) bypass Chariow entirely. */
+  static isAdminEmail(email?: string | null): boolean {
+    if (!email) return false;
+    const normalized = email.trim().toLowerCase();
+    if (!normalized) return false;
+    const list = (process.env.ADMIN_EMAILS || "")
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
+    return list.includes(normalized);
+  }
+
+  async getLinkedLicense(userId: string) {
+    const snap = await this.db.collection("users").doc(userId).get();
+    const data = snap.data();
+    return (data?.chariow_license as UserLicense | undefined) ?? null;
+  }
+
+  private async resolveEmail(userId: string, email?: string | null) {
+    if (email?.trim()) return email.trim();
+    const snap = await this.db.collection("users").doc(userId).get();
+    const stored = snap.data()?.email;
+    return typeof stored === "string" ? stored : null;
+  }
+
+  private adminStatusView(): LicenseStatusView {
+    return {
+      configured: LicenseService.isConfigured(),
+      required: false,
+      valid: true,
+      license: null,
+      message: "Accès administrateur — licence Chariow non requise.",
+    };
+  }
+
+  /**
+   * Simple status for the rest of the app / API.
+   * Always re-validates against Chariow when a key is linked and Chariow is configured.
+   * Admin emails (ADMIN_EMAILS) are always treated as valid without Chariow.
+   */
+  async getStatus(userId: string, email?: string | null): Promise<LicenseStatusView> {
+    const resolvedEmail = await this.resolveEmail(userId, email);
+    if (LicenseService.isAdminEmail(resolvedEmail)) {
+      return this.adminStatusView();
+    }
+
+    const linked = await this.getLinkedLicense(userId);
+
+    if (!LicenseService.isConfigured()) {
+      return {
+        configured: false,
+        required: false,
+        valid: true,
+        license: linked
+          ? {
+              status: linked.status,
+              product: linked.product_name ?? null,
+              expires_at: linked.expires_at ?? null,
+              masked_key: null,
+              is_active: linked.is_active,
+            }
+          : null,
+        message: "Chariow non configuré — mode développement.",
+      };
+    }
+
+    if (!linked?.license_key) {
+      return {
+        configured: true,
+        required: true,
+        valid: false,
+        license: null,
+        message: "Activez votre licence Chariow pour débloquer le studio.",
+      };
+    }
+
+    try {
+      const live = await this.requireActiveLicense(userId, resolvedEmail);
+      return {
+        configured: true,
+        required: true,
+        valid: true,
+        license: {
+          status: live!.status,
+          product: live!.product?.name ?? linked.product_name,
+          expires_at: live!.expires_at ?? linked.expires_at,
+          masked_key: live!.license.masked_key ?? null,
+          is_active: true,
+        },
+      };
+    } catch {
+      const refreshed = await this.getLinkedLicense(userId);
+      return {
+        configured: true,
+        required: true,
+        valid: false,
+        license: refreshed
+          ? {
+              status: refreshed.status,
+              product: refreshed.product_name ?? null,
+              expires_at: refreshed.expires_at ?? null,
+              masked_key: null,
+              is_active: refreshed.is_active,
+            }
+          : null,
+        message: "Licence inactive ou invalide. Réactivez une clé Chariow valide.",
+      };
+    }
+  }
+
+  /**
+   * Gate for paid actions (generation, etc.).
+   * Chariow is the source of truth — local cache is updated after each check.
+   * Admin emails skip Chariow entirely.
+   */
+  async requireActiveLicense(userId: string, email?: string | null) {
+    const resolvedEmail = await this.resolveEmail(userId, email);
+    if (LicenseService.isAdminEmail(resolvedEmail)) {
+      return null;
+    }
+
+    if (!LicenseService.isConfigured()) {
+      if (process.env.NODE_ENV !== "production") return null;
+      throw new AppError(
+        "FORBIDDEN",
+        "Une licence Chariow est requise pour utiliser le studio.",
+        403
+      );
+    }
+
+    const linked = await this.getLinkedLicense(userId);
+    if (!linked?.license_key) {
+      throw new AppError(
+        "FORBIDDEN",
+        "Activez votre licence Chariow pour continuer.",
+        403
+      );
+    }
+
+    let license: ChariowLicense;
+    try {
+      license = await getLicenseByKey(linked.license_key);
+    } catch {
+      await this.markLinkedInactive(userId, "invalid");
+      throw new AppError("FORBIDDEN", "Licence Chariow introuvable ou invalide.", 403);
+    }
+
+    this.assertProductMatch(license);
+
+    if (!isLicenseUsable(license)) {
+      await this.persistLicense(userId, license);
+      throw new AppError("FORBIDDEN", "Votre licence Chariow n'est plus active.", 403);
+    }
+
+    await this.persistLicense(userId, license);
+    return license;
+  }
+
+  async activateForUser(userId: string, licenseKey: string) {
+    if (!LicenseService.isConfigured()) {
+      throw new AppError(
+        "INTERNAL_ERROR",
+        "Chariow n'est pas encore configuré (CHARIOW_API_KEY).",
+        500
+      );
+    }
+
+    const key = licenseKey.trim();
+    if (!key) {
+      throw new AppError("VALIDATION_ERROR", "Clé de licence requise", 400);
+    }
+
+    let license = await getLicenseByKey(key);
+    this.assertProductMatch(license);
+
+    if (license.status === "pending_activation" || license.can_activate) {
+      try {
+        license = await activateLicense(key, deviceIdForUser(userId));
+      } catch (err) {
+        license = await getLicenseByKey(key);
+        if (!isLicenseUsable(license)) {
+          throw new AppError(
+            "FORBIDDEN",
+            err instanceof Error ? err.message : "Activation impossible",
+            403
+          );
+        }
+      }
+    }
+
+    this.assertProductMatch(license);
+
+    if (!isLicenseUsable(license)) {
+      throw new AppError(
+        "FORBIDDEN",
+        "Cette licence n'est pas active ou a expiré.",
+        403
+      );
+    }
+
+    await this.persistLicense(userId, license);
+    return license;
+  }
+
+  /**
+   * Primary sync path when Chariow sends webhooks.
+   * Verifies nothing about sale flow — only applies license state locally.
+   */
+  async handleWebhookEvent(payload: Record<string, unknown>) {
+    const event = String(payload?.event || payload?.type || "unknown");
+    const data = (payload?.data as Record<string, unknown> | undefined) ?? {};
+    const licenseObj = (data.license as Record<string, unknown> | undefined) ?? {};
+    const licenseKey =
+      (typeof licenseObj.key === "string" && licenseObj.key) ||
+      (typeof data.license_key === "string" && data.license_key) ||
+      (typeof (payload.license as { key?: string } | undefined)?.key === "string" &&
+        (payload.license as { key: string }).key) ||
+      null;
+
+    await this.db.collection("chariow_events").add({
+      event,
+      license_key: licenseKey,
+      payload,
+      received_at: new Date().toISOString(),
+    });
+
+    if (!licenseKey) return { received: true, updated: 0 };
+
+    const lower = event.toLowerCase();
+    const shouldDeactivate =
+      lower.includes("revok") ||
+      lower.includes("expir") ||
+      lower.includes("refund") ||
+      lower.includes("cancel");
+
+    if (!shouldDeactivate) {
+      // Soft refresh: if we can fetch the live license, update linked users
+      try {
+        const live = await getLicenseByKey(licenseKey);
+        return { received: true, updated: await this.syncKeyToUsers(licenseKey, live) };
+      } catch {
+        return { received: true, updated: 0 };
+      }
+    }
+
+    const status = lower.includes("revok")
+      ? "revoked"
+      : lower.includes("expir")
+        ? "expired"
+        : lower.includes("refund")
+          ? "refunded"
+          : "inactive";
+
+    return {
+      received: true,
+      updated: await this.markInactiveByKey(licenseKey, status),
+    };
+  }
+
+  private assertProductMatch(license: ChariowLicense) {
+    const expectedId = process.env.CHARIOW_PRODUCT_ID?.trim();
+    const expectedSlug = process.env.CHARIOW_PRODUCT_SLUG?.trim();
+    if (!expectedId && !expectedSlug) return;
+
+    const productId = license.product?.id;
+    const productSlug = license.product?.slug;
+
+    if (expectedId && productId && productId !== expectedId) {
+      throw new AppError(
+        "FORBIDDEN",
+        "Cette licence ne correspond pas au produit Meeradraw.",
+        403
+      );
+    }
+    if (expectedSlug && productSlug && productSlug !== expectedSlug) {
+      throw new AppError(
+        "FORBIDDEN",
+        "Cette licence ne correspond pas au produit Meeradraw.",
+        403
+      );
+    }
+  }
+
+  private async persistLicense(userId: string, license: ChariowLicense) {
+    const payload: UserLicense = {
+      license_key: license.license.key,
+      license_id: license.id,
+      status: license.status,
+      product_id: license.product?.id ?? null,
+      product_name: license.product?.name ?? null,
+      product_slug: license.product?.slug ?? null,
+      is_active: isLicenseUsable(license),
+      expires_at: license.expires_at ?? null,
+      activated_at: license.activated_at ?? null,
+      last_validated_at: new Date().toISOString(),
+    };
+
+    await this.db.collection("users").doc(userId).set(
+      {
+        chariow_license: payload,
+        updated_at: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+
+    await this.db.collection("licenses").doc(license.id).set(
+      {
+        ...payload,
+        user_id: userId,
+        updated_at: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  }
+
+  private async markLinkedInactive(userId: string, status: string) {
+    const linked = await this.getLinkedLicense(userId);
+    if (!linked) return;
+    await this.db.collection("users").doc(userId).set(
+      {
+        chariow_license: {
+          ...linked,
+          is_active: false,
+          status,
+          last_validated_at: new Date().toISOString(),
+        },
+        updated_at: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  }
+
+  private async markInactiveByKey(licenseKey: string, status: string) {
+    const users = await this.db
+      .collection("users")
+      .where("chariow_license.license_key", "==", licenseKey)
+      .get();
+
+    let updated = 0;
+    for (const doc of users.docs) {
+      const current = doc.data().chariow_license || {};
+      await doc.ref.set(
+        {
+          chariow_license: {
+            ...current,
+            is_active: false,
+            status,
+            last_validated_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+      updated += 1;
+    }
+    return updated;
+  }
+
+  private async syncKeyToUsers(licenseKey: string, license: ChariowLicense) {
+    const users = await this.db
+      .collection("users")
+      .where("chariow_license.license_key", "==", licenseKey)
+      .get();
+
+    let updated = 0;
+    for (const doc of users.docs) {
+      await this.persistLicense(doc.id, license);
+      updated += 1;
+    }
+    return updated;
+  }
+}

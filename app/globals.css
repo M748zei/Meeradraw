@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+:root {
+  --cream-50: #fffcf8;
+  --cream-100: #faf6f0;
+  --cream-200: #efe6da;
+  --cream-300: #e2d5c4;
+  --sky-50: #f0f8ff;
+  --sky-100: #dceeff;
+  --sky-300: #7ec8f0;
+  --sky-400: #4db3e8;
+  --sky-600: #2a8fc4;
+  --sky-700: #1f6f9a;
+  --mint-100: #e6f7f1;
+  --mint-200: #c5eadc;
+  --mint-300: #8fd9bf;
+  --mint-400: #5ec4a4;
+  --mint-800: #1f6b55;
+  --lavender-100: #f3eefc;
+  --lavender-300: #cbb8f0;
+  --yellow-100: #fff6d9;
+  --yellow-300: #f5d76e;
+  --rose-100: #ffe8ee;
+  --rose-200: #ffd0db;
+  --rose-700: #b33b5a;
+  --ink: #2a3340;
+  --ink-muted: #6b7585;
+  --background: var(--cream-50);
+  --foreground: var(--ink);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-cream-50: var(--cream-50);
+  --color-cream-100: var(--cream-100);
+  --color-cream-200: var(--cream-200);
+  --color-cream-300: var(--cream-300);
+  --color-sky-50: var(--sky-50);
+  --color-sky-100: var(--sky-100);
+  --color-sky-300: var(--sky-300);
+  --color-sky-400: var(--sky-400);
+  --color-sky-600: var(--sky-600);
+  --color-sky-700: var(--sky-700);
+  --color-mint-100: var(--mint-100);
+  --color-mint-200: var(--mint-200);
+  --color-mint-300: var(--mint-300);
+  --color-mint-400: var(--mint-400);
+  --color-mint-800: var(--mint-800);
+  --color-lavender-100: var(--lavender-100);
+  --color-lavender-300: var(--lavender-300);
+  --color-yellow-100: var(--yellow-100);
+  --color-yellow-300: var(--yellow-300);
+  --color-rose-100: var(--rose-100);
+  --color-rose-200: var(--rose-200);
+  --color-rose-700: var(--rose-700);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --shadow-soft: 0 8px 30px rgba(42, 51, 64, 0.06);
+  --shadow-lift: 0 16px 40px rgba(42, 51, 64, 0.1);
+}
+
+body {
+  background:
+    radial-gradient(ellipse 80% 50% at 10% -10%, rgba(126, 200, 240, 0.25), transparent),
+    radial-gradient(ellipse 60% 40% at 90% 0%, rgba(203, 184, 240, 0.2), transparent),
+    radial-gradient(ellipse 50% 30% at 50% 100%, rgba(143, 217, 191, 0.15), transparent),
+    var(--cream-50);
+  color: var(--ink);
+  min-height: 100vh;
+}
+
+.font-display {
+  font-family: var(--font-display), ui-serif, Georgia, serif;
+}
+
+.h-13 {
+  height: 3.25rem;
+}

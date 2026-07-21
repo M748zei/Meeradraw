@@ -1,0 +1,49 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+      match /credit_ledger/{docId} {
+        allow read: if isOwner(userId);
+        allow write: if false; // server only via Admin SDK
+      }
+    }
+
+    match /universes/{universeId} {
+      allow read, write: if request.auth != null && resource.data.user_id == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.user_id == request.auth.uid;
+      match /characters/{characterId} {
+        allow read, write: if request.auth != null
+          && get(/databases/$(database)/documents/universes/$(universeId)).data.user_id == request.auth.uid;
+      }
+    }
+
+    match /books/{bookId} {
+      allow read, write: if request.auth != null && resource.data.user_id == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.user_id == request.auth.uid;
+      match /pages/{pageId} {
+        allow read, write: if request.auth != null
+          && get(/databases/$(database)/documents/books/$(bookId)).data.user_id == request.auth.uid;
+      }
+    }
+
+    match /generations/{id} {
+      allow read: if request.auth != null && resource.data.user_id == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /transactions/{id} {
+      allow read: if request.auth != null && resource.data.user_id == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /prompts/{id} {
+      allow read: if request.auth != null && resource.data.user_id == request.auth.uid;
+      allow write: if false;
+    }
+  }
+}
