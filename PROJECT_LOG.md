@@ -4,6 +4,52 @@ Journal chronologique du projet. Entrée la plus récente en haut.
 
 ---
 
+## 2026-07-21 (suite 2) — 🚀 MISE EN PRODUCTION sur meeradraw.digiafrik.shop
+
+### Réalisé
+1. **Build local vérifié** (0 erreur, 28 routes + middleware) ; `PROJECT_LOG.md`
+   commité et poussé (`547c0f0`).
+2. **Vercel CLI** mise à jour (50.38.3 → 56.4.1), compte `digiafrik` déjà
+   connecté (le blocage MCP 403 ne concernait pas la CLI).
+3. **Projet Vercel `meeradraw` créé et lié** (scope
+   `mabroukzeidane04-5342s-projects`, même scope que Klik) + **repo GitHub
+   connecté** → déploiements auto à chaque push sur `main`.
+   Note : `vercel link` a ajouté `VERCEL_OIDC_TOKEN` à `.env.local` (normal).
+4. **22 variables d'env de production** poussées via script (valeurs jamais
+   affichées) : Firebase client + Admin, Groq, FAL, Chariow API, et surcharges
+   `MOCK_AI=false`, `CHARIOW_WEBHOOK_SECRET`, `ADMIN_EMAILS`,
+   `NEXT_PUBLIC_APP_URL=https://meeradraw.digiafrik.shop` (choisi d'emblée pour
+   éviter les redéploiements). Exclues comme prévu : `STRIPE_*`,
+   `CHARIOW_PRODUCT_ID/SLUG`, `NEXT_PUBLIC_CHARIOW_STORE_URL`
+   (`OPENAI_API_KEY` vide → ignorée).
+5. **Déploiement production** : `vercel --prod` → READY.
+6. **Domaine `meeradraw.digiafrik.shop`** : ajouté au projet ; comme
+   `digiafrik.shop` est enregistré chez Vercel (nameservers Vercel, même
+   compte), le DNS a été configuré **automatiquement** — aucun enregistrement
+   manuel. Domaine vérifié et actif (HTTPS OK).
+7. **Vérifications en prod** :
+   - Landing 200 (titre + images OK), `/login` & `/signup` 200,
+     `/dashboard` & `/library` → 307 vers `/login?next=…`, API sans session → 401.
+   - **Test E2E auth réel** (compte jetable) : signup Firebase → cookie
+     `__session` créé → profil Firestore avec **30 crédits de bienvenue** →
+     gate licence Chariow actif (`valid:false`, message d'activation).
+     Compte test supprimé (Auth + doc Firestore + ledger).
+
+### Reste à faire (manuel)
+- [ ] Firebase Console → Authentication → Settings → **Authorized domains** :
+      ajouter `meeradraw.digiafrik.shop` (requis pour la connexion Google ;
+      l'email/password fonctionne déjà).
+- [ ] Test génération complète (idée → livre → PDF) avec un email
+      `ADMIN_EMAILS` (nécessite le mot de passe du compte admin).
+- [ ] Produit licence Meeradraw sur DigiAfrik → `CHARIOW_PRODUCT_ID`,
+      `NEXT_PUBLIC_CHARIOW_STORE_URL` + Pulse webhook
+      `https://meeradraw.digiafrik.shop/api/webhooks/chariow?token=<CHARIOW_WEBHOOK_SECRET>`.
+- [ ] Stripe (crédits payants) : `STRIPE_*` quand prêt.
+- [ ] Déployer règles Firestore/Storage + index (`firebase deploy --only
+      firestore:rules,firestore:indexes,storage`).
+
+---
+
 ## 2026-07-21 (suite) — Refonte design/UX, GitHub, préparation déploiement
 
 ### Réalisé

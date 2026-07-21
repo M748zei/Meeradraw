@@ -20,21 +20,31 @@ Dernière mise à jour : 2026-07-21
   matching produit Chariow sur `product.id` (fail-closed), webhook Chariow
   conforme à l'API réelle, sécurité webhook (constant-time, fail-closed).
 - **[2026-07-21] Lint propre** (0 erreur) + guards de robustesse (NaN env).
+- **[2026-07-21] Refonte design/UX** (landing, dashboard, page licence) +
+  push GitHub (M748zei/Meeradraw).
+- **[2026-07-21] 🚀 EN PRODUCTION : https://meeradraw.digiafrik.shop** —
+  projet Vercel `meeradraw` lié au repo GitHub (déploiement auto sur push),
+  22 variables d'env de prod configurées, domaine actif (DNS auto via
+  nameservers Vercel), auth E2E validée en prod (signup → session → profil
+  + 30 crédits), gate licence Chariow actif.
 
 ## 🔄 En cours
 
-- Amélioration du design / UX (landing, dashboard, studio, parcours de création).
+- Finalisation post-mise en ligne (voir ci-dessous).
 
 ## 📋 À faire
 
-### Déploiement & mise en ligne
-- [ ] Configurer les variables d'environnement de production.
-- [ ] Déployer sur Vercel (recommandé pour Next.js).
-- [ ] Sous-domaine sous `digiafrik.shop` (ex. `meeradraw.digiafrik.shop`).
+### Finalisation mise en ligne
+- [ ] Firebase Console → Auth → Authorized domains : ajouter
+      `meeradraw.digiafrik.shop` (requis pour la connexion Google).
+- [ ] Test génération complète en prod avec un email `ADMIN_EMAILS`
+      (idée → livre → PDF).
 - [ ] Déployer les règles Firestore + Storage + index composites.
-- [ ] Configurer le Pulse webhook Chariow (`license.*`) → endpoint app.
+- [ ] Configurer le Pulse webhook Chariow (`license.*`) →
+      `https://meeradraw.digiafrik.shop/api/webhooks/chariow?token=<CHARIOW_WEBHOOK_SECRET>`.
 - [ ] Créer / relier le produit licence Meeradraw sur la boutique DigiAfrik
-      et renseigner `CHARIOW_PRODUCT_ID`.
+      et renseigner `CHARIOW_PRODUCT_ID` + `NEXT_PUBLIC_CHARIOW_STORE_URL`.
+- [ ] Stripe (crédits payants) : renseigner `STRIPE_*` en prod.
 
 ### Qualité & fonctionnalités
 - [ ] Reaper pour les livres bloqués en statut `generating` (timeout).
