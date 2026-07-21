@@ -2,7 +2,10 @@ import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { getImageProvider } from "@/services/ai";
 import { LicenseService } from "@/services/license-service";
+import { CreditService } from "@/services/credit-service";
+import { CREDIT_COSTS } from "@/config/credits";
 import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 
 /** Retry may regenerate several page images. */
@@ -23,7 +26,9 @@ export async function POST(request: Request) {
       throw new AppError("NOT_FOUND", "Livre introuvable", 404);
     }
     const book = bookSnap.data()!;
+    const credits = new CreditService(db);
     const pagesCol = db.collection("books").doc(body.book_id).collection("pages");
+    const retryToken = randomUUID();
 
     let pages: QueryDocumentSnapshot[] = [];
 
@@ -66,56 +71,86 @@ export async function POST(request: Request) {
             .join(" — ")
         : undefined;
 
+    // Charge per page up-front (atomic reservation). Pages that still fail are
+    // refunded below, so the customer only pays for pages actually recovered.
+    const perPage = CREDIT_COSTS.regenerate_page;
+    const reserveAmount = pages.length * perPage;
+    if (reserveAmount > 0) {
+      await credits.reserve(
+        user.id,
+        reserveAmount,
+        `Réservation régénération ${pages.length} page(s)`,
+        `retry:${retryToken}:reserve`
+      );
+    }
+
     const imageProvider = getImageProvider();
     let recovered = 0;
     let stillFailed = 0;
 
-    for (const pageDoc of pages) {
-      const page = pageDoc.data();
-      await pageDoc.ref.update({
-        generation_status: "generating",
-        updated_at: new Date().toISOString(),
-      });
-      try {
-        const pageLock =
-          (typeof page.character_lock === "string" && page.character_lock) ||
-          characterBible;
-        const image = await imageProvider.generateImage({
-          prompt: [
-            page.illustration_prompt ||
-              page.story_text ||
-              book.idea ||
-              book.title,
-            page.shot_type ? `Shot: ${page.shot_type}.` : "",
-            "Mandatory rich colorable environment matching the caption. No empty white void. Simplified mitten hands. Max 2 characters. Full figures inside frame with margins.",
-          ]
-            .filter(Boolean)
-            .join(" "),
-          style: book.style || "cute",
-          characterBible: pageLock,
-          negativePrompt:
-            (typeof page.negative_prompt === "string" && page.negative_prompt) ||
-            undefined,
-          worldSetting,
-          isColoringPage: true,
-          referenceImageUrl: characterSheetUrl,
-          shotType: page.shot_type,
-          comicBeat: page.comic_beat,
-        });
-        if (!image?.url) throw new Error("Empty image URL");
+    // Everything after the reservation is wrapped so a crash mid-run always
+    // refunds the unused portion (reserved − paid-for-recovered) rather than
+    // stranding the customer's credits. The refund is idempotent per token.
+    try {
+      for (const pageDoc of pages) {
+        const page = pageDoc.data();
         await pageDoc.ref.update({
-          illustration_url: image.url,
-          generation_status: "completed",
+          generation_status: "generating",
           updated_at: new Date().toISOString(),
         });
-        recovered += 1;
-      } catch {
-        await pageDoc.ref.update({
-          generation_status: "failed",
-          illustration_url: null,
-          updated_at: new Date().toISOString(),
-        });
-        stillFailed += 1;
+        try {
+          const pageLock =
+            (typeof page.character_lock === "string" && page.character_lock) ||
+            characterBible;
+          const image = await imageProvider.generateImage({
+            prompt: [
+              page.illustration_prompt ||
+                page.story_text ||
+                book.idea ||
+                book.title,
+              page.shot_type ? `Shot: ${page.shot_type}.` : "",
+              "Mandatory rich colorable environment matching the caption. No empty white void. Simplified mitten hands. Max 2 characters. Full figures inside frame with margins.",
+            ]
+              .filter(Boolean)
+              .join(" "),
+            style: book.style || "cute",
+            characterBible: pageLock,
+            negativePrompt:
+              (typeof page.negative_prompt === "string" && page.negative_prompt) ||
+              undefined,
+            worldSetting,
+            isColoringPage: true,
+            referenceImageUrl: characterSheetUrl,
+            shotType: page.shot_type,
+            comicBeat: page.comic_beat,
+          });
+          if (!image?.url) throw new Error("Empty image URL");
+          await pageDoc.ref.update({
+            illustration_url: image.url,
+            generation_status: "completed",
+            updated_at: new Date().toISOString(),
+          });
+          recovered += 1;
+        } catch {
+          await pageDoc.ref.update({
+            generation_status: "failed",
+            illustration_url: null,
+            updated_at: new Date().toISOString(),
+          });
+          stillFailed += 1;
+        }
+      }
+    } finally {
+      // Refund everything that was reserved but not turned into a recovered
+      // page (covers both still-failed pages and an early crash). Idempotent.
+      const refundAmount = Math.max(0, reserveAmount - recovered * perPage);
+      if (refundAmount > 0) {
+        await credits.refund(
+          user.id,
+          refundAmount,
+          `Remboursement ${pages.length - recovered} page(s) non régénérée(s)`,
+          `retry:${retryToken}:refund`
+        );
       }
     }
 

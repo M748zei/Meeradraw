@@ -23,10 +23,19 @@ export async function POST(request: Request) {
     await new LicenseService(db).requireActiveLicense(user.id, user.email);
     const book = await books.get(user.id, body.book_id);
     const cost = estimateBookCost(book.page_count as number, book.type as string);
-    await credits.ensureEnough(user.id, cost);
 
     const generationId = randomUUID();
     const now = new Date().toISOString();
+
+    // Reserve credits up-front (atomic). The orchestrator refunds the unused
+    // portion (failed pages, or the whole reservation on total failure) at the
+    // end. reference_id makes the reservation idempotent per generation.
+    await credits.reserve(
+      user.id,
+      cost,
+      `Réservation génération livre ${String(book.title ?? "")}`.trim(),
+      `gen:${generationId}:reserve`
+    );
     const generation = {
       user_id: user.id,
       book_id: body.book_id,

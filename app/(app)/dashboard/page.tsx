@@ -2,10 +2,12 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { StatusBadge } from "@/components/books/status-badge";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebase/admin";
 import { getSessionUser } from "@/lib/firebase/session";
 import { formatCredits } from "@/lib/utils";
 import { LicenseService } from "@/services/license-service";
+import { BookOpen, CreditCard, Sparkles } from "lucide-react";
 
 const STORE_URL = process.env.NEXT_PUBLIC_CHARIOW_STORE_URL;
 
@@ -24,12 +26,15 @@ export default async function DashboardPage() {
       db.collection("books").where("user_id", "==", session.uid).get(),
       db.collection("users").doc(session.uid).get(),
     ]);
+    const recency = (d: { updated_at?: string; created_at?: string }) =>
+      d.updated_at || d.created_at || "";
     universes = uSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() as Omit<(typeof universes)[0], "id">) }))
-      .sort((a, b) => 0)
+      .sort((a, b) => recency(b as never).localeCompare(recency(a as never)))
       .slice(0, 6);
     books = bSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() as Omit<(typeof books)[0], "id">) }))
+      .sort((a, b) => recency(b as never).localeCompare(recency(a as never)))
       .slice(0, 6);
     credits = (profile.data()?.credits as number) ?? 0;
     name = ((profile.data()?.fullname as string) || "Créateur").split(" ")[0];
@@ -69,16 +74,43 @@ export default async function DashboardPage() {
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="font-display text-3xl text-ink md:text-4xl">Bonjour {name} ✦</h1>
+          <h1 className="flex items-center gap-2 font-display text-3xl text-ink md:text-4xl">
+            Bonjour {name}
+            <Sparkles className="h-6 w-6 text-yellow-300" />
+          </h1>
           <p className="mt-2 text-ink-muted">Que souhaitez-vous créer aujourd&apos;hui ?</p>
         </div>
         <Link href="/universes/new"><Button size="lg">Créer un nouvel univers</Button></Link>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <Card><p className="text-sm text-ink-muted">Crédits</p><p className="mt-1 font-display text-3xl text-sky-700">{formatCredits(credits)}</p></Card>
-        <Card><p className="text-sm text-ink-muted">Univers</p><p className="mt-1 font-display text-3xl">{universes.length}</p></Card>
-        <Card><p className="text-sm text-ink-muted">Livres</p><p className="mt-1 font-display text-3xl">{books.length}</p></Card>
+        <Card className="flex items-center gap-4">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
+            <CreditCard className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-sm text-ink-muted">Crédits</p>
+            <p className="font-display text-2xl text-sky-700">{formatCredits(credits)}</p>
+          </div>
+        </Card>
+        <Card className="flex items-center gap-4">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-lavender-100 text-lavender-300">
+            <Sparkles className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-sm text-ink-muted">Univers</p>
+            <p className="font-display text-2xl">{universes.length}</p>
+          </div>
+        </Card>
+        <Card className="flex items-center gap-4">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-mint-100 text-mint-800">
+            <BookOpen className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-sm text-ink-muted">Livres</p>
+            <p className="font-display text-2xl">{books.length}</p>
+          </div>
+        </Card>
       </div>
 
       <section>
@@ -113,12 +145,18 @@ export default async function DashboardPage() {
           <div className="grid gap-3">
             {books.map((b) => (
               <Link key={b.id} href={`/books/${b.id}`}>
-                <Card className="flex items-center gap-4 transition hover:shadow-lift">
-                  <div className="h-16 w-12 rounded-xl bg-gradient-to-br from-mint-100 to-sky-100" />
-                  <div className="flex-1">
-                    <h3 className="font-semibold">{b.title}</h3>
-                    <p className="text-sm text-ink-muted">{b.page_count} pages · {b.status}</p>
+                <Card className="flex items-center gap-4 transition hover:-translate-y-0.5 hover:shadow-lift">
+                  <div className="h-16 w-12 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-mint-100 to-sky-100">
+                    {b.cover_image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={b.cover_image} alt="" className="h-full w-full object-cover" />
+                    ) : null}
                   </div>
+                  <div className="flex-1">
+                    <h3 className="font-semibold">{b.title || "Livre sans titre"}</h3>
+                    <p className="text-sm text-ink-muted">{b.page_count} pages</p>
+                  </div>
+                  <StatusBadge status={b.status} />
                 </Card>
               </Link>
             ))}

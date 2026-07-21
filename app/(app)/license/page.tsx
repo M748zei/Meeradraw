@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { CheckCircle2, KeyRound, ShieldCheck } from "lucide-react";
 
 type Status = {
   configured: boolean;
@@ -68,6 +69,9 @@ export default function LicensePage() {
   return (
     <div className="mx-auto max-w-lg space-y-6">
       <div>
+        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-100 to-mint-100 text-sky-700">
+          <KeyRound className="h-6 w-6" />
+        </div>
         <h1 className="font-display text-3xl">Licence Chariow</h1>
         <p className="mt-2 text-ink-muted">
           Meeradraw se vend sur Chariow. Après votre achat, entrez ici la clé
@@ -113,7 +117,9 @@ export default function LicensePage() {
           </div>
         ) : valid ? (
           <div className="space-y-1 text-sm">
-            <p className="font-semibold text-mint-800">Licence active ✦</p>
+            <p className="flex items-center gap-2 font-semibold text-mint-800">
+              <CheckCircle2 className="h-5 w-5" /> Licence active
+            </p>
             {status.license?.product ? <p>Produit : {status.license.product}</p> : null}
             {status.license?.masked_key ? <p>Clé : {status.license.masked_key}</p> : null}
             {status.license?.expires_at ? (
@@ -156,6 +162,10 @@ export default function LicensePage() {
                 ? "Activer ma licence"
                 : "Activation indisponible (API non configurée)"}
           </Button>
+          <p className="flex items-center justify-center gap-1.5 text-xs text-ink-muted">
+            <ShieldCheck className="h-3.5 w-3.5 text-mint-400" />
+            Vérification sécurisée auprès de Chariow. Votre clé n&apos;est jamais partagée.
+          </p>
         </form>
       </Card>
     </div>

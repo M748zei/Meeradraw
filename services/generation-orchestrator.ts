@@ -11,13 +11,20 @@ import { PDFService } from "@/services/pdf-service";
 import { StorageService } from "@/services/storage-service";
 import { isBlankOrTooFaint, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
+import { refundForFailedPages } from "@/config/credits";
 import type { Firestore } from "firebase-admin/firestore";
 import { randomUUID } from "crypto";
 
+/** Parse an env integer, falling back to `fallback` on NaN/≤0 (misconfig-safe). */
+function envInt(value: string | undefined, fallback: number) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
 /** Parallel page image generation (fal). Keep low to avoid rate limits. */
-const PAGE_GEN_CONCURRENCY = Number(process.env.PAGE_GEN_CONCURRENCY || 3);
+const PAGE_GEN_CONCURRENCY = envInt(process.env.PAGE_GEN_CONCURRENCY, 3);
 /** How many times to (re)generate the character model sheet if it comes back blank/poor. */
-const SHEET_MAX_ATTEMPTS = Number(process.env.SHEET_MAX_ATTEMPTS || 3);
+const SHEET_MAX_ATTEMPTS = envInt(process.env.SHEET_MAX_ATTEMPTS, 3);
 
 export class GenerationOrchestrator {
   private books: BookService;
@@ -321,10 +328,18 @@ export class GenerationOrchestrator {
       // Never mark a book "completed" with blank pages
       if (completedCount === 0) {
         await this.books.update(userId, bookId, { status: "failed" });
+        // Nothing was produced — refund the entire reservation.
+        await this.credits.refund(
+          userId,
+          cost,
+          "Remboursement — génération échouée (aucune page)",
+          `gen:${generationId}:refund`
+        );
         await this.updateGeneration(generationId, {
           status: "failed",
           current_step: "illustrator",
           progress: 90,
+          credits_used: 0,
           error_message:
             "Aucune page illustrée n’a pu être générée. Réessayez ou régénérez les pages.",
           duration_ms: Date.now() - started,
@@ -377,18 +392,34 @@ export class GenerationOrchestrator {
         status: bookStatus,
         pdf_url: pdfUrl,
       });
-      await this.credits.debit(
-        userId,
-        cost,
-        failedCount > 0
-          ? `Génération partielle livre ${String(full.title)} (${completedCount}/${insertedPages.length} pages)`
-          : `Génération livre ${String(full.title)}`,
-        generationId
+
+      // Credits were reserved up-front for `book.page_count` pages in
+      // generation/start. Refund every page the customer paid for but did not
+      // receive — this covers both pages that failed to render AND pages the AI
+      // plan never produced (plan shorter than requested). The customer pays
+      // only for delivered pages (+ cover + PDF). Idempotent per generation.
+      const plannedPages = (book.page_count as number) || insertedPages.length;
+      const notDelivered = Math.max(0, plannedPages - completedCount);
+      const refund = refundForFailedPages(
+        plannedPages,
+        completedCount,
+        book.type as string
       );
+      if (refund > 0) {
+        await this.credits.refund(
+          userId,
+          refund,
+          `Remboursement ${notDelivered} page(s) non livrée(s) — ${String(full.title)}`,
+          `gen:${generationId}:refund`
+        );
+      }
+      const creditsUsed = Math.max(0, cost - refund);
+
       await this.updateGeneration(generationId, {
         status: genStatus,
         current_step: "editor",
         progress: 100,
+        credits_used: creditsUsed,
         provider:
           process.env.MOCK_AI === "true"
             ? "mock"
@@ -404,8 +435,21 @@ export class GenerationOrchestrator {
     } catch (err) {
       console.error("generation failed", err);
       await this.books.update(userId, bookId, { status: "failed" });
+      // Refund the up-front reservation — the run crashed before delivering.
+      // Idempotent: if a partial refund already landed this is a no-op.
+      try {
+        await this.credits.refund(
+          userId,
+          cost,
+          "Remboursement — génération interrompue",
+          `gen:${generationId}:refund`
+        );
+      } catch (refundErr) {
+        console.error("refund after generation failure failed", refundErr);
+      }
       await this.updateGeneration(generationId, {
         status: "failed",
+        credits_used: 0,
         error_message: err instanceof Error ? err.message : "Erreur inconnue",
         duration_ms: Date.now() - started,
       });

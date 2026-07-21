@@ -3,30 +3,35 @@ import { randomUUID } from "crypto";
 import { getAdminAuth, getAdminDb } from "@/lib/firebase/admin";
 import { UniverseService } from "@/services/universe-service";
 import { BookService } from "@/services/book-service";
+import { CreditService } from "@/services/credit-service";
 import { GenerationOrchestrator } from "@/services/generation-orchestrator";
 import { estimateBookCost } from "@/config/credits";
 
 /**
  * DEV-ONLY test harness to drive the REAL generation pipeline (Groq + fal).
  * Strictly gated: only runs when NODE_ENV !== "production" AND ?secret matches.
+ * The secret must be supplied via DEV_GENTEST_SECRET (no hard-coded fallback).
  * REMOVE after quality-lock testing.
  */
 export const maxDuration = 300;
-
-const DEV_SECRET = "colorbook-quality-lock-2026";
 
 export async function GET(request: Request) {
   if (process.env.NODE_ENV === "production") {
     return NextResponse.json({ error: "disabled in production" }, { status: 404 });
   }
+  const devSecret = process.env.DEV_GENTEST_SECRET?.trim();
   const url = new URL(request.url);
-  if (url.searchParams.get("secret") !== DEV_SECRET) {
+  if (!devSecret || url.searchParams.get("secret") !== devSecret) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
-  const adminEmail =
-    (process.env.ADMIN_EMAILS || "").split(",")[0]?.trim() ||
-    "manbroukmohamedzei@gmail.com";
+  const adminEmail = (process.env.ADMIN_EMAILS || "").split(",")[0]?.trim();
+  if (!adminEmail) {
+    return NextResponse.json(
+      { error: "ADMIN_EMAILS must be set to a real Firebase Auth user email" },
+      { status: 400 }
+    );
+  }
   const idea =
     url.searchParams.get("idea") ||
     "Aïcha, une petite fille curieuse, et son ami le renard des sables explorent un marché ouest-africain animé pour retrouver le tambour magique perdu de son grand-père.";
@@ -98,6 +103,15 @@ export async function GET(request: Request) {
       updated_at: now,
     });
     await books.update(uid, book.id, { status: "generating" });
+
+    // Mirror generation/start: reserve credits up-front so the orchestrator's
+    // end-of-run refund logic nets correctly (admins are auto-topped-up).
+    await new CreditService(db).reserve(
+      uid,
+      cost,
+      "[GENTEST] Réservation génération",
+      `gen:${generationId}:reserve`
+    );
 
     const startedAt = Date.now();
     const orchestrator = new GenerationOrchestrator(db);

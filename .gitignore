@@ -43,3 +43,10 @@ next-env.d.ts
 
 .env*.local
 .env.local
+
+# --- Meeradraw: exclude heavy AI test/comparison assets from the repo ---
+# A/B model comparison renders (kontext / nanobanana / seedream) — dev only, ~11MB.
+/public/_phase2ab/
+# Full-resolution generation test dump (~8MB). The landing uses optimized copies.
+/public/_gentest7/*.png
+/public/_gentest7/_plan.json

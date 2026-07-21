@@ -192,7 +192,6 @@ function NewBookForm() {
       void runEnrich(prefillIdea);
     }
     // Only on mount / idea query change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefillIdea]);
 
   function applyManualIdea(value: string) {

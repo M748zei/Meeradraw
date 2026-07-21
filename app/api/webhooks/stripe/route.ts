@@ -28,7 +28,14 @@ export async function POST(request: Request) {
       const credits = Number(session.metadata?.credits || 0);
       if (userId && credits > 0) {
         const db = getAdminDb();
-        await new CreditService(db).credit(userId, credits, "Achat de crédits");
+        // Idempotent on the Stripe event id: replayed/duplicate deliveries
+        // (Stripe retries webhooks) credit the account exactly once.
+        await new CreditService(db).credit(
+          userId,
+          credits,
+          "Achat de crédits",
+          `stripe:${event.id}`
+        );
         if (session.id) {
           const txs = await db
             .collection("transactions")

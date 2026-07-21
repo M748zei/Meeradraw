@@ -28,7 +28,7 @@ function CreditsInner() {
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message || "Erreur");
       if (json.data.checkout_url) {
-        window.location.href = json.data.checkout_url;
+        window.location.assign(json.data.checkout_url);
         return;
       }
       if (json.data.demo) {

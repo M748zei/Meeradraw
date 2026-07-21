@@ -7,7 +7,9 @@ export type ChariowLicense = {
   is_expired: boolean;
   can_activate: boolean;
   license: { key: string; masked_key?: string };
-  product?: { id: string; name: string; slug?: string };
+  // Chariow's product id is a string like "prd_..." on GET, but the activate
+  // endpoint can return a numeric id — normalize to string when comparing.
+  product?: { id: string | number; name: string; slug?: string };
   customer?: { id: string; name?: string; email?: string };
   activations?: { count: number; max: number; remaining: number };
   expires_at?: string | null;

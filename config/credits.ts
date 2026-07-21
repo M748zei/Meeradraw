@@ -45,8 +45,27 @@ export const CREDIT_PACKS = [
 
 export const FREE_CREDITS_ON_SIGNUP = 30;
 
+/** Per-page credit cost for a given book type. */
+export function perPageCost(type: string = "colorbook") {
+  return type === "storybook" ? CREDIT_COSTS.storybook_page : CREDIT_COSTS.colorbook_page;
+}
+
 export function estimateBookCost(pageCount: number, type: string = "colorbook") {
-  const perPage =
-    type === "storybook" ? CREDIT_COSTS.storybook_page : CREDIT_COSTS.colorbook_page;
-  return CREDIT_COSTS.cover + pageCount * perPage + CREDIT_COSTS.pdf_export;
+  return CREDIT_COSTS.cover + pageCount * perPageCost(type) + CREDIT_COSTS.pdf_export;
+}
+
+/**
+ * Credit for pages that never rendered so the customer only pays for what was
+ * actually produced. `plannedPages` is what we reserved for; `completedPages`
+ * is how many came back with an image. When at least one page rendered, the
+ * cover + PDF are considered delivered and kept; only the missing page credits
+ * are refunded. When nothing rendered, the caller refunds the full reservation.
+ */
+export function refundForFailedPages(
+  plannedPages: number,
+  completedPages: number,
+  type: string = "colorbook"
+) {
+  const failed = Math.max(0, plannedPages - completedPages);
+  return failed * perPageCost(type);
 }

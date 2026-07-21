@@ -2,6 +2,18 @@ import { AppError } from "@/lib/errors";
 import { LicenseService } from "@/services/license-service";
 import type { Firestore } from "firebase-admin/firestore";
 
+/**
+ * Credit ledger — the single source of truth for a user's usage balance.
+ *
+ * All balance mutations run inside a Firestore transaction so concurrent
+ * operations (a Stripe webhook credit landing while a generation debit runs,
+ * two retries firing at once, N parallel generations) can never lose an update.
+ *
+ * Idempotency: pass a stable `referenceId`. If a ledger entry already exists for
+ * that (operation, reference_id) pair, the mutation is a no-op and the current
+ * balance is returned. This makes Stripe webhooks and generation debits safe to
+ * replay.
+ */
 export class CreditService {
   constructor(private db: Firestore) {}
 
@@ -17,10 +29,14 @@ export class CreditService {
     return LicenseService.isAdminEmail(typeof email === "string" ? email : null);
   }
 
+  /**
+   * Balance guard for a would-be debit. Admins are quietly topped up so their
+   * generations never block. Non-admins throw INSUFFICIENT_CREDITS when short.
+   * This is a *check*, not a reservation — use `reserve()` to actually hold funds.
+   */
   async ensureEnough(userId: string, amount: number) {
     if (await this.isAdminUser(userId)) {
       const balance = await this.getBalance(userId);
-      // Keep admin generation unblocked; quietly top up when balance is drained.
       if (balance < amount) {
         return this.credit(
           userId,
@@ -41,36 +57,125 @@ export class CreditService {
     return balance;
   }
 
+  /**
+   * Atomically reserve (debit up-front) `amount` credits before starting paid
+   * work. Fails closed with INSUFFICIENT_CREDITS if the live balance is short,
+   * checked *inside* the transaction so parallel reservations can't oversell.
+   * Admins are auto-topped-up within the same transaction.
+   *
+   * Returns the new balance. Refund the unused portion with `refund()` when the
+   * work finishes (fully, partially, or fails).
+   */
+  async reserve(userId: string, amount: number, reason: string, referenceId?: string) {
+    if (amount <= 0) return this.getBalance(userId);
+    const admin = await this.isAdminUser(userId);
+    return this.applyDelta(userId, -amount, "debit", reason, referenceId, admin);
+  }
+
+  /** Refund credits previously reserved (e.g. pages that failed to generate). */
+  async refund(userId: string, amount: number, reason: string, referenceId?: string) {
+    if (amount <= 0) return this.getBalance(userId);
+    return this.applyDelta(userId, amount, "credit", reason, referenceId, false);
+  }
+
   async debit(userId: string, amount: number, reason: string, referenceId?: string) {
-    const balance = await this.ensureEnough(userId, amount);
-    const next = balance - amount;
-    const ref = this.db.collection("users").doc(userId);
-    await ref.update({ credits: next, updated_at: new Date().toISOString() });
-    await ref.collection("credit_ledger").add({
-      operation: "debit",
-      amount,
-      balance_after: next,
-      reason,
-      reference_id: referenceId ?? null,
-      created_at: new Date().toISOString(),
-    });
-    return next;
+    if (amount <= 0) return this.getBalance(userId);
+    const admin = await this.isAdminUser(userId);
+    return this.applyDelta(userId, -amount, "debit", reason, referenceId, admin);
   }
 
   async credit(userId: string, amount: number, reason: string, referenceId?: string) {
-    const balance = await this.getBalance(userId);
-    const next = balance + amount;
-    const ref = this.db.collection("users").doc(userId);
-    await ref.update({ credits: next, updated_at: new Date().toISOString() });
-    await ref.collection("credit_ledger").add({
-      operation: "credit",
-      amount,
-      balance_after: next,
-      reason,
-      reference_id: referenceId ?? null,
-      created_at: new Date().toISOString(),
+    if (amount <= 0) return this.getBalance(userId);
+    return this.applyDelta(userId, amount, "credit", reason, referenceId, false);
+  }
+
+  /**
+   * Core atomic balance mutation. `delta` is signed (negative = spend).
+   * When `autoTopUp` is set (admins), the balance is raised inside the same
+   * transaction if it would otherwise go negative, so admin actions never fail.
+   */
+  private async applyDelta(
+    userId: string,
+    delta: number,
+    operation: "credit" | "debit",
+    reason: string,
+    referenceId: string | undefined,
+    autoTopUp: boolean
+  ): Promise<number> {
+    const userRef = this.db.collection("users").doc(userId);
+    const ledgerRef = userRef.collection("credit_ledger");
+    const now = new Date().toISOString();
+
+    return this.db.runTransaction(async (tx) => {
+      // Idempotency: if a ledger entry with this (operation, reference_id) exists,
+      // this mutation already happened — return the current balance unchanged.
+      if (referenceId) {
+        const dup = await tx.get(
+          ledgerRef
+            .where("operation", "==", operation)
+            .where("reference_id", "==", referenceId)
+            .limit(1)
+        );
+        if (!dup.empty) {
+          const snap = await tx.get(userRef);
+          return (snap.data()?.credits as number) ?? 0;
+        }
+      }
+
+      const snap = await tx.get(userRef);
+      if (!snap.exists) throw new AppError("NOT_FOUND", "Profil introuvable", 404);
+      const balance = (snap.data()?.credits as number) ?? 0;
+
+      const appliedDelta = delta;
+      let topUp = 0;
+      if (delta < 0 && balance + delta < 0) {
+        if (autoTopUp) {
+          // Raise the balance so the spend still leaves a small buffer.
+          topUp = Math.max(-delta * 2, 100);
+        } else {
+          throw new AppError(
+            "INSUFFICIENT_CREDITS",
+            `Il vous manque ${-(balance + delta)} crédits.`,
+            402
+          );
+        }
+      }
+
+      if (topUp > 0) {
+        const afterTopUp = balance + topUp;
+        tx.set(ledgerRef.doc(), {
+          operation: "credit",
+          amount: topUp,
+          balance_after: afterTopUp,
+          reason: "Recharge automatique administrateur",
+          reference_id: null,
+          created_at: now,
+        });
+        const next = afterTopUp + appliedDelta;
+        tx.update(userRef, { credits: next, updated_at: now });
+        tx.set(ledgerRef.doc(), {
+          operation,
+          amount: Math.abs(appliedDelta),
+          balance_after: next,
+          reason,
+          reference_id: referenceId ?? null,
+          created_at: now,
+        });
+        return next;
+      }
+
+      const next = balance + appliedDelta;
+      tx.update(userRef, { credits: next, updated_at: now });
+      tx.set(ledgerRef.doc(), {
+        operation,
+        amount: Math.abs(appliedDelta),
+        balance_after: next,
+        reason,
+        reference_id: referenceId ?? null,
+        created_at: now,
+      });
+      return next;
     });
-    return next;
   }
 
   async history(userId: string, limit = 20) {

@@ -129,15 +129,34 @@ export class LicenseService {
 
     try {
       const live = await this.requireActiveLicense(userId, resolvedEmail);
+      // `live` can be null only on paths already handled above (admin / not
+      // configured); guard anyway so a future change can't throw a TypeError
+      // that the catch would silently turn into `valid:false`.
+      if (!live) {
+        return {
+          configured: true,
+          required: true,
+          valid: true,
+          license: linked
+            ? {
+                status: linked.status,
+                product: linked.product_name ?? null,
+                expires_at: linked.expires_at ?? null,
+                masked_key: null,
+                is_active: linked.is_active,
+              }
+            : null,
+        };
+      }
       return {
         configured: true,
         required: true,
         valid: true,
         license: {
-          status: live!.status,
-          product: live!.product?.name ?? linked.product_name,
-          expires_at: live!.expires_at ?? linked.expires_at,
-          masked_key: live!.license.masked_key ?? null,
+          status: live.status,
+          product: live.product?.name ?? linked.product_name,
+          expires_at: live.expires_at ?? linked.expires_at,
+          masked_key: live.license.masked_key ?? null,
           is_active: true,
         },
       };
@@ -256,43 +275,75 @@ export class LicenseService {
   }
 
   /**
-   * Primary sync path when Chariow sends webhooks.
-   * Verifies nothing about sale flow — only applies license state locally.
+   * Primary sync path when Chariow sends Pulse webhooks.
+   * Verifies nothing about the sale flow — only applies license state locally.
+   *
+   * Real Chariow payload shape (per docs): the license object is at the TOP
+   * level (`payload.license`), NOT `payload.data.license`. Real event values:
+   * `license.issued`, `license.activated`, `license.expired`, `license.revoked`,
+   * `successful.sale`, `abandoned.sale`, `failed.sale`, `affiliate.joined`.
+   *
+   * Idempotent: the same event (retried up to 5× by Chariow) is recorded once
+   * via a deterministic doc id, and license state is derived idempotently.
    */
   async handleWebhookEvent(payload: Record<string, unknown>) {
     const event = String(payload?.event || payload?.type || "unknown");
+
+    // License object is top-level in real Chariow payloads; keep the legacy
+    // `payload.data.license` path as a fallback for older/test shapes.
     const data = (payload?.data as Record<string, unknown> | undefined) ?? {};
-    const licenseObj = (data.license as Record<string, unknown> | undefined) ?? {};
+    const topLicense = (payload?.license as Record<string, unknown> | undefined) ?? {};
+    const nestedLicense = (data.license as Record<string, unknown> | undefined) ?? {};
     const licenseKey =
-      (typeof licenseObj.key === "string" && licenseObj.key) ||
+      (typeof topLicense.key === "string" && topLicense.key) ||
+      (typeof nestedLicense.key === "string" && nestedLicense.key) ||
       (typeof data.license_key === "string" && data.license_key) ||
-      (typeof (payload.license as { key?: string } | undefined)?.key === "string" &&
-        (payload.license as { key: string }).key) ||
+      null;
+    const licenseId =
+      (typeof topLicense.id === "string" && topLicense.id) ||
+      (typeof nestedLicense.id === "string" && nestedLicense.id) ||
       null;
 
-    await this.db.collection("chariow_events").add({
-      event,
-      license_key: licenseKey,
-      payload,
-      received_at: new Date().toISOString(),
-    });
+    // Deterministic id → recording the same delivered event twice is a no-op.
+    const eventDocId = `${event}:${licenseId ?? licenseKey ?? "none"}`
+      .replace(/[^a-zA-Z0-9:_-]/g, "_")
+      .slice(0, 480);
+    const eventRef = this.db.collection("chariow_events").doc(eventDocId);
+    const alreadySeen = (await eventRef.get()).exists;
+    await eventRef.set(
+      {
+        event,
+        license_key: licenseKey,
+        license_id: licenseId,
+        payload,
+        received_at: new Date().toISOString(),
+      },
+      { merge: true }
+    );
 
-    if (!licenseKey) return { received: true, updated: 0 };
+    if (!licenseKey) return { received: true, updated: 0, duplicate: alreadySeen };
+    if (alreadySeen) return { received: true, updated: 0, duplicate: true };
 
     const lower = event.toLowerCase();
     const shouldDeactivate =
       lower.includes("revok") ||
       lower.includes("expir") ||
       lower.includes("refund") ||
-      lower.includes("cancel");
+      lower.includes("cancel") ||
+      lower.includes("failed.sale");
 
     if (!shouldDeactivate) {
-      // Soft refresh: if we can fetch the live license, update linked users
+      // Soft refresh: fetch the live license and sync linked users.
+      // (license.issued / license.activated / successful.sale → refresh access)
       try {
         const live = await getLicenseByKey(licenseKey);
-        return { received: true, updated: await this.syncKeyToUsers(licenseKey, live) };
+        return {
+          received: true,
+          updated: await this.syncKeyToUsers(licenseKey, live),
+          duplicate: false,
+        };
       } catch {
-        return { received: true, updated: 0 };
+        return { received: true, updated: 0, duplicate: false };
       }
     }
 
@@ -307,25 +358,26 @@ export class LicenseService {
     return {
       received: true,
       updated: await this.markInactiveByKey(licenseKey, status),
+      duplicate: false,
     };
   }
 
+  /**
+   * Enforce that the license belongs to the Meeradraw product.
+   *
+   * The live Chariow API exposes `product.id` (e.g. `prd_fl4at9rv`) — there is
+   * NO `product.slug`, so we match on id only. Fails CLOSED: if a product id is
+   * expected but the license carries no product id, the license is rejected.
+   * This prevents a customer of a *different* product on the same store from
+   * unlocking Meeradraw with a valid-but-wrong license.
+   */
   private assertProductMatch(license: ChariowLicense) {
     const expectedId = process.env.CHARIOW_PRODUCT_ID?.trim();
-    const expectedSlug = process.env.CHARIOW_PRODUCT_SLUG?.trim();
-    if (!expectedId && !expectedSlug) return;
+    if (!expectedId) return; // product scoping not enabled
 
-    const productId = license.product?.id;
-    const productSlug = license.product?.slug;
-
-    if (expectedId && productId && productId !== expectedId) {
-      throw new AppError(
-        "FORBIDDEN",
-        "Cette licence ne correspond pas au produit Meeradraw.",
-        403
-      );
-    }
-    if (expectedSlug && productSlug && productSlug !== expectedSlug) {
+    const productId =
+      license.product?.id != null ? String(license.product.id) : null;
+    if (!productId || productId !== expectedId) {
       throw new AppError(
         "FORBIDDEN",
         "Cette licence ne correspond pas au produit Meeradraw.",
@@ -339,7 +391,7 @@ export class LicenseService {
       license_key: license.license.key,
       license_id: license.id,
       status: license.status,
-      product_id: license.product?.id ?? null,
+      product_id: license.product?.id != null ? String(license.product.id) : null,
       product_name: license.product?.name ?? null,
       product_slug: license.product?.slug ?? null,
       is_active: isLicenseUsable(license),
