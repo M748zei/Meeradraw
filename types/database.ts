@@ -19,6 +19,12 @@ export interface Profile {
   avatar_url: string | null;
   subscription_plan: SubscriptionPlan;
   credits: number;
+  /** Free trial books consumed (successful generations without access). */
+  free_trials_used?: number;
+  /** Per-account trial allowance (defaults to FREE_TRIALS_MAX). */
+  free_trials_max?: number;
+  /** Mobile Money phone, saved at first recharge to pre-fill Chariow checkout. */
+  phone?: { number: string; country_code: string } | null;
   preferred_language: string;
   created_at: string;
   updated_at: string;

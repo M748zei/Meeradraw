@@ -1,7 +1,9 @@
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { createSessionCookie, clearSessionCookie } from "@/lib/firebase/session";
 import { getAdminAuth, getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebase/admin";
-import { FREE_CREDITS_ON_SIGNUP } from "@/config/credits";
+import { buildNewProfile } from "@/lib/api-auth";
+import { isDisposableEmail } from "@/lib/disposable-email";
+import { claimPendingCredits } from "@/services/chariow-sale";
 import { z } from "zod";
 
 const schema = z.object({ idToken: z.string().min(10) });
@@ -10,6 +12,17 @@ export async function POST(request: Request) {
   try {
     const { idToken } = schema.parse(await request.json());
     const decoded = await getAdminAuth().verifyIdToken(idToken);
+
+    // One account = one real email = the free trials. Throwaway domains are
+    // rejected for email/password AND Google sign-ins; the just-created Auth
+    // user is removed so the address can't be retried into a zombie account.
+    if (isDisposableEmail(decoded.email)) {
+      await getAdminAuth()
+        .deleteUser(decoded.uid)
+        .catch(() => undefined);
+      throw new AppError("VALIDATION_ERROR", "Utilise une adresse email valide.", 403);
+    }
+
     await createSessionCookie(idToken);
 
     if (isFirebaseAdminConfigured()) {
@@ -17,25 +30,14 @@ export async function POST(request: Request) {
       const ref = db.collection("users").doc(decoded.uid);
       const snap = await ref.get();
       if (!snap.exists) {
-        const now = new Date().toISOString();
-        await ref.set({
-          id: decoded.uid,
-          fullname: decoded.name || decoded.email?.split("@")[0] || null,
-          email: decoded.email || "",
-          avatar_url: decoded.picture || null,
-          subscription_plan: "free",
-          credits: FREE_CREDITS_ON_SIGNUP,
-          preferred_language: "fr",
-          created_at: now,
-          updated_at: now,
-        });
-        await ref.collection("credit_ledger").add({
-          operation: "credit",
-          amount: FREE_CREDITS_ON_SIGNUP,
-          balance_after: FREE_CREDITS_ON_SIGNUP,
-          reason: "Bonus de bienvenue",
-          created_at: now,
-        });
+        await ref.set(buildNewProfile(decoded));
+      }
+      // Purchases made with this email before the account existed (or while
+      // the webhook raced signup) land now — idempotent per sale.
+      if (decoded.email) {
+        await claimPendingCredits(db, decoded.uid, decoded.email).catch((err) =>
+          console.error("claimPendingCredits failed", err)
+        );
       }
     }
 
