@@ -7,6 +7,7 @@ import type { SettingBible } from "@/services/ai/types";
 import { LicenseService } from "@/services/license-service";
 import { CreditService } from "@/services/credit-service";
 import { StorageService } from "@/services/storage-service";
+import { recordProviderOutage } from "@/services/provider-health";
 import { CREDIT_COSTS } from "@/config/credits";
 import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { randomUUID } from "crypto";
@@ -166,7 +167,8 @@ export async function POST(request: Request) {
             updated_at: new Date().toISOString(),
           });
           recovered += 1;
-        } catch {
+        } catch (pageErr) {
+          await recordProviderOutage(db, pageErr);
           await pageDoc.ref.update({
             generation_status: "failed",
             illustration_url: null,
