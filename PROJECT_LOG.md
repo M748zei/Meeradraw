@@ -4,6 +4,24 @@ Journal chronologique du projet. Entrée la plus récente en haut.
 
 ---
 
+## 2026-07-22 (soir) — ÉTAPE 3 : Hero animé « le coloriage qui se dessine » ✅
+
+- `components/landing/hero-drawing.tsx` : page de coloriage SVG inline (~3 KB,
+  dessinée à la main — renard, soleil, baobab, fleurs) qui SE DESSINE
+  (stroke-dashoffset via GSAP DrawSVG, gratuit depuis 3.13) puis SE COLORIE
+  (fills en stagger), puis la légende apparaît. Validée visuellement (rendu
+  sharp du SVG).
+- Perf mobile Afrique : chargé via `next/dynamic ssr:false`
+  (`hero-drawing-lazy.tsx`, GSAP hors du bundle initial), placeholder qui
+  réserve l'espace, `prefers-reduced-motion` → état final instantané, zéro
+  WebGL/zéro image. Remplace l'éventail de pages du hero (la preuve « vraies
+  pages » reste dans la galerie).
+- Micro-interactions boutons (active:scale, hover lift) et `whileInView`
+  galerie déjà en place depuis la refonte — rien d'autre à alourdir.
+- Déployé en prod (vercel --prod, READY). PR #3 (stack sur PR #2).
+
+---
+
 ## 2026-07-22 (soir) — ÉTAPE 2 : Essais gratuits + packs FCFA + créditation + recharge ✅
 
 ### Réalisé (branche `feat/pricing-credits`, 31 tests d'intégration verts)
