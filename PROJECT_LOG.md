@@ -4,6 +4,52 @@ Journal chronologique du projet. Entrée la plus récente en haut.
 
 ---
 
+## 2026-07-22 (soir) — ÉTAPE 2 : Essais gratuits + packs FCFA + créditation + recharge ✅
+
+### Réalisé (branche `feat/pricing-credits`, 31 tests d'intégration verts)
+1. **Essais gratuits (hook conversion)** : 3 livres d'essai / compte, 6 pages
+   max, coût 0 crédit. `free_trials_used/max` sur le profil, mode essai dans
+   `generation/start` (aucune réservation → **aucun refund possible → aucun
+   crédit minable**, remboursements par ailleurs bornés par `Math.min(refund,
+   cost)`), consommation idempotente (`trial_counted` sur la génération, en
+   transaction). 4e essai → 403 `TRIALS_EXHAUSTED` + CTA. UI : bandeau « Il te
+   reste X essais », options >6 pages verrouillées, « Gratuit — essai ».
+2. **Fin des 30 crédits de bienvenue** (`FREE_CREDITS_ON_SIGNUP` supprimé) ;
+   nouveaux comptes à 0 crédit + 3 essais. Anti email jetable
+   (`lib/disposable-email.ts`, ~70 domaines) appliqué serveur à la création de
+   session (email/password ET Google) ; le compte Auth jetable est supprimé.
+3. **Packs FCFA** (`config/credits.ts`) : entry 120cr/4 900F (`prd_d2ik58za`,
+   débloque l'accès), recharge 150cr/7 900F, créateur 400cr/17 900F, studio
+   900cr/34 900F, business 2000cr/69 900F — avec `chariowProductId` réels.
+   Plus aucun € dans l'UI. **Stripe entièrement retiré** (routes + lib + dep).
+4. **Créditation à l'achat** (`services/chariow-sale.ts` branché au webhook) :
+   `successful.sale` → pack par `product.id` → `CreditService.credit(...,
+   reference_id = chariow:<sale_id>)` (rejeu = no-op, vérifié). Email acheteur
+   sans compte → `chariow_pending_credits` puis **réconciliation automatique au
+   login** (même reference → pas de double). Events dédupliqués par `sale.id`.
+5. **Recharge sans friction** : `POST /api/checkout` (serveur only, Bearer
+   `CHARIOW_API_KEY`) → Chariow Checkout API (steps payment/completed/
+   already_purchased, fallback page boutique si API indisponible). Le téléphone
+   (requis par Chariow) est demandé **une seule fois** puis mémorisé sur le
+   profil. Page `/merci` de retour. Happy path validé en réel sur
+   `prd_d2ik58za` (checkout_url Moneroo obtenu).
+6. **Vocabulaire client** : plus aucun « licence / clé / activer » visible —
+   « Ton accès », « code d'accès », « débloquer », y compris messages d'erreur
+   serveur. Page `/license` conservée (route), renommée « Ton accès ».
+
+### Tests (local :3100, MOCK_AI, Firebase réel, données purgées)
+31/31 ✅ — compte neuf (0 crédit, 3 essais), jetable refusé + Auth supprimé,
+essai 6p gratuit complet (ledger vide), 12p refusé, 4e essai refusé, webhook
++150 une seule fois (rejeu no-op), entry +120, réconciliation pending→claimed,
+checkout need_phone → url → téléphone mémorisé. Build + tsc + lint verts.
+
+### ⚠️ Actions restantes côté dashboard Chariow (l'app est prête)
+- **Publier les 4 packs** (`prd_0658xmlt`, `prd_68mvngwe`, `prd_0gsbsozy`,
+  `prd_7vx0ru3k`) — en draft, l'API checkout renvoie 404 dessus (l'app bascule
+  proprement sur la page boutique en attendant).
+
+---
+
 ## 2026-07-22 (soir) — ÉTAPE 1 : Chariow branché en prod (accès/licence) ✅
 
 ### Réalisé (mode autonome)
