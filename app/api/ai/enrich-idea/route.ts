@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
+import { rateLimit } from "@/lib/rate-limit";
 import { getTextProvider } from "@/services/ai";
 import { z } from "zod";
 
@@ -13,7 +14,8 @@ const ENRICH_SOFT_TIMEOUT_MS = 20_000;
 
 export async function POST(request: Request) {
   try {
-    await requireUser();
+    const { user } = await requireUser();
+    rateLimit(`enrich:${user.id}`, { limit: 20, windowMs: 60_000 });
     const body = schema.parse(await request.json());
 
     const enriched = await Promise.race([

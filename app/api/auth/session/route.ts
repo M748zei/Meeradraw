@@ -4,12 +4,14 @@ import { getAdminAuth, getAdminDb, isFirebaseAdminConfigured } from "@/lib/fireb
 import { buildNewProfile } from "@/lib/api-auth";
 import { isDisposableEmail } from "@/lib/disposable-email";
 import { claimPendingCredits } from "@/services/chariow-sale";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { z } from "zod";
 
 const schema = z.object({ idToken: z.string().min(10) });
 
 export async function POST(request: Request) {
   try {
+    rateLimit(`session:${clientIp(request)}`, { limit: 15, windowMs: 60_000 });
     const { idToken } = schema.parse(await request.json());
     const decoded = await getAdminAuth().verifyIdToken(idToken);
 

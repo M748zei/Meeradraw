@@ -31,6 +31,16 @@ export class StorageService {
           return { url, path: null };
         }
       }
+      // SSRF guard: only pull images from known providers — never internal
+      // hosts or arbitrary user-influenced URLs.
+      const host = new URL(url).hostname;
+      const allowed =
+        host === "fal.media" ||
+        host.endsWith(".fal.media") ||
+        host === "storage.googleapis.com" ||
+        host === "firebasestorage.googleapis.com" ||
+        host === "placehold.co";
+      if (!allowed) throw new Error(`host not allowed: ${host}`);
       const res = await fetch(url);
       if (!res.ok) throw new Error(`fetch ${res.status}`);
       const raw = new Uint8Array(await res.arrayBuffer());
