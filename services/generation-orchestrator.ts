@@ -23,7 +23,13 @@ import { StorageService } from "@/services/storage-service";
 import { isBlankOrTooFaint, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
 import { refundForFailedPages } from "@/config/credits";
-import type { Firestore } from "firebase-admin/firestore";
+import { friendlyGenerationError } from "@/lib/generation-errors";
+import { recordProviderOutage } from "@/services/provider-health";
+import type {
+  CollectionReference,
+  DocumentReference,
+  Firestore,
+} from "firebase-admin/firestore";
 import { randomUUID } from "crypto";
 
 /** Parse an env integer, falling back to `fallback` on NaN/≤0 (misconfig-safe). */
@@ -54,6 +60,31 @@ function summarizeQcStats(all: Record<string, ImageQcStats>) {
 const PAGE_GEN_CONCURRENCY = envInt(process.env.PAGE_GEN_CONCURRENCY, 3);
 /** How many times to (re)generate the character model sheet if it comes back blank/poor. */
 const SHEET_MAX_ATTEMPTS = envInt(process.env.SHEET_MAX_ATTEMPTS, 3);
+/**
+ * Per-invocation wall-clock budget. Vercel Hobby kills any invocation at
+ * 300 s; pages whose turn comes after the budget stay `pending` and are handed
+ * to a chained invocation (POST /api/generation/continue).
+ */
+const GEN_TIME_BUDGET_MS = envInt(process.env.GENERATION_TIME_BUDGET_MS, 230_000);
+/** Hard cap on continuation hops (runaway backstop; a 40p book needs ~3-4). */
+const MAX_CONTINUATIONS = envInt(process.env.GENERATION_MAX_CONTINUATIONS, 8);
+
+/** Everything a page needs to be illustrated, independent of which invocation runs it. */
+type PageWork = {
+  id: string;
+  page_number: number;
+  scene: string;
+  ref_scene?: string | null;
+  action?: string | null;
+  negative_prompt?: string | null;
+  story_text?: string | null;
+  character_ids: string[];
+  comic_beat?: string | null;
+  shot_type?: string | null;
+  page_character_lock?: string | null;
+  expected_cast?: Array<{ name: string; kind: string }>;
+  setting_elements: string[];
+};
 
 export class GenerationOrchestrator {
   private books: BookService;
@@ -102,13 +133,16 @@ export class GenerationOrchestrator {
         progress: 18,
       });
 
-      const plan = await textProvider.generateStoryPlan(
-        idea,
-        pageCount,
-        style,
-        research,
-        audience
-      );
+      let plan: StoryPlan;
+      try {
+        plan = await textProvider.generateStoryPlan(idea, pageCount, style, research, audience);
+      } catch (planErr) {
+        // Free-tier LLM quotas recover by the minute — one retry with a short
+        // backoff rescues most "outline missing pages" runs.
+        console.warn("story plan failed once; retrying in 8s", planErr);
+        await new Promise((r) => setTimeout(r, 8_000));
+        plan = await textProvider.generateStoryPlan(idea, pageCount, style, research, audience);
+      }
 
       // firestoreSafe: LLM output may contain nested arrays / undefined that
       // Firestore rejects (a single bad field kills the whole generation).
@@ -272,21 +306,7 @@ export class GenerationOrchestrator {
       oldPages.docs.forEach((d) => batchPages.delete(d.ref));
       await batchPages.commit();
 
-      const insertedPages: Array<{
-        id: string;
-        scene: string;
-        ref_scene: string;
-        action?: string;
-        negative_prompt: string;
-        story_text: string;
-        page_number: number;
-        character_ids: string[];
-        comic_beat?: string;
-        shot_type?: string;
-        page_character_lock: string;
-        expected_cast: Array<{ name: string; kind: string }>;
-        setting_elements: string[];
-      }> = [];
+      const insertedPages: PageWork[] = [];
 
       // All page rows land in one batched write (≤ 40 pages, far under the
       // 500-write batch limit) instead of one round-trip per page.
@@ -395,222 +415,44 @@ export class GenerationOrchestrator {
         updated_at: new Date().toISOString(),
       });
 
-      let completedCount = 0;
-      let failedCount = 0;
-
-      const pageOutcomes = await mapWithConcurrency(
-        insertedPages,
-        PAGE_GEN_CONCURRENCY,
-        async (page, index) => {
-          await pagesCol.doc(page.id).update({ generation_status: "generating" });
-          try {
-            const scenePrompt = [
-              page.scene || page.story_text || plan.summary,
-              page.shot_type ? `Shot: ${page.shot_type}.` : "",
-              page.comic_beat ? `Beat: ${page.comic_beat}.` : "",
-              "Mandatory rich colorable environment matching the caption. No empty white void. Simplified mitten hands. Max 2 characters. Full figures inside frame with margins.",
-            ]
-              .filter(Boolean)
-              .join(" ");
-
-            const pageStats: ImageQcStats = {};
-            // Benchmark winner: solo pages use the character's OWN crop as the
-            // reference (full lineup leaks the absent character back in).
-            const pageReference =
-              page.character_ids.length === 1 &&
-              sheetCrops[page.character_ids[0]]?.url
-                ? sheetCrops[page.character_ids[0]].url
-                : characterSheetUrl || undefined;
-            const image = await imageProvider.generateImage({
-              prompt: scenePrompt,
-              style,
-              characterBible: page.page_character_lock || fullCharacterBible,
-              negativePrompt: page.negative_prompt || undefined,
-              worldSetting,
-              isColoringPage: true,
-              referenceImageUrl: pageReference,
-              refScene: page.ref_scene,
-              shotType: page.shot_type,
-              comicBeat: page.comic_beat,
-              action: page.action,
-              settingElements: page.setting_elements,
-              worldNegative,
-              expectedCast: page.expected_cast,
-              qcStats: pageStats,
-            });
-            qcStatsAll[`page_${page.page_number}`] = pageStats;
-
-            if (!image?.url) {
-              throw new Error("Image provider returned empty URL");
-            }
-
-            // Persist to Storage (audit T7): never leave an ephemeral fal URL
-            // as the page's source of truth.
-            const persisted = await this.storage.persistImageFromUrl(
-              image.url,
-              `books/${bookId}/pages/${page.page_number}.png`
-            );
-
-            await pagesCol.doc(page.id).update({
-              illustration_url: persisted.url,
-              illustration_path: persisted.path,
-              generation_status: "completed",
-              updated_at: new Date().toISOString(),
-            });
-            return "ok" as const;
-          } catch (err) {
-            console.error(`page ${page.page_number} generation failed`, err);
-            await pagesCol.doc(page.id).update({
-              illustration_url: null,
-              generation_status: "failed",
-              updated_at: new Date().toISOString(),
-            });
-            return "fail" as const;
-          } finally {
-            const progress =
-              45 + Math.round(((index + 1) / insertedPages.length) * 40);
-            // Approximate progress under concurrency (index may finish out of order)
-            await this.updateGeneration(generationId, {
-              current_step: "illustrator",
-              progress: Math.min(progress, 88),
-            });
-          }
-        }
-      );
-
-      completedCount = pageOutcomes.filter((o) => o === "ok").length;
-      failedCount = pageOutcomes.filter((o) => o === "fail").length;
-
-      await this.updateGeneration(generationId, {
-        current_step: "illustrator",
-        progress: 90,
+      // Pages render within a wall-clock budget; whatever stays pending is
+      // handed to a chained invocation (Hobby 300 s cap). Money stays simple:
+      // the reservation was made up-front and only finalizeRun refunds.
+      const deadlineAt = started + GEN_TIME_BUDGET_MS;
+      const qcStatsAll: Record<string, ImageQcStats> = {};
+      await this.processPages({
+        generationId,
+        bookId,
+        pagesCol,
+        pages: insertedPages,
+        style,
+        fullCharacterBible,
+        worldSetting: worldSetting || undefined,
+        worldNegative,
+        characterSheetUrl: characterSheetUrl || undefined,
+        sheetCrops,
+        qcStatsAll,
+        deadlineAt,
+        completedBefore: 0,
+        totalPlanned: insertedPages.length,
       });
+      await this.persistQc(generationId, qcStatsAll);
 
-      // Never mark a book "completed" with blank pages
-      if (completedCount === 0) {
-        await this.books.update(userId, bookId, { status: "failed" });
-        // Nothing was produced — refund the entire reservation.
-        await this.credits.refund(
-          userId,
-          cost,
-          "Remboursement — génération échouée (aucune page)",
-          `gen:${generationId}:refund`
-        );
-        await this.updateGeneration(generationId, {
-          status: "failed",
-          current_step: "illustrator",
-          progress: 90,
-          credits_used: 0,
-          error_message:
-            "Aucune page illustrée n’a pu être générée. Réessayez ou régénérez les pages.",
-          duration_ms: Date.now() - started,
-        });
-        return;
-      }
+      if (await this.chainIfPending(bookId, generationId, 0)) return;
 
-      await this.updateGeneration(generationId, {
-        current_step: "editor",
-        progress: 92,
+      await this.finalizeRun({
+        userId,
+        bookId,
+        generationId,
+        cost,
+        isTrial,
+        bookType: (book.type as string) || "colorbook",
+        plannedPages: (book.page_count as number) || insertedPages.length,
+        startedAt: started,
       });
-
-      const full = await this.books.getWithPages(userId, bookId);
-      const pdfBytes = await this.pdf.buildBookPdf({
-        title: full.title,
-        subtitle: full.subtitle,
-        coverUrl: full.cover_image,
-        pages: full.pages.map((p) => ({
-          pageNumber: p.page_number,
-          title: p.title,
-          storyText: p.story_text,
-          illustrationUrl: p.illustration_url,
-        })),
-      });
-
-      let pdfUrl: string | null = null;
-      try {
-        pdfUrl = await this.storage.uploadBytes(
-          `exports/${userId}/${bookId}.pdf`,
-          pdfBytes,
-          "application/pdf"
-        );
-      } catch (uploadErr) {
-        console.error("PDF storage upload failed; trying inline data URL", uploadErr);
-        const dataUrl = `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`;
-        const firestoreSafeLimit = 800_000;
-        if (dataUrl.length <= firestoreSafeLimit) {
-          pdfUrl = dataUrl;
-        } else {
-          console.warn(
-            "PDF data URL exceeds Firestore-safe size; pdf_url left null — use /api/pdf/export"
-          );
-        }
-      }
-
-      const bookStatus = failedCount > 0 ? "partial" : "completed";
-      const genStatus = failedCount > 0 ? "partial" : "completed";
-
-      await this.books.update(userId, bookId, {
-        status: bookStatus,
-        pdf_url: pdfUrl,
-      });
-
-      // Credits were reserved up-front for `book.page_count` pages in
-      // generation/start. Refund every page the customer paid for but did not
-      // receive — this covers both pages that failed to render AND pages the AI
-      // plan never produced (plan shorter than requested). The customer pays
-      // only for delivered pages (+ cover + PDF). Idempotent per generation.
-      const plannedPages = (book.page_count as number) || insertedPages.length;
-      const notDelivered = Math.max(0, plannedPages - completedCount);
-      // Clamped to the reservation: a refund can never exceed what was actually
-      // reserved (trials reserve 0 → refund 0 → no way to mint free credits).
-      const refund = Math.min(
-        refundForFailedPages(plannedPages, completedCount, book.type as string),
-        cost
-      );
-      if (refund > 0) {
-        await this.credits.refund(
-          userId,
-          refund,
-          `Remboursement ${notDelivered} page(s) non livrée(s) — ${String(full.title)}`,
-          `gen:${generationId}:refund`
-        );
-      }
-      const creditsUsed = Math.max(0, cost - refund);
-
-      // QC telemetry (audit T5): re-roll rate = real internal fal cost. Logged
-      // per image on the generation doc so the rate is trackable over time.
-      const qcSummary = summarizeQcStats(qcStatsAll);
-      console.log(
-        `[gen ${generationId}] QC re-rolls — pixel: ${qcSummary.pixel_rerolls}, vision: ${qcSummary.vision_rerolls}, images: ${qcSummary.images}`
-      );
-
-      await this.updateGeneration(generationId, {
-        status: genStatus,
-        current_step: "editor",
-        progress: 100,
-        qc_stats: qcSummary,
-        credits_used: creditsUsed,
-        provider:
-          process.env.MOCK_AI === "true"
-            ? "mock"
-            : process.env.GROQ_API_KEY
-              ? "groq+fal"
-              : "openai+fal",
-        duration_ms: Date.now() - started,
-        error_message:
-          failedCount > 0
-            ? `${failedCount} page(s) sans illustration — utilisez « Régénérer cette page ».`
-            : null,
-      });
-
-      // A delivered trial book consumes one free trial. Idempotent: the
-      // `trial_counted` flag on the generation doc guards the increment even if
-      // this path re-runs (retry after crash, replayed job).
-      if (isTrial && completedCount > 0) {
-        await this.consumeFreeTrial(userId, generationId);
-      }
     } catch (err) {
       console.error("generation failed", err);
+      await recordProviderOutage(this.db, err);
       await this.books.update(userId, bookId, { status: "failed" });
       // Refund the up-front reservation — the run crashed before delivering.
       // Idempotent: if a partial refund already landed this is a no-op.
@@ -627,7 +469,8 @@ export class GenerationOrchestrator {
       await this.updateGeneration(generationId, {
         status: "failed",
         credits_used: 0,
-        error_message: err instanceof Error ? err.message : "Erreur inconnue",
+        continuation_inflight_at: null,
+        error_message: friendlyGenerationError(err),
         duration_ms: Date.now() - started,
       });
     }
@@ -655,6 +498,523 @@ export class GenerationOrchestrator {
       });
     } catch (err) {
       console.error("consumeFreeTrial failed", err);
+    }
+  }
+
+  /**
+   * Shared per-page renderer used by run() and continueRun(). A page whose turn
+   * comes after the deadline stays `pending` for the next hop; claims are
+   * transactional so two invocations can never render the same page twice.
+   */
+  private async processPages(ctx: {
+    generationId: string;
+    bookId: string;
+    pagesCol: CollectionReference;
+    pages: PageWork[];
+    style: string;
+    fullCharacterBible: string;
+    worldSetting?: string;
+    worldNegative?: string;
+    characterSheetUrl?: string;
+    sheetCrops: Record<string, { url?: string }>;
+    qcStatsAll: Record<string, ImageQcStats>;
+    deadlineAt: number;
+    completedBefore: number;
+    totalPlanned: number;
+  }) {
+    const imageProvider = getImageProvider();
+    await mapWithConcurrency(ctx.pages, PAGE_GEN_CONCURRENCY, async (page, index) => {
+      if (Date.now() > ctx.deadlineAt) return "deferred" as const;
+      if (!(await this.claimPage(ctx.pagesCol.doc(page.id)))) return "skipped" as const;
+      try {
+        const scenePrompt = [
+          page.scene || page.story_text || "",
+          page.shot_type ? `Shot: ${page.shot_type}.` : "",
+          page.comic_beat ? `Beat: ${page.comic_beat}.` : "",
+          "Mandatory rich colorable environment matching the caption. No empty white void. Simplified mitten hands. Max 2 characters. Full figures inside frame with margins.",
+        ]
+          .filter(Boolean)
+          .join(" ");
+
+        const pageStats: ImageQcStats = {};
+        // Benchmark winner: solo pages use the character's OWN crop as the
+        // reference (full lineup leaks the absent character back in).
+        const pageReference =
+          page.character_ids.length === 1 && ctx.sheetCrops[page.character_ids[0]]?.url
+            ? ctx.sheetCrops[page.character_ids[0]].url
+            : ctx.characterSheetUrl || undefined;
+        const image = await imageProvider.generateImage({
+          prompt: scenePrompt,
+          style: ctx.style,
+          characterBible: page.page_character_lock || ctx.fullCharacterBible,
+          negativePrompt: page.negative_prompt || undefined,
+          worldSetting: ctx.worldSetting,
+          isColoringPage: true,
+          referenceImageUrl: pageReference,
+          refScene: page.ref_scene || undefined,
+          shotType: page.shot_type || undefined,
+          comicBeat: page.comic_beat || undefined,
+          action: page.action || undefined,
+          settingElements: page.setting_elements,
+          worldNegative: ctx.worldNegative,
+          expectedCast: page.expected_cast,
+          qcStats: pageStats,
+        });
+        ctx.qcStatsAll[`page_${page.page_number}`] = pageStats;
+
+        if (!image?.url) {
+          throw new Error("Image provider returned empty URL");
+        }
+
+        // Persist to Storage (audit T7): never leave an ephemeral fal URL
+        // as the page's source of truth.
+        const persisted = await this.storage.persistImageFromUrl(
+          image.url,
+          `books/${ctx.bookId}/pages/${page.page_number}.png`
+        );
+
+        await ctx.pagesCol.doc(page.id).update({
+          illustration_url: persisted.url,
+          illustration_path: persisted.path,
+          generation_status: "completed",
+          updated_at: new Date().toISOString(),
+        });
+        return "ok" as const;
+      } catch (err) {
+        console.error(`page ${page.page_number} generation failed`, err);
+        await recordProviderOutage(this.db, err);
+        await ctx.pagesCol.doc(page.id).update({
+          illustration_url: null,
+          generation_status: "failed",
+          updated_at: new Date().toISOString(),
+        });
+        return "fail" as const;
+      } finally {
+        const progress =
+          45 +
+          Math.round(
+            ((ctx.completedBefore + index + 1) / Math.max(1, ctx.totalPlanned)) * 40
+          );
+        // Approximate progress under concurrency (index may finish out of order)
+        await this.updateGeneration(ctx.generationId, {
+          current_step: "illustrator",
+          progress: Math.min(progress, 88),
+        });
+      }
+    });
+  }
+
+  /** Transactionally claim a pending page (no double-render across hops). */
+  private async claimPage(ref: DocumentReference): Promise<boolean> {
+    try {
+      return await this.db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists || snap.data()?.generation_status !== "pending") return false;
+        tx.update(ref, {
+          generation_status: "generating",
+          updated_at: new Date().toISOString(),
+        });
+        return true;
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /** Merge this invocation's QC stats into the generation doc (cumulative across hops). */
+  private async persistQc(
+    generationId: string,
+    qcStatsAll: Record<string, ImageQcStats>
+  ) {
+    if (!Object.keys(qcStatsAll).length) return;
+    try {
+      const ref = this.db.collection("generations").doc(generationId);
+      const prev = (await ref.get()).data()?.qc_stats as
+        | {
+            images?: number;
+            pixel_rerolls?: number;
+            vision_rerolls?: number;
+            vision_verdicts?: Record<string, string[]>;
+          }
+        | undefined;
+      const next = summarizeQcStats(qcStatsAll);
+      const merged = {
+        images: (prev?.images ?? 0) + next.images,
+        pixel_rerolls: (prev?.pixel_rerolls ?? 0) + next.pixel_rerolls,
+        vision_rerolls: (prev?.vision_rerolls ?? 0) + next.vision_rerolls,
+        vision_verdicts: { ...(prev?.vision_verdicts ?? {}), ...next.vision_verdicts },
+      };
+      await ref.update({ qc_stats: firestoreSafe(merged) });
+    } catch (err) {
+      console.error("persistQc failed", err);
+    }
+  }
+
+  /**
+   * If pages remain pending, hand off to a fresh invocation via
+   * POST /api/generation/continue. Returns true when chained (the caller must
+   * stop); false means "finalize now" (no pending pages, cap reached, or the
+   * chain hop failed — finalizing partial beats dying silently).
+   */
+  private async chainIfPending(
+    bookId: string,
+    generationId: string,
+    seq: number
+  ): Promise<boolean> {
+    const pending = await this.db
+      .collection("books")
+      .doc(bookId)
+      .collection("pages")
+      .where("generation_status", "==", "pending")
+      .limit(1)
+      .get();
+    if (pending.empty) return false;
+    if (seq >= MAX_CONTINUATIONS) {
+      console.warn(
+        `[gen ${generationId}] continuation cap (${MAX_CONTINUATIONS}) reached — finalizing partial`
+      );
+      return false;
+    }
+    const secret = process.env.INTERNAL_TASK_SECRET?.trim();
+    const base = (process.env.NEXT_PUBLIC_APP_URL || "").trim().replace(/\/$/, "");
+    if (!secret || !base) {
+      console.warn(
+        `[gen ${generationId}] chaining unavailable (INTERNAL_TASK_SECRET / NEXT_PUBLIC_APP_URL) — finalizing partial`
+      );
+      return false;
+    }
+    try {
+      const res = await fetch(`${base}/api/generation/continue`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-internal-secret": secret,
+        },
+        body: JSON.stringify({ generation_id: generationId }),
+        cache: "no-store",
+      });
+      if (res.ok) {
+        console.log(`[gen ${generationId}] chained continuation #${seq + 1}`);
+        return true;
+      }
+      console.warn(
+        `[gen ${generationId}] continuation refused (${res.status}) — finalizing partial`
+      );
+      return false;
+    } catch (err) {
+      console.error(
+        `[gen ${generationId}] continuation fetch failed — finalizing partial`,
+        err
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Resume a chained generation: rebuild the render context from persisted
+   * state (book, universe setting bible, sheet crops — same sources as the
+   * retry route) and process the pending pages within a fresh budget.
+   */
+  async continueRun(
+    userId: string,
+    bookId: string,
+    generationId: string,
+    cost: number,
+    opts: { isTrial?: boolean; seq: number }
+  ) {
+    const started = Date.now();
+    const isTrial = Boolean(opts.isTrial);
+    try {
+      const book = await this.books.get(userId, bookId);
+      const style = (book.style as string) || "cute";
+      const universeSnap = await this.db
+        .collection("universes")
+        .doc(book.universe_id as string)
+        .get();
+      const settingBible = universeSnap.data()?.setting_bible as SettingBible | undefined;
+      const worldNegative = buildWorldNegative(settingBible?.forbiddenElements);
+      const sheetCrops = (universeSnap.data()?.model_sheet_crops || {}) as Record<
+        string,
+        { url?: string }
+      >;
+      const characterSheetUrl =
+        typeof book.character_sheet_url === "string" ? book.character_sheet_url : undefined;
+      const world = (book.story_plan as { world?: { setting?: string; mood?: string } } | null)
+        ?.world;
+      const worldSetting =
+        [world?.setting, world?.mood].filter(Boolean).join(" — ") || undefined;
+      const charsSnap = await this.db
+        .collection("universes")
+        .doc(book.universe_id as string)
+        .collection("characters")
+        .get();
+      const fullCharacterBible = charsSnap.docs
+        .map((d) => {
+          const c = d.data();
+          return `${c.name}: ${c.visual_lock || c.appearance || ""}`;
+        })
+        .join(" | ");
+
+      const pagesCol = this.db.collection("books").doc(bookId).collection("pages");
+      const allPages = await pagesCol.get();
+      const completedBefore = allPages.docs.filter((d) => d.data().illustration_url).length;
+      const pages: PageWork[] = allPages.docs
+        .filter((d) => d.data().generation_status === "pending")
+        .map((d) => {
+          const p = d.data();
+          const scene =
+            (p.illustration_prompt as string) ||
+            (p.story_text as string) ||
+            (book.idea as string) ||
+            "";
+          return {
+            id: d.id,
+            page_number: (p.page_number as number) ?? 0,
+            scene,
+            ref_scene: (p.ref_scene as string) || undefined,
+            action: (p.action as string) || undefined,
+            negative_prompt: (p.negative_prompt as string) || undefined,
+            story_text: (p.story_text as string) || undefined,
+            character_ids: Array.isArray(p.character_ids)
+              ? (p.character_ids as string[])
+              : [],
+            comic_beat: (p.comic_beat as string) || undefined,
+            shot_type: (p.shot_type as string) || undefined,
+            page_character_lock: (p.character_lock as string) || undefined,
+            expected_cast: undefined,
+            setting_elements: settingElementsForScene(
+              settingBible?.elements,
+              `${scene} ${p.story_text || ""}`
+            ),
+          };
+        })
+        .sort((a, b) => a.page_number - b.page_number);
+
+      console.log(
+        `[gen ${generationId}] continuation #${opts.seq}: ${pages.length} page(s) pending, ${completedBefore} done`
+      );
+      await this.updateGeneration(generationId, {
+        status: "running",
+        current_step: "illustrator",
+      });
+
+      const qcStatsAll: Record<string, ImageQcStats> = {};
+      const deadlineAt = started + GEN_TIME_BUDGET_MS;
+      await this.processPages({
+        generationId,
+        bookId,
+        pagesCol,
+        pages,
+        style,
+        fullCharacterBible,
+        worldSetting,
+        worldNegative,
+        characterSheetUrl,
+        sheetCrops,
+        qcStatsAll,
+        deadlineAt,
+        completedBefore,
+        totalPlanned: (book.page_count as number) || allPages.size,
+      });
+      await this.persistQc(generationId, qcStatsAll);
+
+      if (await this.chainIfPending(bookId, generationId, opts.seq)) return;
+
+      await this.finalizeRun({
+        userId,
+        bookId,
+        generationId,
+        cost,
+        isTrial,
+        bookType: (book.type as string) || "colorbook",
+        plannedPages: (book.page_count as number) || allPages.size,
+        startedAt: started,
+      });
+    } catch (err) {
+      console.error(`continuation failed for gen ${generationId}`, err);
+      await recordProviderOutage(this.db, err);
+      try {
+        await this.books.update(userId, bookId, { status: "failed" });
+      } catch {
+        /* book may be gone; the refund below still matters */
+      }
+      try {
+        await this.credits.refund(
+          userId,
+          cost,
+          "Remboursement — génération interrompue",
+          `gen:${generationId}:refund`
+        );
+      } catch (refundErr) {
+        console.error("refund after continuation failure failed", refundErr);
+      }
+      await this.updateGeneration(generationId, {
+        status: "failed",
+        credits_used: 0,
+        continuation_inflight_at: null,
+        error_message: friendlyGenerationError(err),
+        duration_ms: Date.now() - started,
+      });
+    }
+  }
+
+  /** Terminal accounting: PDF, statuses, bounded refunds, QC log, trial consumption. */
+  private async finalizeRun(args: {
+    userId: string;
+    bookId: string;
+    generationId: string;
+    cost: number;
+    isTrial: boolean;
+    bookType: string;
+    plannedPages: number;
+    startedAt: number;
+  }) {
+    const { userId, bookId, generationId, cost, isTrial } = args;
+    const pagesCol = this.db.collection("books").doc(bookId).collection("pages");
+    const pagesSnap = await pagesCol.get();
+    const completedCount = pagesSnap.docs.filter((d) => d.data().illustration_url).length;
+    const failedCount = pagesSnap.size - completedCount;
+
+    // Pages still `pending` here (chaining unavailable or capped) become
+    // `failed` so the retry UI can pick them up.
+    const strays = pagesSnap.docs.filter(
+      (d) => !d.data().illustration_url && d.data().generation_status !== "failed"
+    );
+    if (strays.length) {
+      const b = this.db.batch();
+      strays.forEach((d) =>
+        b.update(d.ref, {
+          generation_status: "failed",
+          updated_at: new Date().toISOString(),
+        })
+      );
+      await b.commit();
+    }
+
+    await this.updateGeneration(generationId, {
+      current_step: "illustrator",
+      progress: 90,
+    });
+
+    // Never mark a book "completed" with blank pages
+    if (completedCount === 0) {
+      await this.books.update(userId, bookId, { status: "failed" });
+      // Nothing was produced — refund the entire reservation.
+      await this.credits.refund(
+        userId,
+        cost,
+        "Remboursement — génération échouée (aucune page)",
+        `gen:${generationId}:refund`
+      );
+      await this.updateGeneration(generationId, {
+        status: "failed",
+        current_step: "illustrator",
+        progress: 90,
+        credits_used: 0,
+        continuation_inflight_at: null,
+        error_message:
+          "Aucune page illustrée n’a pu être générée. Réessayez ou régénérez les pages.",
+        duration_ms: Date.now() - args.startedAt,
+      });
+      return;
+    }
+
+    await this.updateGeneration(generationId, {
+      current_step: "editor",
+      progress: 92,
+    });
+
+    const full = await this.books.getWithPages(userId, bookId);
+    const pdfBytes = await this.pdf.buildBookPdf({
+      title: full.title,
+      subtitle: full.subtitle,
+      coverUrl: full.cover_image,
+      pages: full.pages.map((p) => ({
+        pageNumber: p.page_number,
+        title: p.title,
+        storyText: p.story_text,
+        illustrationUrl: p.illustration_url,
+      })),
+    });
+
+    let pdfUrl: string | null = null;
+    try {
+      pdfUrl = await this.storage.uploadBytes(
+        `exports/${userId}/${bookId}.pdf`,
+        pdfBytes,
+        "application/pdf"
+      );
+    } catch (uploadErr) {
+      console.error("PDF storage upload failed; trying inline data URL", uploadErr);
+      const dataUrl = `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`;
+      const firestoreSafeLimit = 800_000;
+      if (dataUrl.length <= firestoreSafeLimit) {
+        pdfUrl = dataUrl;
+      } else {
+        console.warn(
+          "PDF data URL exceeds Firestore-safe size; pdf_url left null — use /api/pdf/export"
+        );
+      }
+    }
+
+    const bookStatus = failedCount > 0 ? "partial" : "completed";
+    await this.books.update(userId, bookId, {
+      status: bookStatus,
+      pdf_url: pdfUrl,
+    });
+
+    // Credits were reserved up-front. Refund every page the customer paid for
+    // but did not receive; clamped to the reservation (trials reserve 0 →
+    // refund 0 → no way to mint free credits). Idempotent per generation.
+    const plannedPages = args.plannedPages || pagesSnap.size;
+    const notDelivered = Math.max(0, plannedPages - completedCount);
+    const refund = Math.min(
+      refundForFailedPages(plannedPages, completedCount, args.bookType),
+      cost
+    );
+    if (refund > 0) {
+      await this.credits.refund(
+        userId,
+        refund,
+        `Remboursement ${notDelivered} page(s) non livrée(s) — ${String(full.title)}`,
+        `gen:${generationId}:refund`
+      );
+    }
+    const creditsUsed = Math.max(0, cost - refund);
+
+    const genSnap = await this.db.collection("generations").doc(generationId).get();
+    const createdAtMs = Date.parse(String(genSnap.data()?.created_at ?? ""));
+    const qc = genSnap.data()?.qc_stats as
+      | { pixel_rerolls?: number; vision_rerolls?: number; images?: number }
+      | undefined;
+    console.log(
+      `[gen ${generationId}] QC re-rolls — pixel: ${qc?.pixel_rerolls ?? 0}, vision: ${qc?.vision_rerolls ?? 0}, images: ${qc?.images ?? 0}`
+    );
+
+    await this.updateGeneration(generationId, {
+      status: failedCount > 0 ? "partial" : "completed",
+      current_step: "editor",
+      progress: 100,
+      credits_used: creditsUsed,
+      continuation_inflight_at: null,
+      provider:
+        process.env.MOCK_AI === "true"
+          ? "mock"
+          : process.env.GROQ_API_KEY
+            ? "groq+fal"
+            : "openai+fal",
+      duration_ms: Number.isNaN(createdAtMs)
+        ? Date.now() - args.startedAt
+        : Date.now() - createdAtMs,
+      error_message:
+        failedCount > 0
+          ? `${failedCount} page(s) sans illustration — utilisez « Régénérer cette page ».`
+          : null,
+    });
+
+    // A delivered trial book consumes one free trial (idempotent).
+    if (isTrial && completedCount > 0) {
+      await this.consumeFreeTrial(userId, generationId);
     }
   }
 

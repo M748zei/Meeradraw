@@ -6,6 +6,7 @@ import { BookService } from "@/services/book-service";
 import { CreditService } from "@/services/credit-service";
 import { LicenseService } from "@/services/license-service";
 import { GenerationOrchestrator } from "@/services/generation-orchestrator";
+import { assertProvidersHealthy } from "@/services/provider-health";
 import { after } from "next/server";
 import { randomUUID } from "crypto";
 import { z } from "zod";
@@ -20,6 +21,10 @@ export async function POST(request: Request) {
     const { db, user, profile } = await requireUser();
     rateLimit(`genstart:${user.id}`, { limit: 10, windowMs: 60_000 });
     const body = schema.parse(await request.json());
+    // Pre-flight: refuse fast (before reserving credits) if a provider outage
+    // (fal balance exhausted, LLM quota) was just recorded — avoids the
+    // reserve → fail → refund churn during an outage window.
+    await assertProvidersHealthy(db);
     const books = new BookService(db);
     const credits = new CreditService(db);
     const book = await books.get(user.id, body.book_id);
