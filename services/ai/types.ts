@@ -39,6 +39,26 @@ export interface StoryCharacter {
   outfit?: string;
   signatureAccessory?: string;
   proportions?: string;
+  /**
+   * First page (1-based) where this character appears in the story. A character
+   * "met" on page N must NOT be drawn on pages < N nor on the cover (spoiler),
+   * unless the plan explicitly marks them as a cover hero.
+   */
+  introducedOnPage?: number;
+}
+
+/**
+ * Per-universe visual world bible: recurring drawable elements that anchor every
+ * page in the SAME world (anti "European street in an African village" drift).
+ * Generated once per universe (lazily) and stored on the universe document.
+ */
+export interface SettingBible {
+  /** One-line world identity (EN), e.g. "rural West African savanna village". */
+  worldSummary: string;
+  /** 8–12 concrete drawable elements of the world (EN), e.g. "giant baobab tree". */
+  elements: string[];
+  /** Visual elements that must NEVER appear (EN), e.g. "European suburban houses". */
+  forbiddenElements: string[];
 }
 
 export type ComicBeat =
@@ -77,6 +97,16 @@ export interface StoryPlan {
     characterIds: string[];
     comicBeat?: ComicBeat;
     shotType?: ShotType;
+    /** ONE concrete, drawable action (EN): who does what, e.g. "Nala balances on a log over the river". */
+    action?: string;
+    /** Pose of EACH character present on this page (EN), keyed by character id. */
+    characterPoses?: Record<string, string>;
+    /** Camera angle / framing (EN), e.g. "low-angle side view", "bird's-eye view". */
+    camera?: string;
+    /** This page's specific setting (EN) — where the scene physically happens. */
+    pageSetting?: string;
+    /** The single focal element the eye should land on first (EN). */
+    focalPoint?: string;
   }>;
 }
 
@@ -96,6 +126,37 @@ export interface ImageGenerationInput {
   isCharacterSheet?: boolean;
   shotType?: ShotType | string;
   comicBeat?: ComicBeat | string;
+  /**
+   * The page's ONE concrete action (EN). Drives the Kontext identity/composition
+   * decoupling ("same characters, NEW poses, actively doing: <action>") and the
+   * vision QC "is the action visible?" check.
+   */
+  action?: string;
+  /**
+   * COMPACT scene for the reference-guided (Kontext) path. Verified in prod:
+   * the full assembled prompt (structured fields + prose + boilerplate) is so
+   * long that Kontext ignores it and copies the reference lineup on a white
+   * void; the short benchmark prompt produced dynamic scenes. Text-only
+   * Ideogram keeps the rich `prompt` (it handles long prompts well).
+   */
+  refScene?: string;
+  /** Book title to letter on the cover (Ideogram renders text well). */
+  coverTitle?: string;
+  /** 2–4 setting-bible elements relevant to THIS scene (anchors the world). */
+  settingElements?: string[];
+  /** Negative derived from the universe's setting bible (forbidden elements). */
+  worldNegative?: string;
+  /** Expected characters IN THIS IMAGE for the vision cast QC (name + species/kind). */
+  expectedCast?: Array<{ name: string; kind: string }>;
+  /** Collector for QC/re-roll stats (mutated by the provider; optional). */
+  qcStats?: ImageQcStats;
+}
+
+/** Per-image QC telemetry so re-roll cost is observable (logged on generations). */
+export interface ImageQcStats {
+  pixelRerolls?: number;
+  visionRerolls?: number;
+  visionVerdicts?: string[];
 }
 
 /** Short creative brief shown on the new-book step (before full generation). */
@@ -118,6 +179,13 @@ export interface TextAIProvider {
     research?: ResearchBrief,
     audience?: string
   ): Promise<StoryPlan>;
+  /** Visual world bible for a universe (lazy, cached on the universe doc). */
+  generateSettingBible(params: {
+    universeTitle: string;
+    universeDescription?: string;
+    worldSetting?: string;
+    style?: string;
+  }): Promise<SettingBible>;
 }
 
 export interface ImageAIProvider {

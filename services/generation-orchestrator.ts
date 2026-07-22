@@ -1,9 +1,19 @@
 import { AppError } from "@/lib/errors";
 import { mapWithConcurrency } from "@/lib/async";
 import {
+  buildCompactScene,
+  buildPageScene,
+  charactersForPage,
+  coverCharacters,
+  expectedCastFor,
   formatCharacterLock,
   formatPageCharacterLock,
+  settingElementsForScene,
 } from "@/services/ai/character-bible";
+import { buildWorldNegative } from "@/services/ai/prompts";
+import { buildSheetCrops } from "@/services/ai/sheet-crops";
+import { overlayCoverTitle } from "@/lib/cover-title";
+import type { ImageQcStats, SettingBible, StoryPlan } from "@/services/ai/types";
 import { getImageProvider, getTextProvider } from "@/services/ai";
 import { BookService } from "@/services/book-service";
 import { CreditService } from "@/services/credit-service";
@@ -19,6 +29,24 @@ import { randomUUID } from "crypto";
 function envInt(value: string | undefined, fallback: number) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+/** Aggregate per-image QC stats into a Firestore-friendly summary. */
+function summarizeQcStats(all: Record<string, ImageQcStats>) {
+  let pixel = 0;
+  let vision = 0;
+  const verdicts: Record<string, string[]> = {};
+  for (const [image, s] of Object.entries(all)) {
+    pixel += s.pixelRerolls || 0;
+    vision += s.visionRerolls || 0;
+    if (s.visionVerdicts?.length) verdicts[image] = s.visionVerdicts.slice(0, 6);
+  }
+  return {
+    images: Object.keys(all).length,
+    pixel_rerolls: pixel,
+    vision_rerolls: vision,
+    vision_verdicts: verdicts,
+  };
 }
 
 /** Parallel page image generation (fal). Keep low to avoid rate limits. */
@@ -122,7 +150,18 @@ export class GenerationOrchestrator {
         .filter(Boolean)
         .join(" — ");
 
+      // Setting bible (audit T3): lazy per-universe visual world contract —
+      // generated once, stored on the universe, reused by every book. Fail-open:
+      // a bible failure must not block the run.
+      const settingBible = await this.ensureSettingBible(
+        universeId,
+        plan,
+        style
+      );
+      const worldNegative = buildWorldNegative(settingBible?.forbiddenElements);
+
       const imageProvider = getImageProvider();
+      const qcStatsAll: Record<string, ImageQcStats> = {};
 
       // Hero cast portrait first (identity reference when FAL_REF_ENDPOINT is set).
       // The proven reference is a COLORED flat-cartoon portrait of the exact cast
@@ -132,22 +171,34 @@ export class GenerationOrchestrator {
       // wrong cast. Generate up to SHEET_MAX_ATTEMPTS candidates; if none is plausible,
       // drop the reference so pages fall back to TEXT-ONLY generation.
       let characterSheetUrl: string | null = null;
+      const sheetCast = expectedCastFor(plan.characters);
       for (let attempt = 1; attempt <= SHEET_MAX_ATTEMPTS; attempt++) {
         try {
+          const sheetStats: ImageQcStats = {};
           const sheet = await imageProvider.generateImage({
             prompt: "character model sheet",
             style,
             characterBible: fullCharacterBible,
             worldSetting,
             isCharacterSheet: true,
+            // Vision cast QC (audit T4): exact count + species vs the brief.
+            expectedCast: sheetCast,
+            qcStats: sheetStats,
           });
+          qcStatsAll.model_sheet = sheetStats;
           if (await this.isImplausibleHero(sheet.url)) {
             console.warn(
               `hero portrait attempt ${attempt}/${SHEET_MAX_ATTEMPTS} implausible (blank or not colored); retrying with a fresh seed`
             );
             continue;
           }
-          characterSheetUrl = sheet.url;
+          // Persist the hero (audit T7): fal URLs are ephemeral; Kontext also
+          // needs a stable reference for retries weeks later.
+          const persisted = await this.storage.persistImageFromUrl(
+            sheet.url,
+            `universes/${universeId}/model_sheet.png`
+          );
+          characterSheetUrl = persisted.url;
           console.log(`hero portrait accepted on attempt ${attempt}/${SHEET_MAX_ATTEMPTS}`);
           break;
         } catch (sheetErr) {
@@ -158,7 +209,20 @@ export class GenerationOrchestrator {
         }
       }
 
+      // Per-character crops (benchmark winner): SOLO pages guided by the FULL
+      // lineup leak the absent character back in — a crop removes the leak.
+      let sheetCrops: Record<string, { url: string; path: string }> = {};
       if (characterSheetUrl) {
+        sheetCrops = await buildSheetCrops(
+          characterSheetUrl,
+          plan.characters,
+          universeId,
+          this.storage
+        );
+        await this.db.collection("universes").doc(universeId).update({
+          model_sheet_crops: sheetCrops,
+          updated_at: new Date().toISOString(),
+        });
         const afterChars = await charsRef.get();
         const sheetBatch = this.db.batch();
         afterChars.docs.forEach((d) => {
@@ -195,7 +259,9 @@ export class GenerationOrchestrator {
 
       const insertedPages: Array<{
         id: string;
-        illustration_prompt: string;
+        scene: string;
+        ref_scene: string;
+        action?: string;
         negative_prompt: string;
         story_text: string;
         page_number: number;
@@ -203,18 +269,30 @@ export class GenerationOrchestrator {
         comic_beat?: string;
         shot_type?: string;
         page_character_lock: string;
+        expected_cast: Array<{ name: string; kind: string }>;
+        setting_elements: string[];
       }> = [];
 
       for (const p of plan.pages) {
         const pageId = randomUUID();
         const pageLock = formatPageCharacterLock(plan, p);
+        // Definitive per-page scene (audit T1): the page's OWN structured
+        // action/poses/camera/setting dominate — never the global synopsis.
+        const scene = buildPageScene(plan, p);
+        const refScene = buildCompactScene(plan, p);
         const row = {
           page_number: p.pageNumber,
           title: p.title,
           story_text: p.storyText,
-          illustration_prompt: p.illustrationDescription,
+          illustration_prompt: scene,
+          ref_scene: refScene,
+          action: p.action ?? null,
+          camera: p.camera ?? null,
+          page_setting: p.pageSetting ?? null,
+          focal_point: p.focalPoint ?? null,
           negative_prompt: p.negativePrompt ?? null,
           illustration_url: null,
+          illustration_path: null,
           activity_type: null,
           generation_status: "pending",
           character_ids: p.characterIds || [],
@@ -227,7 +305,9 @@ export class GenerationOrchestrator {
         await pagesCol.doc(pageId).set(row);
         insertedPages.push({
           id: pageId,
-          illustration_prompt: p.illustrationDescription,
+          scene,
+          ref_scene: refScene,
+          action: p.action,
           negative_prompt: p.negativePrompt ?? "",
           story_text: p.storyText,
           page_number: p.pageNumber,
@@ -235,6 +315,11 @@ export class GenerationOrchestrator {
           comic_beat: p.comicBeat,
           shot_type: p.shotType,
           page_character_lock: pageLock,
+          expected_cast: expectedCastFor(charactersForPage(plan, p)),
+          setting_elements: settingElementsForScene(
+            settingBible?.elements,
+            `${scene} ${p.storyText}`
+          ),
         });
       }
 
@@ -243,17 +328,51 @@ export class GenerationOrchestrator {
         progress: 45,
       });
 
+      // Cover (audit T6): poster composition — heroes IN ACTION in the world's
+      // signature setting, lettered title in the reserved top band (Ideogram),
+      // spoiler-free cast (characters met later stay off the cover).
+      const coverCast = coverCharacters(plan);
+      const coverAction =
+        plan.pages.find((p) => p.action && p.comicBeat === "action")?.action ||
+        plan.pages.find((p) => p.action)?.action ||
+        plan.summary;
+      const coverStats: ImageQcStats = {};
+      // Benchmark winner: WITH a hero reference → Kontext cover (identity is
+      // reliable, lettering is not) + server-side title overlay. WITHOUT a
+      // reference → Ideogram lettered cover (title reliable; vision cast QC
+      // re-rolls species drift).
+      const useOverlayTitle = Boolean(characterSheetUrl);
       const cover = await imageProvider.generateImage({
         prompt: `${plan.title}. ${plan.summary}`,
         style,
-        characterBible: fullCharacterBible,
+        characterBible: formatCharacterLock(coverCast),
         worldSetting,
         isCover: true,
         referenceImageUrl: characterSheetUrl || undefined,
+        coverTitle: useOverlayTitle ? undefined : plan.title,
+        action: coverAction,
+        refScene: coverAction,
+        settingElements: settingElementsForScene(
+          settingBible?.elements,
+          `${coverAction} ${plan.summary}`,
+          4
+        ),
+        worldNegative,
+        expectedCast: expectedCastFor(coverCast),
+        qcStats: coverStats,
       });
-      await this.books.update(userId, bookId, { cover_image: cover.url });
+      qcStatsAll.cover = coverStats;
+      const persistedCover = await this.persistCover(
+        cover.url,
+        bookId,
+        useOverlayTitle ? plan.title : null
+      );
+      await this.books.update(userId, bookId, {
+        cover_image: persistedCover.url,
+        cover_image_path: persistedCover.path,
+      });
       await this.db.collection("universes").doc(universeId).update({
-        cover_image: cover.url,
+        cover_image: persistedCover.url,
         updated_at: new Date().toISOString(),
       });
 
@@ -267,7 +386,7 @@ export class GenerationOrchestrator {
           await pagesCol.doc(page.id).update({ generation_status: "generating" });
           try {
             const scenePrompt = [
-              page.illustration_prompt || page.story_text || plan.summary,
+              page.scene || page.story_text || plan.summary,
               page.shot_type ? `Shot: ${page.shot_type}.` : "",
               page.comic_beat ? `Beat: ${page.comic_beat}.` : "",
               "Mandatory rich colorable environment matching the caption. No empty white void. Simplified mitten hands. Max 2 characters. Full figures inside frame with margins.",
@@ -275,6 +394,14 @@ export class GenerationOrchestrator {
               .filter(Boolean)
               .join(" ");
 
+            const pageStats: ImageQcStats = {};
+            // Benchmark winner: solo pages use the character's OWN crop as the
+            // reference (full lineup leaks the absent character back in).
+            const pageReference =
+              page.character_ids.length === 1 &&
+              sheetCrops[page.character_ids[0]]?.url
+                ? sheetCrops[page.character_ids[0]].url
+                : characterSheetUrl || undefined;
             const image = await imageProvider.generateImage({
               prompt: scenePrompt,
               style,
@@ -282,17 +409,32 @@ export class GenerationOrchestrator {
               negativePrompt: page.negative_prompt || undefined,
               worldSetting,
               isColoringPage: true,
-              referenceImageUrl: characterSheetUrl || undefined,
+              referenceImageUrl: pageReference,
+              refScene: page.ref_scene,
               shotType: page.shot_type,
               comicBeat: page.comic_beat,
+              action: page.action,
+              settingElements: page.setting_elements,
+              worldNegative,
+              expectedCast: page.expected_cast,
+              qcStats: pageStats,
             });
+            qcStatsAll[`page_${page.page_number}`] = pageStats;
 
             if (!image?.url) {
               throw new Error("Image provider returned empty URL");
             }
 
+            // Persist to Storage (audit T7): never leave an ephemeral fal URL
+            // as the page's source of truth.
+            const persisted = await this.storage.persistImageFromUrl(
+              image.url,
+              `books/${bookId}/pages/${page.page_number}.png`
+            );
+
             await pagesCol.doc(page.id).update({
-              illustration_url: image.url,
+              illustration_url: persisted.url,
+              illustration_path: persisted.path,
               generation_status: "completed",
               updated_at: new Date().toISOString(),
             });
@@ -415,10 +557,18 @@ export class GenerationOrchestrator {
       }
       const creditsUsed = Math.max(0, cost - refund);
 
+      // QC telemetry (audit T5): re-roll rate = real internal fal cost. Logged
+      // per image on the generation doc so the rate is trackable over time.
+      const qcSummary = summarizeQcStats(qcStatsAll);
+      console.log(
+        `[gen ${generationId}] QC re-rolls — pixel: ${qcSummary.pixel_rerolls}, vision: ${qcSummary.vision_rerolls}, images: ${qcSummary.images}`
+      );
+
       await this.updateGeneration(generationId, {
         status: genStatus,
         current_step: "editor",
         progress: 100,
+        qc_stats: qcSummary,
         credits_used: creditsUsed,
         provider:
           process.env.MOCK_AI === "true"
@@ -474,6 +624,70 @@ export class GenerationOrchestrator {
     } catch (err) {
       console.warn("could not validate hero portrait; assuming usable", err);
       return false;
+    }
+  }
+
+  /**
+   * Persist the cover to Storage, compositing the lettered title band first
+   * when the cover came from the reference path (benchmark winner strategy).
+   * Fail-open: overlay/persist failures keep the un-titled or source image.
+   */
+  private async persistCover(
+    coverUrl: string,
+    bookId: string,
+    overlayTitle: string | null
+  ): Promise<{ url: string; path: string | null }> {
+    if (!overlayTitle) {
+      return this.storage.persistImageFromUrl(coverUrl, `books/${bookId}/cover.png`);
+    }
+    try {
+      const res = await fetch(coverUrl);
+      if (!res.ok) throw new Error(`fetch cover ${res.status}`);
+      const raw = new Uint8Array(await res.arrayBuffer());
+      const png =
+        detectImageFormat(raw) === "png" ? Buffer.from(raw) : await toPngBuffer(raw);
+      const titled = await overlayCoverTitle(png, overlayTitle);
+      const path = `books/${bookId}/cover.png`;
+      const url = await this.storage.uploadBytes(path, titled, "image/png");
+      return { url, path };
+    } catch (err) {
+      console.warn("cover title overlay failed; persisting untitled cover", err);
+      return this.storage.persistImageFromUrl(coverUrl, `books/${bookId}/cover.png`);
+    }
+  }
+
+  /**
+   * Load or lazily create the universe's setting bible (audit T3). Stored on
+   * the universe doc so all of its books share the same world contract.
+   * Fail-open: returns null when generation fails — pages then fall back to
+   * plan.world only.
+   */
+  private async ensureSettingBible(
+    universeId: string,
+    plan: StoryPlan,
+    style: string
+  ): Promise<SettingBible | null> {
+    const ref = this.db.collection("universes").doc(universeId);
+    try {
+      const snap = await ref.get();
+      const existing = snap.data()?.setting_bible as SettingBible | undefined;
+      if (existing?.elements?.length) return existing;
+
+      const universeTitle = (snap.data()?.title as string) || plan.title;
+      const bible = await getTextProvider().generateSettingBible({
+        universeTitle,
+        universeDescription: (snap.data()?.description as string) || undefined,
+        worldSetting: [plan.world?.setting, plan.world?.mood].filter(Boolean).join(" — "),
+        style,
+      });
+      await ref.update({
+        setting_bible: bible,
+        updated_at: new Date().toISOString(),
+      });
+      return bible;
+    } catch (err) {
+      console.warn("setting bible unavailable (fail-open)", err);
+      return null;
     }
   }
 

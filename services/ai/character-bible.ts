@@ -109,12 +109,45 @@ export function normalizeStoryPlan(plan: StoryPlan, pageCount: number): StoryPla
   }
 
   const validIds = new Set(characters.map((c) => c.id));
-  const pages = (plan.pages || []).slice(0, pageCount).map((p, i) => {
+
+  // First appearance map (audit fix T1.3): trust the plan's introducedOnPage when
+  // sane, else derive it from the first page whose characterIds mention the id.
+  // A character must NEVER be drawn before their introduction page.
+  const rawPages = (plan.pages || []).slice(0, pageCount);
+  const firstSeen = new Map<string, number>();
+  rawPages.forEach((p, i) => {
+    const n = p.pageNumber || i + 1;
+    for (const raw of p.characterIds || []) {
+      const id = raw.replace(/\s+/g, "_").toLowerCase();
+      if (validIds.has(id) && !firstSeen.has(id)) firstSeen.set(id, n);
+    }
+  });
+  characters = characters.map((c) => {
+    const declared = Number(c.introducedOnPage);
+    const derived = firstSeen.get(c.id) ?? 1;
+    const intro =
+      Number.isFinite(declared) && declared >= 1
+        ? Math.min(Math.floor(declared), pageCount)
+        : derived;
+    return { ...c, introducedOnPage: intro };
+  });
+  const introOf = new Map(characters.map((c) => [c.id, c.introducedOnPage ?? 1]));
+
+  const pages = rawPages.map((p, i) => {
+    const pageNumber = p.pageNumber || i + 1;
     let characterIds = (p.characterIds || [])
       .map((id) => id.replace(/\s+/g, "_").toLowerCase())
-      .filter((id) => validIds.has(id));
+      .filter((id) => validIds.has(id))
+      // Intro-order enforcement: no character on a page before they are met.
+      .filter((id) => (introOf.get(id) ?? 1) <= pageNumber);
     if (characterIds.length === 0) {
-      characterIds = characters.slice(0, Math.min(2, characters.length)).map((c) => c.id);
+      characterIds = characters
+        .filter((c) => (c.introducedOnPage ?? 1) <= pageNumber)
+        .slice(0, Math.min(2, characters.length))
+        .map((c) => c.id);
+      if (characterIds.length === 0) {
+        characterIds = characters.slice(0, 1).map((c) => c.id);
+      }
     }
     characterIds = characterIds.slice(0, 2);
 
@@ -122,22 +155,46 @@ export function normalizeStoryPlan(plan: StoryPlan, pageCount: number): StoryPla
       p.comicBeat ||
       inferComicBeat(i, Math.max(plan.pages?.length || pageCount, pageCount));
 
+    // Structured composition fields (audit fix T1.1) — keep poses only for
+    // characters actually on the page.
+    const poses: Record<string, string> = {};
+    if (p.characterPoses && typeof p.characterPoses === "object") {
+      for (const [rawId, pose] of Object.entries(p.characterPoses)) {
+        const id = rawId.replace(/\s+/g, "_").toLowerCase();
+        if (characterIds.includes(id) && typeof pose === "string" && pose.trim()) {
+          poses[id] = pose.trim();
+        }
+      }
+    }
+
     return {
       ...p,
-      pageNumber: p.pageNumber || i + 1,
+      pageNumber,
       characterIds,
       comicBeat: beat,
       shotType: p.shotType || (beat === "establishing" ? "wide" : "full_body"),
+      action: (p.action || "").trim() || undefined,
+      characterPoses: Object.keys(poses).length ? poses : undefined,
+      camera: (p.camera || "").trim() || undefined,
+      pageSetting: (p.pageSetting || "").trim() || undefined,
+      focalPoint: (p.focalPoint || "").trim() || undefined,
       storyText: clampStoryText(p.storyText),
-      illustrationDescription: ensureRichEnvironment(
-        ensureSceneMentionsCast(
-          p.illustrationDescription,
-          characters,
-          characterIds
-        ),
-        p.storyText,
-        plan.world?.setting
-      ),
+      // The canned-environment injector predates the structured storyboard and
+      // can hijack the world (verified: a generic "indoor kitchen with tiled
+      // wall" turned an African village page into a modern European kitchen).
+      // When the model provided its own pageSetting, trust it — only pages
+      // WITHOUT a structured setting get the legacy environment inference.
+      illustrationDescription: (p.pageSetting || "").trim()
+        ? `${ensureSceneMentionsCast(p.illustrationDescription, characters, characterIds)} No empty white void. No floating characters. Simplified mitten-style kid hands or hands holding objects. Max 2 characters.`
+        : ensureRichEnvironment(
+            ensureSceneMentionsCast(
+              p.illustrationDescription,
+              characters,
+              characterIds
+            ),
+            p.storyText,
+            plan.world?.setting
+          ),
       negativePrompt: (p.negativePrompt || "").trim() || DEFAULT_PAGE_NEGATIVE,
     };
   });
@@ -148,6 +205,144 @@ export function normalizeStoryPlan(plan: StoryPlan, pageCount: number): StoryPla
     characters,
     pages,
   };
+}
+
+/**
+ * Definitive per-page scene prompt assembled SERVER-SIDE from the structured
+ * storyboard fields (audit fix T1.2): the page's OWN action/poses/camera/setting
+ * dominate — never the global synopsis. Falls back to illustrationDescription
+ * when the model omitted the structured fields.
+ */
+export function buildPageScene(
+  plan: StoryPlan,
+  page: StoryPlan["pages"][number]
+): string {
+  const chars = charactersForPage(plan, page);
+  const nameOf = (id: string) => chars.find((c) => c.id === id)?.name || id;
+
+  const poseLines = Object.entries(page.characterPoses || {})
+    .map(([id, pose]) => `${nameOf(id)}: ${pose}`)
+    .join("; ");
+
+  const parts = [
+    page.action ? `ACTION (must be clearly visible): ${page.action}.` : "",
+    poseLines ? `POSES: ${poseLines}.` : "",
+    page.camera ? `CAMERA: ${page.camera}.` : "",
+    page.pageSetting ? `THIS PAGE'S SETTING: ${page.pageSetting}.` : "",
+    page.focalPoint ? `FOCAL POINT: ${page.focalPoint}.` : "",
+  ].filter(Boolean);
+
+  // Structured fields present → they lead; the prose description adds texture.
+  if (parts.length >= 2) {
+    return [parts.join(" "), page.illustrationDescription].filter(Boolean).join(" ");
+  }
+  return page.illustrationDescription || page.storyText || plan.summary;
+}
+
+/**
+ * COMPACT scene for the Kontext reference path — structured fields only, no
+ * prose, no boilerplate (long prompts make Kontext copy the reference lineup).
+ */
+export function buildCompactScene(
+  plan: StoryPlan,
+  page: StoryPlan["pages"][number]
+): string {
+  const chars = charactersForPage(plan, page);
+  const nameOf = (id: string) => chars.find((c) => c.id === id)?.name || id;
+  const poseLines = Object.entries(page.characterPoses || {})
+    .map(([id, pose]) => `${nameOf(id)}: ${pose}`)
+    .join("; ");
+  const parts = [
+    page.action || "",
+    poseLines ? `POSES: ${poseLines}.` : "",
+    page.camera ? `CAMERA: ${page.camera}.` : "",
+    page.pageSetting ? `SETTING: ${page.pageSetting}.` : "",
+  ].filter(Boolean);
+  if (parts.length) return parts.join(" ");
+  return (page.illustrationDescription || page.storyText || plan.summary).slice(0, 300);
+}
+
+/** Cover cast (audit fix T1.3): only characters known from page 1 — no spoilers. */
+export function coverCharacters(plan: StoryPlan): StoryCharacter[] {
+  const fromStart = plan.characters.filter((c) => (c.introducedOnPage ?? 1) <= 1);
+  return fromStart.length ? fromStart : plan.characters;
+}
+
+const ANIMAL_WORDS: Array<[RegExp, string]> = [
+  [/\b(fox|renard)\b/i, "fox"],
+  [/\b(wolf|loup)\b/i, "wolf"],
+  [/\b(dog|chien)\b/i, "dog"],
+  [/\b(cat|chat)\b/i, "cat"],
+  [/\b(rabbit|lapin|hare)\b/i, "rabbit"],
+  [/\b(lion)\b/i, "lion"],
+  [/\b(tiger|tigre)\b/i, "tiger"],
+  [/\b(bear|ours)\b/i, "bear"],
+  [/\b(monkey|singe)\b/i, "monkey"],
+  [/\b(elephant|éléphant)\b/i, "elephant"],
+  [/\b(bird|oiseau)\b/i, "bird"],
+  [/\b(turtle|tortue)\b/i, "turtle"],
+  [/\b(frog|grenouille)\b/i, "frog"],
+  [/\b(mouse|souris)\b/i, "mouse"],
+  [/\b(goat|chèvre)\b/i, "goat"],
+  [/\b(sheep|mouton)\b/i, "sheep"],
+  [/\b(donkey|âne)\b/i, "donkey"],
+  [/\b(hyena|hyène)\b/i, "hyena"],
+  [/\b(lizard|lézard|gecko)\b/i, "lizard"],
+  [/\b(snake|serpent)\b/i, "snake"],
+  [/\b(fish|poisson)\b/i, "fish"],
+  [/\b(zebra|zèbre)\b/i, "zebra"],
+  [/\b(giraffe|girafe)\b/i, "giraffe"],
+  [/\b(hippo|hippopotame)\b/i, "hippo"],
+  [/\b(crocodile)\b/i, "crocodile"],
+];
+
+/**
+ * Species/kind of a character for the vision cast QC (a turtle must be a TURTLE).
+ * Derived from the locked descriptors; defaults to "human".
+ */
+export function characterKind(c: StoryCharacter): string {
+  const hay = `${c.visualLock || ""} ${c.appearance || ""} ${c.description || ""}`;
+  for (const [re, kind] of ANIMAL_WORDS) {
+    if (re.test(hay)) return kind;
+  }
+  return "human";
+}
+
+/** Vision-QC expected cast for a set of characters. */
+export function expectedCastFor(
+  characters: StoryCharacter[]
+): Array<{ name: string; kind: string }> {
+  return characters.map((c) => ({ name: c.name, kind: characterKind(c) }));
+}
+
+/**
+ * Pick the 2–4 setting-bible elements most relevant to THIS scene (audit T3.2):
+ * word-overlap scoring against the scene text, topped up with the bible's
+ * leading (most iconic) elements.
+ */
+export function settingElementsForScene(
+  elements: string[] | undefined,
+  sceneText: string,
+  max = 3
+): string[] {
+  const pool = (elements || []).map((e) => e.trim()).filter(Boolean);
+  if (!pool.length) return [];
+  const hay = sceneText.toLowerCase();
+  const scored = pool.map((el, i) => {
+    const words = el.toLowerCase().split(/\W+/).filter((w) => w.length > 3);
+    const hits = words.filter((w) => hay.includes(w)).length;
+    return { el, i, hits };
+  });
+  const relevant = scored
+    .filter((s) => s.hits > 0)
+    .sort((a, b) => b.hits - a.hits || a.i - b.i)
+    .map((s) => s.el);
+  const picked = [...relevant];
+  for (const s of scored) {
+    if (picked.length >= max) break;
+    if (!picked.includes(s.el)) picked.push(s.el);
+  }
+  return picked.slice(0, max);
 }
 
 /** Reasonable per-page negative used when the model omits one. */

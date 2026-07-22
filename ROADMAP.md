@@ -28,9 +28,22 @@ Dernière mise à jour : 2026-07-21
   nameservers Vercel), auth E2E validée en prod (signup → session → profil
   + 30 crédits), gate licence Chariow actif.
 
+- **[2026-07-22] 🎨 SPRINT QUALITÉ IMAGES (P0)** : storyboard structuré (actions
+  physiques, poses, caméra, décor par page, ordre d'introduction), Kontext
+  découplé identité/composition (prompt compact + crops solo, validés par
+  benchmark), setting bible par univers + negatives dérivés, QC vision Groq
+  (cast/espèces/quadrupède/anti-lineup/action/titre, fail-open, `qc_stats`),
+  cover affiche avec titre composité serveur, **persistance Storage de toutes
+  les images + migration 138/138 URLs fal (0 perte)**.
+
 ## 🔄 En cours
 
 - Finalisation post-mise en ligne (voir ci-dessous).
+
+### Raffinement images (itération suivante)
+- [ ] Dynamisme des poses duo : Kontext colle encore parfois à la pose de la
+      référence (tester flux-pro/kontext/max, seconde passe LLM sur les actions).
+- [ ] Garde anti-texte parasite dans les pages (OCR/vision → re-roll).
 
 ## 📋 À faire
 

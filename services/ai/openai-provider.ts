@@ -5,6 +5,8 @@ import {
   buildEnrichIdeaUserPrompt,
   buildResearchSystemPrompt,
   buildResearchUserPrompt,
+  buildSettingBibleSystemPrompt,
+  buildSettingBibleUserPrompt,
   buildStorySystemPrompt,
   buildStoryUserPrompt,
 } from "@/services/ai/prompts";
@@ -12,6 +14,7 @@ import { gatherWebResearch } from "@/services/ai/research";
 import type {
   EnrichedIdea,
   ResearchBrief,
+  SettingBible,
   StoryPlan,
   TextAIProvider,
 } from "@/services/ai/types";
@@ -242,5 +245,39 @@ export class OpenAITextProvider implements TextAIProvider {
       throw new Error("Story plan missing pages");
     }
     return normalizeStoryPlan(plan, pageCount);
+  }
+
+  async generateSettingBible(params: {
+    universeTitle: string;
+    universeDescription?: string;
+    worldSetting?: string;
+    style?: string;
+  }): Promise<SettingBible> {
+    const response = await this.client.chat.completions.create({
+      model: resolveTextModel(),
+      temperature: 0.5,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: buildSettingBibleSystemPrompt() },
+        { role: "user", content: buildSettingBibleUserPrompt(params) },
+      ],
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) throw new Error("Empty setting bible response");
+    const raw = parseJson<Partial<SettingBible>>(content, "setting bible");
+    const elements = (Array.isArray(raw.elements) ? raw.elements : [])
+      .map((e) => String(e).trim())
+      .filter(Boolean)
+      .slice(0, 12);
+    if (elements.length < 4) throw new Error("Setting bible too sparse");
+    return {
+      worldSummary: String(raw.worldSummary || params.worldSetting || params.universeTitle).trim(),
+      elements,
+      forbiddenElements: (Array.isArray(raw.forbiddenElements) ? raw.forbiddenElements : [])
+        .map((e) => String(e).trim())
+        .filter(Boolean)
+        .slice(0, 8),
+    };
   }
 }

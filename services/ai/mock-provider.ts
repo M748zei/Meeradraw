@@ -4,6 +4,7 @@ import type {
   ImageAIProvider,
   ImageGenerationInput,
   ResearchBrief,
+  SettingBible,
   StoryPlan,
   TextAIProvider,
 } from "@/services/ai/types";
@@ -185,6 +186,52 @@ export class MockTextProvider implements TextAIProvider {
       },
       pageCount
     );
+  }
+
+  async generateSettingBible(params: {
+    universeTitle: string;
+    universeDescription?: string;
+    worldSetting?: string;
+    style?: string;
+  }): Promise<SettingBible> {
+    const africanHint =
+      /afrique|baobab|dakar|abidjan|lagos|kirikou|anansi|accra|savane|niger|pagne/i.test(
+        `${params.universeTitle} ${params.universeDescription || ""} ${params.worldSetting || ""}`
+      );
+    if (africanHint) {
+      return {
+        worldSummary: "warm rural West African savanna village",
+        elements: [
+          "giant baobab tree",
+          "round banco clay houses with thatched roofs",
+          "open-air market stalls",
+          "wax-print fabrics drying on a line",
+          "calabash bowls",
+          "red laterite dirt path",
+          "tall savanna grass",
+          "clay water jars",
+        ],
+        forbiddenElements: [
+          "European suburban houses",
+          "modern glass windows",
+          "paved city streets",
+        ],
+      };
+    }
+    return {
+      worldSummary: "soft storybook world",
+      elements: [
+        "rolling hills",
+        "friendly round trees",
+        "winding path",
+        "wooden fence",
+        "small flowers",
+        "fluffy clouds",
+        "little wooden house",
+        "stone bridge",
+      ],
+      forbiddenElements: ["skyscrapers", "cars", "power lines"],
+    };
   }
 }
 

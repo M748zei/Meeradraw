@@ -1,4 +1,4 @@
-import type { ImageAIProvider, ImageGenerationInput } from "@/services/ai/types";
+import type { ImageAIProvider, ImageGenerationInput, ImageQcStats } from "@/services/ai/types";
 import {
   buildCharacterSheetPrompt,
   buildColoringPagePrompt,
@@ -10,6 +10,7 @@ import {
 import { withRetry } from "@/lib/async";
 import { isBlankOrTooFaint, hasPoorEnvironment, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
+import { checkCast, checkCoverTitle, checkPageAction } from "@/lib/vision-qc";
 import { StorageService } from "@/services/storage-service";
 import { randomUUID } from "crypto";
 
@@ -47,6 +48,20 @@ const DEFAULT_GUIDANCE_SCALE = Number(process.env.FAL_GUIDANCE_SCALE || 4.5);
  * cap we KEEP THE BEST attempt (never fail the page — an empty page beats a failed one).
  */
 const FAL_QUALITY_REROLLS = Number(process.env.FAL_QUALITY_REROLLS ?? 4);
+/**
+ * Extra re-rolls triggered by the VISION QC (lineup detected, action missing,
+ * wrong cast, illegible cover title). Separate cap from the pixel re-rolls:
+ * vision only runs on pixel-clean images, and after the cap the image is
+ * ACCEPTED (fail-open — a static page beats a failed page). Each re-roll is an
+ * internal fal cost, never billed to the customer.
+ */
+const VISION_QC_REROLLS = Number(process.env.VISION_QC_REROLLS ?? 2);
+const ANTI_LINEUP_BOOST =
+  "CRITICAL: the characters must be IN MOTION doing the described action with distinct dynamic poses and a non-frontal camera angle — ABSOLUTELY NOT standing in a row, NOT front-facing side by side, NOT a static group photo, NOT a model sheet.";
+const CAST_FIX_BOOST =
+  "CRITICAL: draw EXACTLY the listed characters — correct number of figures, correct species for each (an animal character is a REAL animal of its species, never a human) — no extra characters, no missing characters.";
+const TITLE_FIX_BOOST =
+  "CRITICAL: the title text must be rendered LARGE, PERFECTLY LEGIBLE and CORRECTLY SPELLED in bold playful hand-lettering in the top band.";
 const ENV_BOOST =
   "STRONGER ENVIRONMENT: fill the ENTIRE background with the scene setting (props, nature, weather, or architecture) reaching all page edges; absolutely no empty white void and no floating character.";
 const LINEART_BOOST =
@@ -71,10 +86,13 @@ export class FalImageProvider implements ImageAIProvider {
       DEFAULT_PAGE_ENDPOINT;
     const refEndpoint = process.env.FAL_REF_ENDPOINT?.trim() || "";
 
+    // Cover WITH lettered title always goes text-only Ideogram: Kontext cannot
+    // render reliable lettering, and Ideogram's is the whole point (audit T6).
     const useReference =
       Boolean(refEndpoint) &&
       Boolean(input.referenceImageUrl) &&
-      !input.isCharacterSheet;
+      !input.isCharacterSheet &&
+      !(input.isCover && input.coverTitle);
 
     const prompt = buildPrompt(input, useReference);
     const endpoint = useReference ? refEndpoint : textEndpoint;
@@ -101,6 +119,7 @@ export class FalImageProvider implements ImageAIProvider {
       endpoint,
       isCharacterSheet: Boolean(input.isCharacterSheet),
       negativePrompt: input.negativePrompt,
+      worldNegative: input.worldNegative,
       referenceImageUrl: useReference ? input.referenceImageUrl : undefined,
     });
 
@@ -116,6 +135,7 @@ export class FalImageProvider implements ImageAIProvider {
         requireColored,
         recoveryPrompt,
         label: useReference ? "fal-ref" : "fal",
+        input,
       });
 
       // Reference-guided Kontext sometimes keeps the hero's colors despite the B&W prompt.
@@ -142,6 +162,7 @@ export class FalImageProvider implements ImageAIProvider {
           endpoint: textEndpoint,
           isCharacterSheet: Boolean(input.isCharacterSheet),
           negativePrompt: input.negativePrompt,
+          worldNegative: input.worldNegative,
         });
         return await this.generateWithEnvRetry({
           endpoint: textEndpoint,
@@ -154,6 +175,7 @@ export class FalImageProvider implements ImageAIProvider {
           requireColored,
           recoveryPrompt,
           label: "fal-fallback",
+          input,
         });
       }
       throw err;
@@ -181,6 +203,8 @@ export class FalImageProvider implements ImageAIProvider {
     /** Short, high-adherence prompt used only to rescue a persistently blank page. */
     recoveryPrompt?: string;
     label: string;
+    /** Original input — drives the vision QC (action / expected cast / cover title). */
+    input?: ImageGenerationInput;
   }): Promise<{ url: string; provider: string }> {
     const {
       endpoint,
@@ -193,11 +217,19 @@ export class FalImageProvider implements ImageAIProvider {
       requireColored,
       recoveryPrompt,
       label,
+      input,
     } = params;
 
     const wantsQualityCheck =
       validateNonBlank || validateEnvironment || validateLineArt || Boolean(requireColored);
-    const maxRerolls = wantsQualityCheck ? FAL_QUALITY_REROLLS : 0;
+    // Vision re-rolls extend the loop but keep their own (smaller) cap.
+    const maxRerolls = wantsQualityCheck
+      ? FAL_QUALITY_REROLLS + VISION_QC_REROLLS
+      : 0;
+    let visionRerollsUsed = 0;
+    let pixelRerollsUsed = 0;
+    const qcStats: ImageQcStats = input?.qcStats ?? {};
+    if (input) input.qcStats = qcStats;
 
     // Lower score = better (0 = clean). Keep the best attempt so we never fail the page.
     let best:
@@ -215,14 +247,19 @@ export class FalImageProvider implements ImageAIProvider {
     let prevBlankOrEnv = false;
     let prevColored = false;
     let prevNotColored = false;
+    let prevVisionNudges: string[] = [];
 
     for (let attempt = 0; attempt <= maxRerolls; attempt++) {
       if (attempt > 0) {
         // Fresh seed (fal randomizes when unset) + a nudge targeting the last defect.
-        const nudges: string[] = [];
+        const nudges: string[] = [...prevVisionNudges];
         if (prevColored) nudges.push(LINEART_BOOST);
         if (prevNotColored) nudges.push(COLOR_SHEET_BOOST);
-        if (prevBlankOrEnv || (!prevColored && !requireColored)) nudges.push(ENV_BOOST);
+        if (
+          prevBlankOrEnv ||
+          (!prevColored && !requireColored && !prevVisionNudges.length)
+        )
+          nudges.push(ENV_BOOST);
         body.prompt = `${basePrompt} ${nudges.join(" ")}`;
       }
 
@@ -264,21 +301,91 @@ export class FalImageProvider implements ImageAIProvider {
       prevColored = colored;
       prevNotColored = notColored;
 
-      if (!best || score < best.score) {
+      // VISION QC (audit T4/T5/T6): only on pixel-clean images (score 0), with its
+      // own re-roll cap. Fail-open: null verdict = cannot judge = accept.
+      let visionScore = 0;
+      prevVisionNudges = [];
+      if (score === 0 && input && visionRerollsUsed < VISION_QC_REROLLS + 1) {
+        const verdicts: string[] = [];
+        if (input.isCharacterSheet && input.expectedCast?.length) {
+          const cast = await checkCast(current.url, input.expectedCast);
+          if (cast && !cast.matches) {
+            visionScore += 3;
+            prevVisionNudges.push(CAST_FIX_BOOST);
+            verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
+          }
+        } else if (input.isCover) {
+          if (input.coverTitle) {
+            const title = await checkCoverTitle(current.url, input.coverTitle);
+            if (title && !title.titleLegible) {
+              visionScore += 2;
+              prevVisionNudges.push(TITLE_FIX_BOOST);
+              verdicts.push(`title:${title.issue || "illegible"}`);
+            }
+          }
+          if (input.expectedCast?.length) {
+            const cast = await checkCast(current.url, input.expectedCast);
+            if (cast && !cast.matches) {
+              visionScore += 3;
+              prevVisionNudges.push(CAST_FIX_BOOST);
+              verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
+            }
+          }
+          // A cover is a POSTER: a static lineup on an empty background is the
+          // audit's #1 sin there too (verified: Kontext covers regress to the
+          // reference lineup when this check is missing).
+          if (input.action) {
+            const poster = await checkPageAction(current.url, input.action);
+            if (poster && (poster.lineup || !poster.actionVisible)) {
+              visionScore += poster.lineup ? 2 : 1;
+              prevVisionNudges.push(ANTI_LINEUP_BOOST);
+              verdicts.push(
+                `cover-${poster.lineup ? "lineup" : "action-missing"}:${poster.issue || ""}`
+              );
+            }
+          }
+        } else if (input.isColoringPage && input.action) {
+          const page = await checkPageAction(current.url, input.action);
+          if (page && (page.lineup || !page.actionVisible)) {
+            visionScore += page.lineup ? 2 : 1;
+            prevVisionNudges.push(ANTI_LINEUP_BOOST);
+            verdicts.push(
+              `${page.lineup ? "lineup" : "action-missing"}:${page.issue || input.action.slice(0, 60)}`
+            );
+          }
+        }
+        if (verdicts.length) {
+          qcStats.visionVerdicts = [...(qcStats.visionVerdicts || []), ...verdicts];
+        }
+      }
+
+      const totalScore = score + visionScore;
+      if (!best || totalScore < best.score) {
         best = {
           url: current.url,
           provider: current.provider,
-          score,
+          score: totalScore,
           blank,
           needsUpload: Boolean(current.needsUpload),
           pngBuffer: current.pngBuffer,
         };
       }
 
-      if (score === 0) break; // clean page → accept immediately
+      if (totalScore === 0) break; // clean page → accept immediately
+
+      // Budget the next re-roll against the right cap.
+      if (score > 0) {
+        if (pixelRerollsUsed >= FAL_QUALITY_REROLLS) break;
+        pixelRerollsUsed++;
+        qcStats.pixelRerolls = pixelRerollsUsed;
+      } else {
+        if (visionRerollsUsed >= VISION_QC_REROLLS) break;
+        visionRerollsUsed++;
+        qcStats.visionRerolls = visionRerollsUsed;
+      }
       if (attempt < maxRerolls) {
         console.warn(
-          `[${label}] quality re-roll (blank=${blank}, colored=${colored}, notColored=${notColored}, poorEnv=${poorEnv}); attempt ${attempt + 1}/${maxRerolls}`
+          `[${label}] quality re-roll (blank=${blank}, colored=${colored}, notColored=${notColored}, poorEnv=${poorEnv}, vision=${prevVisionNudges.length > 0}); pixel ${pixelRerollsUsed}/${FAL_QUALITY_REROLLS}, vision ${visionRerollsUsed}/${VISION_QC_REROLLS}`
         );
       }
     }
@@ -362,9 +469,11 @@ function buildFalBody(params: {
   endpoint: string;
   isCharacterSheet: boolean;
   negativePrompt?: string;
+  worldNegative?: string;
   referenceImageUrl?: string;
 }): Record<string, unknown> {
-  const { prompt, endpoint, isCharacterSheet, negativePrompt, referenceImageUrl } = params;
+  const { prompt, endpoint, isCharacterSheet, negativePrompt, worldNegative, referenceImageUrl } =
+    params;
   const isKontext = /kontext/i.test(endpoint);
   const isIdeogram = /ideogram/i.test(endpoint);
   const useReference = Boolean(referenceImageUrl);
@@ -384,7 +493,7 @@ function buildFalBody(params: {
     // degeneration); pages/cover get the standard coloring negative.
     ideoBody.negative_prompt = isCharacterSheet
       ? CHARACTER_SHEET_NEGATIVE_PROMPT
-      : buildNegativePrompt(negativePrompt);
+      : buildNegativePrompt(negativePrompt, worldNegative);
     return ideoBody;
   }
 
@@ -410,7 +519,7 @@ function buildFalBody(params: {
   if (endpointSupportsNegative(endpoint)) {
     body.negative_prompt = isCharacterSheet
       ? CHARACTER_SHEET_NEGATIVE_PROMPT
-      : buildNegativePrompt(negativePrompt);
+      : buildNegativePrompt(negativePrompt, worldNegative);
   }
 
   // flux/dev benefits from more steps; schnell ignores or caps low
@@ -450,30 +559,40 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
     return buildCharacterSheetPrompt({
       characters: input.characterBible || "",
       style: input.style,
+      castCount: input.expectedCast?.length,
     });
   }
   if (input.isCover) {
     if (useReference) {
       return buildReferenceGuidedScenePrompt({
-        scene: `Coloring book COVER: inviting centered hero composition of the main cast IN a warm colorable environment matching the story. ${input.prompt}. Keep the exact character designs from the reference sheet. ABSOLUTELY NO TEXT: no letters, no words, no title, no numbers anywhere in the image.`,
+        scene: `Coloring book COVER poster: ${input.refScene || input.action || input.prompt}. Keep the top third visually calm (simple sky) as a title band. ABSOLUTELY NO TEXT anywhere in the image.`,
         characters: input.characterBible || "",
         style: input.style,
         world: input.worldSetting || "",
+        action: input.action,
+        settingElements: input.settingElements,
       });
     }
     return buildCoverPrompt({
-      title: input.prompt,
+      title: input.coverTitle || input.prompt,
       characters: input.characterBible || "",
       style: input.style,
       summary: input.prompt,
+      action: input.action,
+      settingElements: input.settingElements,
+      renderTitle: Boolean(input.coverTitle),
     });
   }
   if (useReference) {
     return buildReferenceGuidedScenePrompt({
-      scene: input.prompt,
+      // Compact scene for Kontext — the full assembled prompt makes it copy the
+      // reference lineup (see ImageGenerationInput.refScene).
+      scene: input.refScene || input.prompt,
       characters: input.characterBible || "",
       style: input.style,
       world: input.worldSetting || "",
+      action: input.action,
+      settingElements: input.settingElements,
     });
   }
   return buildColoringPagePrompt({
@@ -484,6 +603,7 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
     shotType: input.shotType,
     comicBeat: input.comicBeat,
     negativePrompt: input.negativePrompt,
+    settingElements: input.settingElements,
   });
 }
 

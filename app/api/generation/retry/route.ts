@@ -1,8 +1,12 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { getImageProvider } from "@/services/ai";
+import { buildWorldNegative } from "@/services/ai/prompts";
+import { settingElementsForScene } from "@/services/ai/character-bible";
+import type { SettingBible } from "@/services/ai/types";
 import { LicenseService } from "@/services/license-service";
 import { CreditService } from "@/services/credit-service";
+import { StorageService } from "@/services/storage-service";
 import { CREDIT_COSTS } from "@/config/credits";
 import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { randomUUID } from "crypto";
@@ -71,6 +75,20 @@ export async function POST(request: Request) {
             .join(" — ")
         : undefined;
 
+    // Setting bible + world negative (audit T3) — stored on the universe.
+    const universeSnap = await db
+      .collection("universes")
+      .doc(book.universe_id as string)
+      .get();
+    const settingBible = universeSnap.data()?.setting_bible as SettingBible | undefined;
+    const worldNegative = buildWorldNegative(settingBible?.forbiddenElements);
+    // Solo pages use the character's own sheet crop (anti cast-leak, benchmark winner).
+    const sheetCrops = (universeSnap.data()?.model_sheet_crops || {}) as Record<
+      string,
+      { url?: string }
+    >;
+    const storage = new StorageService();
+
     // Charge per page up-front (atomic reservation). Pages that still fail are
     // refunded below, so the customer only pays for pages actually recovered.
     const perPage = CREDIT_COSTS.regenerate_page;
@@ -102,12 +120,11 @@ export async function POST(request: Request) {
           const pageLock =
             (typeof page.character_lock === "string" && page.character_lock) ||
             characterBible;
+          const scene =
+            page.illustration_prompt || page.story_text || book.idea || book.title;
           const image = await imageProvider.generateImage({
             prompt: [
-              page.illustration_prompt ||
-                page.story_text ||
-                book.idea ||
-                book.title,
+              scene,
               page.shot_type ? `Shot: ${page.shot_type}.` : "",
               "Mandatory rich colorable environment matching the caption. No empty white void. Simplified mitten hands. Max 2 characters. Full figures inside frame with margins.",
             ]
@@ -120,13 +137,31 @@ export async function POST(request: Request) {
               undefined,
             worldSetting,
             isColoringPage: true,
-            referenceImageUrl: characterSheetUrl,
+            referenceImageUrl:
+              (Array.isArray(page.character_ids) &&
+                page.character_ids.length === 1 &&
+                sheetCrops[page.character_ids[0]]?.url) ||
+              characterSheetUrl,
             shotType: page.shot_type,
             comicBeat: page.comic_beat,
+            action: (typeof page.action === "string" && page.action) || undefined,
+            refScene:
+              (typeof page.ref_scene === "string" && page.ref_scene) || undefined,
+            settingElements: settingElementsForScene(
+              settingBible?.elements,
+              `${scene} ${page.story_text || ""}`
+            ),
+            worldNegative,
           });
           if (!image?.url) throw new Error("Empty image URL");
+          // Persist to Storage (audit T7) — never keep an ephemeral fal URL.
+          const persisted = await storage.persistImageFromUrl(
+            image.url,
+            `books/${body.book_id}/pages/${page.page_number}.png`
+          );
           await pageDoc.ref.update({
-            illustration_url: image.url,
+            illustration_url: persisted.url,
+            illustration_path: persisted.path,
             generation_status: "completed",
             updated_at: new Date().toISOString(),
           });

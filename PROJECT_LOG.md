@@ -4,6 +4,46 @@ Journal chronologique du projet. Entrée la plus récente en haut.
 
 ---
 
+## 2026-07-22 — SPRINT QUALITÉ IMAGES (P0) : anti-lineup, setting bible, QC vision, persistance
+
+### Corrections livrées (audit produit 5×P0)
+1. **Storyboard structuré** (`action`/`characterPoses`/`camera`/`pageSetting`/`focalPoint`
+   + `introducedOnPage`) ; actions PHYSIQUES obligatoires (verbes imposés, actions
+   "regard/immobile" interdites) ; un personnage n'apparaît jamais avant sa page
+   d'introduction ni sur la cover (spoiler). Prompt de page assemblé côté serveur.
+2. **Kontext découplé** identité/composition + **benchmark** (13 images, 3 variantes) :
+   → duo = référence complète + prompt COMPACT (`ref_scene` — un long prompt fait
+   copier le lineup de la référence) ; solo = **crop par personnage** du model sheet
+   (sinon le personnage absent fuit dans l'image) ; kontext/multi disqualifié (images noires).
+3. **Setting bible par univers** (lazy, stockée sur l'univers) : 8-12 éléments dessinables
+   + `forbiddenElements` → negative dérivé. Le décor générique en dur ne s'applique
+   plus quand le storyboard fournit un `pageSetting` (fix « cuisine européenne »).
+4. **QC vision Groq** (`lib/vision-qc.ts`, modèle `qwen/qwen3.6-27b`, `reasoning_effort:none`,
+   images réduites 512px + retry 429 — sinon le TPM 8000 fait tout échouer) : cast
+   exact + espèces + posture quadrupède (sheet/cover/pages), anti-lineup + action
+   visible (pages ET covers), titre lisible. Fail-open, cap 2 re-rolls vision/image,
+   `qc_stats` loggé sur `generations`. Model sheet : animaux en PROFIL sur 4 pattes.
+5. **Cover affiche** : Kontext (identité fiable) + **titre composité serveur**
+   (`lib/cover-title.ts`, sharp/SVG, wrap 2 lignes) ; fallback Ideogram lettré sans
+   référence. Cast cover sans spoiler.
+6. **Persistance Storage (P0-5)** : `persistImageFromUrl` → `books/<id>/pages/<n>.png`,
+   `books/<id>/cover.png`, `universes/<id>/model_sheet(.png|_char.png)` ; Firestore
+   stocke URL signée + path. **Migration exécutée : 138/138 URLs fal migrées, 0 perdue**
+   (`scripts/migrate-fal-urls.mjs`). Zéro `fal.media` restant.
+
+### Vérification (4 livres réels générés en local, vraies clés)
+- ✅ Cast exact (2/2), espèces correctes, éléphant quadrupède, décors riches sur
+  toutes les pages, baobab/savane présents, plus de fond blanc/beige vide sur cover,
+  titre lisible, 100 % des URLs sur Storage, crédits/licences intacts (aucune
+  modification de CreditService).
+- ⚠️ Résiduel connu : poses duo encore parfois statiques (Kontext colle à la
+  référence malgré re-rolls) et texte parasite occasionnel (noms) — pistes :
+  endpoint kontext max, seconde passe LLM sur les actions, OCR-guard.
+- Comptes/données de test purgés. Coût QC observé via `qc_stats` (ex. 8 images,
+  7 re-rolls vision).
+
+---
+
 ## 2026-07-21 (suite 2) — 🚀 MISE EN PRODUCTION sur meeradraw.digiafrik.shop
 
 ### Réalisé

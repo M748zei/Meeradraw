@@ -50,3 +50,4 @@ next-env.d.ts
 # Full-resolution generation test dump (~8MB). The landing uses optimized copies.
 /public/_gentest7/*.png
 /public/_gentest7/_plan.json
+bench-out/
