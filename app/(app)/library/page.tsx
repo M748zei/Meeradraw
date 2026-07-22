@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -41,8 +42,13 @@ export default async function LibraryPage() {
               <Card className="h-full transition hover:-translate-y-1 hover:shadow-lift">
                 <div className="mb-4 aspect-[3/4] overflow-hidden rounded-2xl bg-gradient-to-br from-mint-100 to-yellow-100">
                   {book.cover_image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={book.cover_image} alt="" className="h-full w-full object-cover" />
+                    <Image
+                      src={book.cover_image}
+                      alt=""
+                      width={360}
+                      height={480}
+                      className="h-full w-full object-cover"
+                    />
                   ) : null}
                 </div>
                 <h3 className="font-display text-lg">{book.title}</h3>

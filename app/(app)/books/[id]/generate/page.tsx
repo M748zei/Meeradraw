@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
@@ -156,10 +157,11 @@ function GenerateInner() {
                   <Card className="flex gap-4 p-3">
                     <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-cream-100">
                       {page.illustration_url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
+                        <Image
                           src={page.illustration_url}
                           alt=""
+                          width={160}
+                          height={160}
                           className="h-full w-full object-cover"
                         />
                       ) : (

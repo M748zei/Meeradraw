@@ -15,7 +15,7 @@ const STORE_URL = process.env.NEXT_PUBLIC_CHARIOW_STORE_URL;
 export default async function DashboardPage() {
   let universes: Array<{ id: string; title: string; description: string | null; cover_image: string | null }> = [];
   let books: Array<{ id: string; title: string; status: string; cover_image: string | null; page_count: number }> = [];
-  let credits = 30;
+  let credits = 0;
   let name = "Créateur";
   let needsLicense = false;
 
@@ -79,7 +79,7 @@ export default async function DashboardPage() {
             Bonjour {name}
             <Sparkles className="h-6 w-6 text-yellow-300" />
           </h1>
-          <p className="mt-2 text-ink-muted">Que souhaitez-vous créer aujourd&apos;hui ?</p>
+          <p className="mt-2 text-ink-muted">Qu&apos;est-ce qu&apos;on crée aujourd&apos;hui ?</p>
         </div>
         <Link href="/universes/new"><Button size="lg">Créer un nouvel univers</Button></Link>
       </div>
@@ -157,8 +157,13 @@ export default async function DashboardPage() {
                 <Card className="flex items-center gap-4 transition hover:-translate-y-0.5 hover:shadow-lift">
                   <div className="h-16 w-12 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-mint-100 to-sky-100">
                     {b.cover_image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={b.cover_image} alt="" className="h-full w-full object-cover" />
+                      <Image
+                        src={b.cover_image}
+                        alt=""
+                        width={96}
+                        height={128}
+                        className="h-full w-full object-cover"
+                      />
                     ) : null}
                   </div>
                   <div className="flex-1">
