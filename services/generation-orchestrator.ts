@@ -68,8 +68,15 @@ export class GenerationOrchestrator {
     this.storage = new StorageService();
   }
 
-  async run(userId: string, bookId: string, generationId: string, cost: number) {
+  async run(
+    userId: string,
+    bookId: string,
+    generationId: string,
+    cost: number,
+    opts?: { isTrial?: boolean }
+  ) {
     const started = Date.now();
+    const isTrial = Boolean(opts?.isTrial);
     try {
       await this.updateGeneration(generationId, {
         status: "running",
@@ -547,10 +554,11 @@ export class GenerationOrchestrator {
       // only for delivered pages (+ cover + PDF). Idempotent per generation.
       const plannedPages = (book.page_count as number) || insertedPages.length;
       const notDelivered = Math.max(0, plannedPages - completedCount);
-      const refund = refundForFailedPages(
-        plannedPages,
-        completedCount,
-        book.type as string
+      // Clamped to the reservation: a refund can never exceed what was actually
+      // reserved (trials reserve 0 → refund 0 → no way to mint free credits).
+      const refund = Math.min(
+        refundForFailedPages(plannedPages, completedCount, book.type as string),
+        cost
       );
       if (refund > 0) {
         await this.credits.refund(
@@ -587,6 +595,13 @@ export class GenerationOrchestrator {
             ? `${failedCount} page(s) sans illustration — utilisez « Régénérer cette page ».`
             : null,
       });
+
+      // A delivered trial book consumes one free trial. Idempotent: the
+      // `trial_counted` flag on the generation doc guards the increment even if
+      // this path re-runs (retry after crash, replayed job).
+      if (isTrial && completedCount > 0) {
+        await this.consumeFreeTrial(userId, generationId);
+      }
     } catch (err) {
       console.error("generation failed", err);
       await this.books.update(userId, bookId, { status: "failed" });
@@ -608,6 +623,31 @@ export class GenerationOrchestrator {
         error_message: err instanceof Error ? err.message : "Erreur inconnue",
         duration_ms: Date.now() - started,
       });
+    }
+  }
+
+  /**
+   * Marks one free trial as consumed for a delivered trial book. Runs in a
+   * transaction keyed on the generation's `trial_counted` flag so the same
+   * generation can never consume more than one trial.
+   */
+  private async consumeFreeTrial(userId: string, generationId: string) {
+    const genRef = this.db.collection("generations").doc(generationId);
+    const userRef = this.db.collection("users").doc(userId);
+    try {
+      await this.db.runTransaction(async (tx) => {
+        const gen = await tx.get(genRef);
+        if (!gen.exists || gen.data()?.trial_counted === true) return;
+        const user = await tx.get(userRef);
+        const used = (user.data()?.free_trials_used as number) ?? 0;
+        tx.update(genRef, { trial_counted: true });
+        tx.update(userRef, {
+          free_trials_used: used + 1,
+          updated_at: new Date().toISOString(),
+        });
+      });
+    } catch (err) {
+      console.error("consumeFreeTrial failed", err);
     }
   }
 
