@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -126,7 +127,15 @@ export default async function DashboardPage() {
               <Link key={u.id} href={`/universes/${u.id}`}>
                 <Card className="h-full transition hover:-translate-y-1 hover:shadow-lift">
                   <div className="mb-4 aspect-[4/3] overflow-hidden rounded-2xl bg-gradient-to-br from-sky-100 to-lavender-100">
-                    {u.cover_image ? <img src={u.cover_image} alt="" className="h-full w-full object-cover" /> : null}
+                    {u.cover_image ? (
+                      <Image
+                        src={u.cover_image}
+                        alt=""
+                        width={400}
+                        height={300}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : null}
                   </div>
                   <h3 className="font-display text-lg">{u.title}</h3>
                   <p className="mt-1 line-clamp-2 text-sm text-ink-muted">{u.description || "Univers créatif"}</p>

@@ -203,10 +203,12 @@ function NewBookForm() {
   }
 
   useEffect(() => {
-    if (prefillIdea.length >= 3) {
-      void runEnrich(prefillIdea);
-    }
-    // Only on mount / idea query change
+    if (prefillIdea.length < 3) return;
+    // Deferred so the effect body itself never sets state synchronously
+    // (runEnrich flips enrichStatus to "loading" on entry).
+    const t = setTimeout(() => void runEnrich(prefillIdea), 0);
+    return () => clearTimeout(t);
+     
   }, [prefillIdea]);
 
   function applyManualIdea(value: string) {
