@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/api/cron/reap-generations", "schedule": "0 3 * * *" }
+  ]
+}
