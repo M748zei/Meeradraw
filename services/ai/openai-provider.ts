@@ -3,10 +3,12 @@ import { normalizeStoryPlan } from "@/services/ai/character-bible";
 import {
   buildEnrichIdeaSystemPrompt,
   buildEnrichIdeaUserPrompt,
+  buildExpandPagesSystemPrompt,
   buildResearchSystemPrompt,
   buildResearchUserPrompt,
   buildSettingBibleSystemPrompt,
   buildSettingBibleUserPrompt,
+  buildStoryOutlineSystemPrompt,
   buildStorySystemPrompt,
   buildStoryUserPrompt,
 } from "@/services/ai/prompts";
@@ -213,9 +215,21 @@ export class OpenAITextProvider implements TextAIProvider {
   ): Promise<StoryPlan> {
     const brief = research ?? (await this.buildResearchBrief(idea));
 
+    // Long books: the Groq free tier cuts completions around ~3k tokens
+    // (finish_reason=length), so a full structured storyboard beyond ~8 pages
+    // truncates into invalid JSON. Two-phase generation keeps every call small:
+    // master outline first, then page expansion in batches.
+    if (pageCount > 8) {
+      return this.generateLongStoryPlan(idea, pageCount, style, brief, audience);
+    }
+
     const response = await this.client.chat.completions.create({
       model: resolveTextModel(),
       temperature: 0.75,
+      // NOTE: do NOT set max_completion_tokens here — Groq's free-tier TPM
+      // pre-check counts it against the 8000-token/min budget and rejects the
+      // whole request ("Request too large"). Left unset, only prompt tokens
+      // are pre-checked and long storyboards (24 pages) stream fine.
       response_format: { type: "json_object" },
       messages: [
         {
@@ -245,6 +259,128 @@ export class OpenAITextProvider implements TextAIProvider {
       throw new Error("Story plan missing pages");
     }
     return normalizeStoryPlan(plan, pageCount);
+  }
+
+  /** Two-phase plan for long books (couvre les livres jusqu'à 24-40 pages). */
+  private async generateLongStoryPlan(
+    idea: string,
+    pageCount: number,
+    style: string,
+    brief: ResearchBrief,
+    audience?: string
+  ): Promise<StoryPlan> {
+    // Phase 1 — master outline. The free-tier output cut (~3k tokens) also
+    // limits the OUTLINE, so pages are outlined in slices of 12: first call
+    // returns the frame + pages 1..12, follow-up calls continue the arc.
+    const OUTLINE_SLICE = 12;
+    const firstEnd = Math.min(OUTLINE_SLICE, pageCount);
+    const outlineRes = await this.client.chat.completions.create({
+      model: resolveTextModel(),
+      temperature: 0.75,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: buildStoryOutlineSystemPrompt(pageCount, style, audience) },
+        {
+          role: "user",
+          content: `${buildStoryUserPrompt({
+            idea,
+            pageCount,
+            style,
+            researchJson: JSON.stringify(brief, null, 2),
+            audience,
+          })}\n\nTRANCHE DEMANDÉE : cadre complet (title/concept/characters/world) + pages ${1} à ${firstEnd} UNIQUEMENT (le livre continuera jusqu'à la page ${pageCount} ensuite${pageCount > firstEnd ? " — ne conclus PAS l'histoire dans cette tranche" : ""}).`,
+        },
+      ],
+    });
+    const outlineContent = outlineRes.choices[0]?.message?.content;
+    if (!outlineContent) throw new Error("Empty outline response");
+    const outline = parseJson<StoryPlan>(outlineContent, "story outline");
+    if (!Array.isArray(outline.pages) || outline.pages.length === 0) {
+      throw new Error("Story outline missing pages");
+    }
+    outline.pages = outline.pages.slice(0, firstEnd);
+
+    // Continue the outline in slices until every page has a synopsis.
+    while (outline.pages.length < pageCount) {
+      const from = outline.pages.length + 1;
+      const to = Math.min(from + OUTLINE_SLICE - 1, pageCount);
+      const tail = outline.pages.slice(-3).map((p) => ({
+        pageNumber: p.pageNumber,
+        title: p.title,
+        storyText: p.storyText,
+        action: p.action,
+      }));
+      const contRes = await this.client.chat.completions.create({
+        model: resolveTextModel(),
+        temperature: 0.75,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: buildStoryOutlineSystemPrompt(pageCount, style, audience) },
+          {
+            role: "user",
+            content: `SUITE DU PLAN DIRECTEUR — cadre déjà fixé (NE le répète pas, produis UNIQUEMENT {"pages":[...]}) :\nCADRE : ${JSON.stringify({ title: outline.title, summary: outline.summary, characters: (outline.characters || []).map((c) => ({ id: c.id, name: c.name, introducedOnPage: c.introducedOnPage })), world: outline.world }, null, 1)}\nDERNIÈRES PAGES ÉCRITES : ${JSON.stringify(tail, null, 1)}\n\nTRANCHE DEMANDÉE : pages ${from} à ${to} en continuité directe${to >= pageCount ? " — l'histoire DOIT se conclure (resolution) à la page " + pageCount : " — ne conclus pas encore"}.`,
+          },
+        ],
+      });
+      const contContent = contRes.choices[0]?.message?.content;
+      if (!contContent) throw new Error("Empty outline continuation");
+      const cont = parseJson<{ pages?: StoryPlan["pages"] }>(contContent, "outline continuation");
+      const contPages = (Array.isArray(cont.pages) ? cont.pages : []).slice(0, to - from + 1);
+      if (!contPages.length) throw new Error("Outline continuation missing pages");
+      contPages.forEach((p, j) => (p.pageNumber = from + j));
+      outline.pages.push(...contPages);
+    }
+
+    // Phase 2 — expand pages in small batches (each fits under the output cut).
+    const BATCH = 6;
+    const frame = {
+      title: outline.title,
+      summary: outline.summary,
+      characters: (outline.characters || []).map((c) => ({
+        id: c.id,
+        name: c.name,
+        visualLock: c.visualLock,
+        introducedOnPage: c.introducedOnPage,
+      })),
+      world: outline.world,
+    };
+    const expandedPages: StoryPlan["pages"] = [];
+    for (let i = 0; i < outline.pages.length; i += BATCH) {
+      const batch = outline.pages.slice(i, i + BATCH);
+      try {
+        const res = await this.client.chat.completions.create({
+          model: resolveTextModel(),
+          temperature: 0.7,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: buildExpandPagesSystemPrompt(style) },
+            {
+              role: "user",
+              content: `CADRE DU LIVRE :\n${JSON.stringify(frame, null, 1)}\n\nLOT DE PAGES À DÉVELOPPER (recopie pageNumber/title/storyText/action/characterIds/comicBeat/shotType à l'identique) :\n${JSON.stringify(batch, null, 1)}`,
+            },
+          ],
+        });
+        const content = res.choices[0]?.message?.content;
+        const parsed = content
+          ? parseJson<{ pages?: StoryPlan["pages"] }>(content, "page expansion")
+          : null;
+        const got = Array.isArray(parsed?.pages) ? parsed!.pages! : [];
+        // Match by pageNumber; any page the expansion lost falls back to its outline
+        // (normalizeStoryPlan still produces a usable prompt from action/storyText).
+        for (const o of batch) {
+          const hit = got.find((p) => p.pageNumber === o.pageNumber);
+          expandedPages.push(hit ? { ...o, ...hit } : o);
+        }
+      } catch (err) {
+        console.warn(
+          `page expansion batch ${i / BATCH + 1} failed; using outline pages`,
+          err
+        );
+        expandedPages.push(...batch);
+      }
+    }
+
+    return normalizeStoryPlan({ ...outline, pages: expandedPages }, pageCount);
   }
 
   async generateSettingBible(params: {

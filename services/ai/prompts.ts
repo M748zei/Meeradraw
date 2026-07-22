@@ -225,6 +225,63 @@ Structure JSON :
 }`;
 }
 
+/**
+ * Long books (> 8 pages) — phase 1/2 : PLAN DIRECTEUR seul (cadre + cast +
+ * monde + SYNOPSIS de chaque page). Le tier gratuit Groq coupe les complétions
+ * vers ~3k tokens : un storyboard structuré complet de 24 pages ne tient jamais
+ * en un appel, le plan directeur si.
+ */
+export function buildStoryOutlineSystemPrompt(
+  pageCount: number,
+  style: string,
+  audience: string = DEFAULT_AUDIENCE
+): string {
+  const maxCast = maxCastForPageCount(pageCount);
+  return `${CREATIVE_DIRECTOR_ROLE}
+
+ÉTAPE : PLAN DIRECTEUR (phase 1/2 — livre long)
+Réponds UNIQUEMENT en JSON valide, sans markdown. Public : ${audience}. Style : ${style}.
+Crée le CADRE du livre + un SYNOPSIS COURT de chacune des pages demandées (le livre complet fait ${pageCount} pages ; on peut te demander seulement une TRANCHE de pages — respecte exactement la tranche demandée).
+SOIS BREF : titres de page ≤ 5 mots, storyText ≤ 2 phrases courtes, action ≤ 18 mots. Les détails visuels par page (poses, caméra, décor précis) viendront en phase 2 — NE les écris PAS ici.
+
+Règles cast (STRICTES) : fidélité ABSOLUE au brief (nombre exact, espèces exactes — une tortue est une TORTUE), max ${maxCast} personnages nommés, visualLock ANGLAIS verrouillé identique partout, animaux = vrais quadrupèdes non anthropomorphes, introducedOnPage renseigné.
+Règles pages : arc BD complet (establishing → action → obstacle → help → emotion → resolution), variété de scènes et de lieux, au moins 2 pages solo/duo, un personnage n'apparaît JAMAIS avant son introducedOnPage.
+action : PHYSIQUE et dessinable, corps entier + interaction objet/décor (verbes type climb, jump, push, carry, splash, wade, balance, dig, lift, row) — JAMAIS "looking/watching/smiling/standing".
+
+Structure JSON :
+{
+  "title": string, "subtitle": string, "concept": string, "summary": string,
+  "moral": string, "audienceAge": string,
+  "characters": [{"id":"char_1","name":"","description":"","appearance":"","visualLock":"","personality":"","introducedOnPage":1}],
+  "world": {"setting":"","palette":"","mood":""},
+  "pages": [{"pageNumber":1,"title":"","storyText":"1-2 phrases FR","action":"action physique EN ~20 mots","characterIds":["char_1"],"comicBeat":"establishing","shotType":"wide"}]
+}`;
+}
+
+/**
+ * Long books — phase 2/2 : EXPANSION d'un lot de pages du plan directeur en
+ * champs structurés complets. Sortie ≈ 2-3k tokens par lot → passe sous la
+ * coupe du tier gratuit.
+ */
+export function buildExpandPagesSystemPrompt(style: string): string {
+  return `${CREATIVE_DIRECTOR_ROLE}
+
+ÉTAPE : EXPANSION DES PAGES (phase 2/2 — livre long)
+Réponds UNIQUEMENT en JSON valide, sans markdown. Style : ${style}.
+On te donne le cadre du livre (cast verrouillé, monde) et un LOT de pages avec leur synopsis.
+Pour CHAQUE page du lot, développe les champs visuels SANS changer pageNumber, title, storyText, action, characterIds, comicBeat, shotType (recopie-les à l'identique).
+
+À produire par page :
+- characterPoses : {id: pose PRÉCISE en anglais} pour chaque personnage présent — poses différentes entre personnages et entre pages, corps en mouvement.
+- camera : angle/plan anglais, varié d'une page à l'autre (jamais deux frontal d'affilée).
+- pageSetting : lieu PRÉCIS de la page en anglais (cohérent avec world.setting).
+- focalPoint : élément focal unique (EN).
+- illustrationDescription : paragraphe anglais AUTONOME (~45 mots) combinant action + poses + camera + pageSetting + focalPoint.
+- negativePrompt : négatif anglais standard + spécificités de la page.
+
+Structure JSON : {"pages":[{...tous les champs...}]}`;
+}
+
 export function buildStoryUserPrompt(params: {
   idea: string;
   pageCount: number;
