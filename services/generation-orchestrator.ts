@@ -137,8 +137,10 @@ export class GenerationOrchestrator {
       existing.docs.forEach((d) => batchDel.delete(d.ref));
       await batchDel.commit();
 
+      // One batched write for the whole cast (was one round-trip per character).
+      const batchChars = this.db.batch();
       for (const c of plan.characters) {
-        await charsRef.add(firestoreSafe({
+        batchChars.set(charsRef.doc(), firestoreSafe({
           id_key: c.id,
           name: c.name,
           description: c.description,
@@ -156,6 +158,7 @@ export class GenerationOrchestrator {
           created_at: new Date().toISOString(),
         }));
       }
+      await batchChars.commit();
 
       const fullCharacterBible = formatCharacterLock(plan.characters);
       const worldSetting = [plan.world?.setting, plan.world?.mood]
@@ -285,6 +288,9 @@ export class GenerationOrchestrator {
         setting_elements: string[];
       }> = [];
 
+      // All page rows land in one batched write (≤ 40 pages, far under the
+      // 500-write batch limit) instead of one round-trip per page.
+      const pageInserts = this.db.batch();
       for (const p of plan.pages) {
         const pageId = randomUUID();
         const pageLock = formatPageCharacterLock(plan, p);
@@ -314,7 +320,7 @@ export class GenerationOrchestrator {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
-        await pagesCol.doc(pageId).set(firestoreSafe(row));
+        pageInserts.set(pagesCol.doc(pageId), firestoreSafe(row));
         insertedPages.push({
           id: pageId,
           scene,
@@ -334,6 +340,7 @@ export class GenerationOrchestrator {
           ),
         });
       }
+      await pageInserts.commit();
 
       await this.updateGeneration(generationId, {
         current_step: "illustrator",
@@ -737,10 +744,17 @@ export class GenerationOrchestrator {
   }
 
   private async updateGeneration(id: string, patch: Record<string, unknown>) {
-    await this.db
-      .collection("generations")
-      .doc(id)
-      .update({ ...patch, updated_at: new Date().toISOString() });
+    // A transient Firestore error on a progress write must never kill the run
+    // (the images/PDF work would be lost for a cosmetic update). Stale docs are
+    // caught by the generation reaper.
+    try {
+      await this.db
+        .collection("generations")
+        .doc(id)
+        .update({ ...patch, updated_at: new Date().toISOString() });
+    } catch (err) {
+      console.error(`[gen ${id}] updateGeneration failed (ignored)`, err);
+    }
   }
 
   async getProgress(userId: string, generationId: string) {
