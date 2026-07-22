@@ -61,16 +61,16 @@ const features = [
 
 const accessSteps = [
   {
-    title: "Achetez sur Chariow",
-    text: "La licence se vend sur la marketplace Chariow — paiement et e-mail inclus.",
+    title: "Prenez votre accès",
+    text: "L'accès Meeradraw se prend sur la boutique DigiAfrik — paiement Mobile Money ou carte.",
   },
   {
     title: "Connectez-vous ici",
     text: "Créez votre compte Meeradraw (ou reconnectez-vous).",
   },
   {
-    title: "Activez votre clé",
-    text: "Entrez la licence reçue par e-mail sur la page Licence pour débloquer le studio.",
+    title: "Débloquez votre studio",
+    text: "Entrez le code d'accès reçu par e-mail sur la page Accès — le studio se débloque aussitôt.",
   },
 ];
 
@@ -134,10 +134,10 @@ export default function LandingPage() {
               cohérent, magnifique, prêt à imprimer. Sans prompt. Sans complexité.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <PrimaryCta label={STORE_URL ? "Acheter sur Chariow" : "Ouvrir le studio"} />
+              <PrimaryCta label={STORE_URL ? "Prendre mon accès" : "Ouvrir le studio"} />
               <Link href={STORE_URL ? "/login?next=/license" : "#how"}>
                 <Button size="lg" variant="secondary">
-                  {STORE_URL ? "J’ai déjà ma licence" : "Voir comment ça marche"}
+                  {STORE_URL ? "J’ai déjà mon accès" : "Voir comment ça marche"}
                 </Button>
               </Link>
             </div>
@@ -251,8 +251,8 @@ export default function LandingPage() {
           <div className="rounded-[2rem] border border-cream-200 bg-gradient-to-br from-sky-50 via-white to-lavender-100 p-8 md:p-12">
             <h2 className="font-display text-3xl text-ink">Comment accéder</h2>
             <p className="mt-2 max-w-2xl text-ink-muted">
-              Chariow vend la licence et gère le paiement. Meeradraw est le logiciel que vous
-              utilisez après l&apos;achat.
+              Le paiement est géré par la boutique DigiAfrik. Meeradraw est le studio que vous
+              utilisez après l&apos;achat — et vous pouvez l&apos;essayer gratuitement.
             </p>
             <div className="mt-8 grid gap-6 md:grid-cols-3">
               {accessSteps.map((step, i) => (
@@ -266,9 +266,9 @@ export default function LandingPage() {
               ))}
             </div>
             <div className="mt-8 flex flex-wrap gap-3">
-              <PrimaryCta label={STORE_URL ? "Acheter sur Chariow" : "Créer un compte"} />
+              <PrimaryCta label={STORE_URL ? "Prendre mon accès" : "Créer un compte"} />
               <Link href="/login?next=/license">
-                <Button variant="ghost">Se connecter &amp; activer</Button>
+                <Button variant="ghost">Se connecter &amp; débloquer</Button>
               </Link>
             </div>
           </div>
@@ -291,7 +291,7 @@ export default function LandingPage() {
                 {STORE_URL ? (
                   <a href={STORE_URL} target="_blank" rel="noreferrer">
                     <Button size="lg" variant="secondary">
-                      Acheter sur Chariow
+                      Prendre mon accès
                     </Button>
                   </a>
                 ) : (

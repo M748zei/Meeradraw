@@ -36,6 +36,13 @@ Dernière mise à jour : 2026-07-21
   cover affiche avec titre composité serveur, **persistance Storage de toutes
   les images + migration 138/138 URLs fal (0 perte)**.
 
+- **[2026-07-22] 💳 ÉTAPE 2 — Monétisation Chariow complète** : 3 essais
+  gratuits (6 p) par compte + anti email jetable ; packs de crédits FCFA
+  (120/150/400/900/2000 cr) mappés aux produits Chariow ; créditation
+  idempotente sur `successful.sale` + réconciliation email inconnu ;
+  `/api/checkout` (Checkout API, téléphone mémorisé) + `/merci` ; vocabulaire
+  client « accès / code d'accès » ; Stripe retiré. 31 tests verts.
+
 ## 🔄 En cours
 
 - Finalisation post-mise en ligne (voir ci-dessous).

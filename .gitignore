@@ -51,3 +51,7 @@ next-env.d.ts
 /public/_gentest7/*.png
 /public/_gentest7/_plan.json
 bench-out/
+
+# local agent/product workspaces
+/.claude/
+/_chariow_product/

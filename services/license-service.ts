@@ -82,7 +82,7 @@ export class LicenseService {
       required: false,
       valid: true,
       license: null,
-      message: "Accès administrateur — licence Chariow non requise.",
+      message: "Accès administrateur — aucun code d'accès requis.",
     };
   }
 
@@ -113,7 +113,7 @@ export class LicenseService {
               is_active: linked.is_active,
             }
           : null,
-        message: "Chariow non configuré — mode développement.",
+        message: "Vérification d'accès non configurée — mode développement.",
       };
     }
 
@@ -123,7 +123,7 @@ export class LicenseService {
         required: true,
         valid: false,
         license: null,
-        message: "Activez votre licence Chariow pour débloquer le studio.",
+        message: "Débloque ton accès Meeradraw pour ouvrir le studio.",
       };
     }
 
@@ -175,8 +175,21 @@ export class LicenseService {
               is_active: refreshed.is_active,
             }
           : null,
-        message: "Licence inactive ou invalide. Réactivez une clé Chariow valide.",
+        message: "Ton accès n'est plus actif. Entre un code d'accès valide pour le réactiver.",
       };
+    }
+  }
+
+  /**
+   * Boolean view of `requireActiveLicense` for flows that have a fallback
+   * (e.g. free trials) instead of a hard 403.
+   */
+  async hasActiveAccess(userId: string, email?: string | null): Promise<boolean> {
+    try {
+      await this.requireActiveLicense(userId, email);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -195,7 +208,7 @@ export class LicenseService {
       if (process.env.NODE_ENV !== "production") return null;
       throw new AppError(
         "FORBIDDEN",
-        "Une licence Chariow est requise pour utiliser le studio.",
+        "Un accès Meeradraw est requis pour utiliser le studio.",
         403
       );
     }
@@ -204,7 +217,7 @@ export class LicenseService {
     if (!linked?.license_key) {
       throw new AppError(
         "FORBIDDEN",
-        "Activez votre licence Chariow pour continuer.",
+        "Débloque ton accès Meeradraw pour continuer.",
         403
       );
     }
@@ -214,14 +227,14 @@ export class LicenseService {
       license = await getLicenseByKey(linked.license_key);
     } catch {
       await this.markLinkedInactive(userId, "invalid");
-      throw new AppError("FORBIDDEN", "Licence Chariow introuvable ou invalide.", 403);
+      throw new AppError("FORBIDDEN", "Code d'accès introuvable ou invalide.", 403);
     }
 
     this.assertProductMatch(license);
 
     if (!isLicenseUsable(license)) {
       await this.persistLicense(userId, license);
-      throw new AppError("FORBIDDEN", "Votre licence Chariow n'est plus active.", 403);
+      throw new AppError("FORBIDDEN", "Ton accès Meeradraw n'est plus actif.", 403);
     }
 
     await this.persistLicense(userId, license);
@@ -232,14 +245,14 @@ export class LicenseService {
     if (!LicenseService.isConfigured()) {
       throw new AppError(
         "INTERNAL_ERROR",
-        "Chariow n'est pas encore configuré (CHARIOW_API_KEY).",
+        "La vérification d'accès n'est pas encore configurée (CHARIOW_API_KEY).",
         500
       );
     }
 
     const key = licenseKey.trim();
     if (!key) {
-      throw new AppError("VALIDATION_ERROR", "Clé de licence requise", 400);
+      throw new AppError("VALIDATION_ERROR", "Code d'accès requis", 400);
     }
 
     let license = await getLicenseByKey(key);
@@ -265,7 +278,7 @@ export class LicenseService {
     if (!isLicenseUsable(license)) {
       throw new AppError(
         "FORBIDDEN",
-        "Cette licence n'est pas active ou a expiré.",
+        "Ce code d'accès n'est plus actif ou a expiré.",
         403
       );
     }
@@ -303,9 +316,13 @@ export class LicenseService {
       (typeof topLicense.id === "string" && topLicense.id) ||
       (typeof nestedLicense.id === "string" && nestedLicense.id) ||
       null;
+    const sale = (payload?.sale as Record<string, unknown> | undefined) ?? {};
+    const saleId = typeof sale.id === "string" ? sale.id : null;
 
     // Deterministic id → recording the same delivered event twice is a no-op.
-    const eventDocId = `${event}:${licenseId ?? licenseKey ?? "none"}`
+    // Sale events are keyed by sale_id so two sales without a license object
+    // can never collide on the same doc.
+    const eventDocId = `${event}:${saleId ?? licenseId ?? licenseKey ?? "none"}`
       .replace(/[^a-zA-Z0-9:_-]/g, "_")
       .slice(0, 480);
     const eventRef = this.db.collection("chariow_events").doc(eventDocId);
@@ -380,7 +397,7 @@ export class LicenseService {
     if (!productId || productId !== expectedId) {
       throw new AppError(
         "FORBIDDEN",
-        "Cette licence ne correspond pas au produit Meeradraw.",
+        "Ce code d'accès ne correspond pas à Meeradraw.",
         403
       );
     }

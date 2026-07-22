@@ -1,6 +1,7 @@
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { LicenseService } from "@/services/license-service";
+import { applyChariowSale } from "@/services/chariow-sale";
 import { timingSafeEqual } from "crypto";
 
 /**
@@ -56,8 +57,19 @@ export async function POST(request: Request) {
     }
 
     const payload = (await request.json()) as Record<string, unknown>;
-    const result = await new LicenseService(getAdminDb()).handleWebhookEvent(payload);
-    return apiSuccess(result);
+    const db = getAdminDb();
+    const result = await new LicenseService(db).handleWebhookEvent(payload);
+
+    // Credit packs: a successful sale of one of our Chariow products adds the
+    // pack's credits to the buyer's account (idempotent per sale_id; parked in
+    // chariow_pending_credits when the buyer has no account yet).
+    const event = String(payload?.event || payload?.type || "").toLowerCase();
+    let sale: Awaited<ReturnType<typeof applyChariowSale>> | null = null;
+    if (event === "successful.sale") {
+      sale = await applyChariowSale(db, payload);
+    }
+
+    return apiSuccess(sale ? { ...result, sale } : result);
   } catch (e) {
     return apiError(e);
   }

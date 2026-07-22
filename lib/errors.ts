@@ -4,6 +4,7 @@ export type AppErrorCode =
   | "NOT_FOUND"
   | "VALIDATION_ERROR"
   | "INSUFFICIENT_CREDITS"
+  | "TRIALS_EXHAUSTED"
   | "IMAGE_GENERATION_FAILED"
   | "TEXT_GENERATION_FAILED"
   | "PDF_EXPORT_FAILED"
@@ -51,7 +52,12 @@ export const ERROR_MESSAGES: Record<
   INSUFFICIENT_CREDITS: {
     title: "Crédits insuffisants",
     description: "Il vous manque quelques crédits pour terminer.",
-    action: "Acheter des crédits",
+    action: "Recharger mes crédits",
+  },
+  TRIALS_EXHAUSTED: {
+    title: "Essais gratuits épuisés",
+    description: "Tu as adoré ? Débloque ton accès Meeradraw pour continuer à créer.",
+    action: "Débloquer mon accès",
   },
   IMAGE_GENERATION_FAILED: {
     title: "Illustration en pause",
