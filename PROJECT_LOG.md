@@ -4,6 +4,40 @@ Journal chronologique du projet. Entrée la plus récente en haut.
 
 ---
 
+## 2026-07-22 (suite) — Livres 24 pages + fixes prod à chaud (session interrompue)
+
+### Réalisé après le sprint
+1. **Quota Groq épuisé** (llama-3.3, TPD 100k) pendant le test utilisateur →
+   bascule prod `GROQ_MODEL=openai/gpt-oss-120b` (quota séparé) +
+   `PAGE_GEN_CONCURRENCY=4`.
+2. **Livres longs (jusqu'à 24-40 pages)** : le tier gratuit Groq coupe les
+   complétions vers ~3k tokens ET pré-compte `max_completion_tokens` dans le
+   TPM 8000 (ne JAMAIS le fixer haut). → **storyboard en 2 phases** : plan
+   directeur par tranches de 12 pages, puis expansion des champs visuels par
+   lots de 6, repli sur le synopsis si un lot échoue (commit `35b2565`).
+3. **Bug prod trouvé et corrigé** : gpt-oss a renvoyé un tableau imbriqué →
+   Firestore `INVALID_ARGUMENT: Nested arrays are not allowed` → génération
+   échouée à 18 % (crédits bien auto-remboursés ✓). Fix : `lib/firestore-sanitize.ts`
+   (`firestoreSafe()`) appliqué à TOUTES les écritures de données LLM
+   (prompts/characters/story_plan/pages/setting_bible) + characterIds coercés
+   en string (commit `db9acfe`, **déployé READY**).
+
+### ⚠️ REPRISE — à faire en priorité
+- [ ] **VALIDER un livre 24 pages de bout en bout** (le fix est déployé mais
+      PAS encore validé sur un run complet). En local : serveur
+      `ADMIN_EMAILS=<email-test> PORT=3100 npm run start` + compte Firebase
+      jetable (voir scripts de session : signup REST → /api/auth/session →
+      universe → book 24p → generation/start → poll). Vérifier : 24/24 pages,
+      qc_stats, zéro fal.media, puis PURGER le compte test.
+- [ ] Risque connu 24 pages : dépassement des 300 s Vercel (si pages manquantes
+      en fin de run → remboursées + récupérables via retry ; sinon monter
+      PAGE_GEN_CONCURRENCY à 5-6).
+- [ ] Recommander/mettre en place **Groq Dev Tier** avant les vrais clients.
+- [ ] Reste aussi : test complet par l'utilisateur, domaine Google auth,
+      produit Chariow (voir entrées précédentes).
+
+---
+
 ## 2026-07-22 — SPRINT QUALITÉ IMAGES (P0) : anti-lineup, setting bible, QC vision, persistance
 
 ### Corrections livrées (audit produit 5×P0)
