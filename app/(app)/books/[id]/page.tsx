@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { PdfDownloadButton } from "@/components/books/pdf-download-button";
@@ -52,8 +53,13 @@ export default async function BookPage({ params }: Props) {
         <div className="mx-auto w-48 shrink-0 md:mx-0">
           <div className="aspect-[3/4] overflow-hidden rounded-3xl bg-gradient-to-br from-sky-100 to-lavender-100 shadow-lift">
             {book.cover_image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={book.cover_image} alt="" className="h-full w-full object-cover" />
+              <Image
+                src={book.cover_image}
+                alt=""
+                width={384}
+                height={512}
+                className="h-full w-full object-cover"
+              />
             ) : null}
           </div>
         </div>
@@ -96,10 +102,11 @@ export default async function BookPage({ params }: Props) {
               <Card key={page.id} className="overflow-hidden p-0">
                 <div className="relative aspect-square bg-cream-100">
                   {page.illustration_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
+                    <Image
                       src={page.illustration_url}
                       alt=""
+                      width={512}
+                      height={512}
                       className="h-full w-full object-contain"
                     />
                   ) : (

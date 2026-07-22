@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { HeroShowcase } from "@/components/landing/showcase";
+import { HeroDrawingLazy } from "@/components/landing/hero-drawing-lazy";
 import { PageGallery } from "@/components/landing/gallery";
 import { Reveal } from "@/components/landing/reveal";
 import {
@@ -153,7 +153,7 @@ export default function LandingPage() {
               </span>
             </div>
           </div>
-          <HeroShowcase />
+          <HeroDrawingLazy />
         </div>
       </section>
 

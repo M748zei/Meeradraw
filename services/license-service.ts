@@ -222,6 +222,20 @@ export class LicenseService {
       );
     }
 
+    // Cache TTL: a recently validated active access skips the Chariow
+    // round-trip (revocations/refunds still land immediately via the webhook,
+    // which flips is_active to false and bypasses this fast path).
+    const ttlMs = Number(process.env.LICENSE_CACHE_TTL_MS || 10 * 60_000);
+    const lastValidated = Date.parse(linked.last_validated_at ?? "");
+    if (
+      linked.is_active &&
+      Number.isFinite(ttlMs) &&
+      !Number.isNaN(lastValidated) &&
+      Date.now() - lastValidated < ttlMs
+    ) {
+      return null;
+    }
+
     let license: ChariowLicense;
     try {
       license = await getLicenseByKey(linked.license_key);

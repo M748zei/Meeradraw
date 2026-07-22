@@ -39,7 +39,10 @@ export default function AccessPage() {
   }
 
   useEffect(() => {
-    refresh().catch(() => undefined);
+    // Deferred so the effect body itself never sets state synchronously.
+    const t = setTimeout(() => void refresh().catch(() => undefined), 0);
+    return () => clearTimeout(t);
+     
   }, []);
 
   async function activate(e: React.FormEvent) {

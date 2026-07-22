@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
+import { rateLimit } from "@/lib/rate-limit";
 import { CREDIT_PACKS } from "@/config/credits";
 import { z } from "zod";
 
@@ -25,6 +26,7 @@ const API_BASE = () => process.env.CHARIOW_API_BASE || "https://api.chariow.com/
 export async function POST(request: Request) {
   try {
     const { db, user, profile } = await requireUser();
+    rateLimit(`checkout:${user.id}`, { limit: 10, windowMs: 60_000 });
     const body = schema.parse(await request.json());
     const pack = CREDIT_PACKS.find((p) => p.id === body.pack_id)!;
 

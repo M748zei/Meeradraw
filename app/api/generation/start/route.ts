@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
+import { rateLimit } from "@/lib/rate-limit";
 import { estimateBookCost, FREE_TRIALS_MAX, FREE_TRIAL_MAX_PAGES } from "@/config/credits";
 import { BookService } from "@/services/book-service";
 import { CreditService } from "@/services/credit-service";
@@ -17,6 +18,7 @@ const schema = z.object({ book_id: z.string().uuid() });
 export async function POST(request: Request) {
   try {
     const { db, user, profile } = await requireUser();
+    rateLimit(`genstart:${user.id}`, { limit: 10, windowMs: 60_000 });
     const body = schema.parse(await request.json());
     const books = new BookService(db);
     const credits = new CreditService(db);

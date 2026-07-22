@@ -62,7 +62,7 @@ export class PDFService {
         y: titleY,
         size: 22,
         font: bold,
-        color: rgb(0.12, 0.2, 0.35),
+        color: rgb(0, 0, 0),
       });
       titleY -= 28;
     }
@@ -74,7 +74,7 @@ export class PDFService {
         y: titleY - 4,
         size: 12,
         font,
-        color: rgb(0.35, 0.4, 0.5),
+        color: rgb(0, 0, 0),
       });
     }
 
@@ -107,7 +107,7 @@ export class PDFService {
           y: cursorY,
           size: 14,
           font: bold,
-          color: rgb(0.12, 0.2, 0.35),
+          color: rgb(0, 0, 0),
           maxWidth: PAGE_W - MARGIN * 2,
         });
         cursorY -= 28;
@@ -156,7 +156,7 @@ export class PDFService {
             y,
             size: 11,
             font,
-            color: rgb(0.18, 0.22, 0.3),
+            color: rgb(0, 0, 0),
             maxWidth: PAGE_W - MARGIN * 2,
           });
           y -= 16;

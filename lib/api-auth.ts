@@ -14,7 +14,9 @@ export function buildNewProfile(session: {
   return {
     id: session.uid,
     fullname: (session.name as string) || null,
-    email: (session.email as string) || "",
+    // Always lowercase: the Chariow sale webhook matches buyers by exact
+    // email equality, so mixed-case profiles would miss instant crediting.
+    email: ((session.email as string) || "").toLowerCase(),
     avatar_url: (session.picture as string) || null,
     subscription_plan: "free",
     // No welcome credits: new accounts get FREE_TRIALS_MAX free trial books

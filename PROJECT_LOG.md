@@ -4,6 +4,66 @@ Journal chronologique du projet. Entrée la plus récente en haut.
 
 ---
 
+## 2026-07-22 (nuit) — ÉTAPE 4 : Audit complet + corrections ✅
+
+### Méthode
+3 passes d'audit parallèles (correctness/fiabilité, sécurité, perf/data/UX),
+chaque finding vérifié dans le code avant action → rapport détaillé dans
+**AUDIT.md** (corrigé / reco / rejeté avec justification). 3 findings des
+audits ont été REJETÉS après vérification (ex. « references de refund
+distinctes » aurait créé un sur-remboursement ; le retry est déjà fermé aux
+essais par requireActiveLicense).
+
+### Corrigé (branche audit/etape4, testé 35/35 ✅)
+- **P0 Reaper** : générations bloquées en queued/running > 15 min → failed +
+  refund transactionnel idempotent (même reference que l'orchestrateur).
+  Auto-guérison sur le polling `GET /api/generation/[id]` + cron quotidien
+  `/api/cron/reap-generations` (vercel.json, `CRON_SECRET` posé en prod).
+- **P0 Types** : `types/database.ts` aligné sur les ~20 champs réellement
+  écrits (Character/Page/Book/Generation/Universe/Profile).
+- **P0 N+1** : écritures personnages + pages en `db.batch()` (jusqu'à 45
+  round-trips → 2).
+- **P1 Rate limiting** : `lib/rate-limit.ts` (fenêtre glissante, par instance)
+  sur enrich-idea (20/min), checkout (10/min), generation/start (10/min),
+  auth/session (15/min/IP).
+- **P1 updateGeneration** robuste (une erreur Firestore cosmétique ne tue plus
+  un run payé) ; **P1 PDF texte noir** (impression) ; **lint 0 warning**.
+- **P2** : whitelist SSRF sur `persistImageFromUrl` ; cache TTL licence 10 min
+  (`last_validated_at` enfin lu — révocations toujours immédiates via webhook) ;
+  emails stockés en minuscules (matching ventes Chariow) ; `next/image` partout
+  (6 `<img>`) ; 404 brandée + redirects `/create` `/studio` `/profil` `/acces` ;
+  code mort supprimé (prompt-engine, showcase).
+
+### Reporté (voir AUDIT.md)
+Pagination listes (nécessite index composite), proxy re-signature des URLs
+Storage, SSE au lieu du polling, harmonisation tu/vous complète, qualité images
+(poses duo, OCR anti-texte).
+
+### Vérification
+`tsc` 0 erreur · lint 0 erreur/0 warning · build OK · suite d'intégration
+**35/35 ✅** (essais, webhook crédits, checkout, réconciliation, reaper) sur
+build de prod local, données purgées.
+
+---
+
+## 2026-07-22 (soir) — ÉTAPE 3 : Hero animé « le coloriage qui se dessine » ✅
+
+- `components/landing/hero-drawing.tsx` : page de coloriage SVG inline (~3 KB,
+  dessinée à la main — renard, soleil, baobab, fleurs) qui SE DESSINE
+  (stroke-dashoffset via GSAP DrawSVG, gratuit depuis 3.13) puis SE COLORIE
+  (fills en stagger), puis la légende apparaît. Validée visuellement (rendu
+  sharp du SVG).
+- Perf mobile Afrique : chargé via `next/dynamic ssr:false`
+  (`hero-drawing-lazy.tsx`, GSAP hors du bundle initial), placeholder qui
+  réserve l'espace, `prefers-reduced-motion` → état final instantané, zéro
+  WebGL/zéro image. Remplace l'éventail de pages du hero (la preuve « vraies
+  pages » reste dans la galerie).
+- Micro-interactions boutons (active:scale, hover lift) et `whileInView`
+  galerie déjà en place depuis la refonte — rien d'autre à alourdir.
+- Déployé en prod (vercel --prod, READY). PR #3 (stack sur PR #2).
+
+---
+
 ## 2026-07-22 (soir) — ÉTAPE 2 : Essais gratuits + packs FCFA + créditation + recharge ✅
 
 ### Réalisé (branche `feat/pricing-credits`, 31 tests d'intégration verts)
