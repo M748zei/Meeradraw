@@ -94,7 +94,7 @@ function LoginForm() {
     <Card className="w-full max-w-md">
       <h1 className="font-display text-2xl text-ink">Bon retour</h1>
       <p className="mt-1 text-sm text-ink-muted">
-        Connectez-vous, puis activez votre licence Chariow si ce n&apos;est pas déjà fait.
+        Connectez-vous pour retrouver votre studio et vos créations.
       </p>
       <form onSubmit={onSubmit} className="mt-6 space-y-4">
         <Input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />

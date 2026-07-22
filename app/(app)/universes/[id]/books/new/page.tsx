@@ -95,10 +95,14 @@ function NewBookForm() {
   const [error, setError] = useState<string | null>(null);
   const [creditBalance, setCreditBalance] = useState<number | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // Trial mode: no active access but free trials remain → 6 pages max, 0 credit.
+  const [trialMode, setTrialMode] = useState(false);
+  const [trialsRemaining, setTrialsRemaining] = useState<number | null>(null);
 
   const cost = useMemo(() => estimateBookCost(pageCount, "colorbook"), [pageCount]);
   const insufficientCredits =
     !isAdmin &&
+    !trialMode &&
     creditBalance !== null &&
     creditBalance < cost &&
     enrichStatus !== "loading";
@@ -106,7 +110,8 @@ function NewBookForm() {
   const briefReady =
     enrichStatus === "ready" || enrichStatus === "fallback" || (manualMode && synopsis.length >= 10);
 
-  // Soft license gate for the generation UI only.
+  // Soft access gate for the generation UI only. Without access: free trials
+  // remaining → trial mode (6 pages max, 0 crédit) ; épuisés → page Accès (CTA).
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -114,9 +119,19 @@ function NewBookForm() {
         const res = await fetch("/api/license/status");
         const json = await res.json();
         if (cancelled || !json.success) return;
-        const st = json.data as { required?: boolean; valid?: boolean };
+        const st = json.data as {
+          required?: boolean;
+          valid?: boolean;
+          trials?: { remaining: number; max_pages: number };
+        };
         if (st.required && !st.valid) {
-          router.replace("/license");
+          if ((st.trials?.remaining ?? 0) > 0) {
+            setTrialMode(true);
+            setTrialsRemaining(st.trials?.remaining ?? 0);
+            setPageCount((n) => Math.min(n, st.trials?.max_pages ?? 6));
+          } else {
+            router.replace("/license");
+          }
         }
       } catch {
         // Ignore — API generation still enforces FORBIDDEN.
@@ -259,7 +274,7 @@ function NewBookForm() {
           router.push(`/credits?need=${cost}&book=${bookId}`);
           return;
         }
-        if (genJson.error?.code === "FORBIDDEN") {
+        if (genJson.error?.code === "FORBIDDEN" || genJson.error?.code === "TRIALS_EXHAUSTED") {
           router.push("/license");
           return;
         }
@@ -573,27 +588,44 @@ function NewBookForm() {
 
         <Card>
           <p className="mb-3 font-display text-xl">Nombre de pages</p>
+          {trialMode ? (
+            <div className="mb-3 rounded-2xl border border-mint-200 bg-mint-50/70 px-4 py-3 text-sm">
+              <span className="font-semibold">
+                Il te reste {trialsRemaining ?? 0} essai{(trialsRemaining ?? 0) > 1 ? "s" : ""} gratuit
+                {(trialsRemaining ?? 0) > 1 ? "s" : ""}
+              </span>{" "}
+              (6 pages max). Débloque ton accès pour créer des livres jusqu&apos;à 24 pages.
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-2">
-            {PAGE_OPTIONS.map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => setPageCount(n)}
-                className={cn(
-                  "h-12 w-16 rounded-2xl border font-semibold transition",
-                  pageCount === n
-                    ? "border-sky-400 bg-sky-50 text-sky-700"
-                    : "border-cream-200"
-                )}
-              >
-                {n}
-              </button>
-            ))}
+            {PAGE_OPTIONS.map((n) => {
+              const locked = trialMode && n > 6;
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => !locked && setPageCount(n)}
+                  disabled={locked}
+                  title={locked ? "Les essais gratuits sont limités à 6 pages" : undefined}
+                  className={cn(
+                    "h-12 w-16 rounded-2xl border font-semibold transition",
+                    pageCount === n
+                      ? "border-sky-400 bg-sky-50 text-sky-700"
+                      : "border-cream-200",
+                    locked ? "cursor-not-allowed opacity-40" : ""
+                  )}
+                >
+                  {n}
+                </button>
+              );
+            })}
           </div>
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-sky-50/80 px-4 py-3">
             <div>
               <p className="text-sm text-ink-muted">Coût de cette génération</p>
-              <p className="font-display text-2xl text-sky-700">{cost} crédits</p>
+              <p className="font-display text-2xl text-sky-700">
+                {trialMode ? "Gratuit — essai" : `${cost} crédits`}
+              </p>
             </div>
             {creditBalance !== null ? (
               <div className="text-right">
@@ -639,9 +671,11 @@ function NewBookForm() {
           >
             {loading
               ? "Préparation…"
-              : enrichStatus === "loading"
-                ? `Créer avec mon idée · ${cost} crédits`
-                : `Créer et générer mon livre · ${cost} crédits`}
+              : trialMode
+                ? "Créer mon livre d'essai · gratuit"
+                : enrichStatus === "loading"
+                  ? `Créer avec mon idée · ${cost} crédits`
+                  : `Créer et générer mon livre · ${cost} crédits`}
           </Button>
         </div>
       </form>

@@ -64,8 +64,8 @@ export default function SignupPage() {
       <Card className="w-full max-w-md">
         <h1 className="font-display text-2xl text-ink">Créer votre studio</h1>
         <p className="mt-1 text-sm text-ink-muted">
-          Après inscription, activez la licence reçue via Chariow. Les crédits
-          mesurent l&apos;usage dans le studio.
+          Crée ton compte et teste gratuitement : 3 livres d&apos;essai (6 pages)
+          offerts, sans carte bancaire.
         </p>
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
           <Input placeholder="Prénom" value={fullname} onChange={(e) => setFullname(e.target.value)} required />

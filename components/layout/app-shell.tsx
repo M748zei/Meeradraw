@@ -7,7 +7,7 @@ const nav = [
   { href: "/dashboard", label: "Studio", icon: Home },
   { href: "/library", label: "Bibliothèque", icon: Library },
   { href: "/universes/new", label: "Créer", icon: Sparkles },
-  { href: "/license", label: "Licence", icon: KeyRound },
+  { href: "/license", label: "Accès", icon: KeyRound },
   { href: "/credits", label: "Crédits", icon: CreditCard },
   { href: "/profile", label: "Profil", icon: User },
 ];

@@ -52,19 +52,19 @@ export default async function DashboardPage() {
     <div className="space-y-10">
       {needsLicense ? (
         <Card className="border-sky-200 bg-sky-50">
-          <p className="font-semibold text-sky-900">Licence Chariow requise</p>
+          <p className="font-semibold text-sky-900">Débloque ton accès Meeradraw</p>
           <p className="mt-1 text-sm text-ink-muted">
-            Activez la clé reçue après votre achat sur Chariow pour lancer des
-            générations. Vos créations restent accessibles.
+            Entre le code d&apos;accès reçu après ton achat pour lancer des
+            générations. Tes créations restent accessibles.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Link href="/license">
-              <Button size="sm">Activer ma licence</Button>
+              <Button size="sm">Débloquer mon accès</Button>
             </Link>
             {STORE_URL ? (
               <a href={STORE_URL} target="_blank" rel="noreferrer">
                 <Button size="sm" variant="secondary">
-                  Acheter sur Chariow
+                  Prendre mon accès
                 </Button>
               </a>
             ) : null}
