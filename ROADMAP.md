@@ -71,16 +71,18 @@ Dernière mise à jour : 2026-07-21
 - [ ] ~~Stripe~~ → remplacé par les packs de crédits Chariow (étape 2).
 
 ### Qualité & fonctionnalités
-- [ ] Reaper pour les livres bloqués en statut `generating` (timeout).
-- [ ] Cache TTL de validation de licence (`last_validated_at` déjà écrit,
-      pas encore lu) pour réduire la dépendance à la latence Chariow.
-- [ ] Aligner les interfaces TypeScript `Character` / `Page` sur les champs réels
-      écrits en Firestore (`id_key`, `negative_prompt`, etc.).
-- [ ] Nettoyage : retirer `dev/gen-test` avant prod (ou le garder strictement
-      gated), retirer le shim `prompt-engine.ts`.
+- [x] **[2026-07-22]** Reaper générations bloquées (auto-guérison au polling +
+      cron quotidien, refund idempotent).
+- [x] **[2026-07-22]** Cache TTL licence 10 min (`last_validated_at` lu).
+- [x] **[2026-07-22]** Interfaces TS alignées sur Firestore (~20 champs).
+- [x] **[2026-07-22]** Nettoyage : shim `prompt-engine.ts` + `showcase.tsx`
+      supprimés ; `dev/gen-test` conservé strictement gated (off en prod).
+- [x] **[2026-07-22]** Audit complet → `AUDIT.md` (+ rate limiting, SSRF
+      whitelist, PDF texte noir, next/image, 404 + redirects, batch writes).
 - [ ] Types de livres additionnels (storybook / activitybook / workbook) —
       actuellement `available:false`.
-- [ ] Pagination des listes (books / universes) au lieu du tri en mémoire.
+- [ ] Pagination des listes (books / universes) — nécessite un index composite
+      `(user_id, created_at desc)` à déployer d'abord (voir AUDIT.md).
 
 ### Idées futures
 - [ ] Éditeur de pages (réordonner, éditer le texte, régénérer une page ciblée).
