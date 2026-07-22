@@ -4,6 +4,37 @@ Journal chronologique du projet. Entrée la plus récente en haut.
 
 ---
 
+## 2026-07-22 (soir) — ÉTAPE 1 : Chariow branché en prod (accès/licence) ✅
+
+### Réalisé (mode autonome)
+1. **Vérifié via MCP Chariow** : Pulse `pulse_i33w69149md3` actif (tous
+   événements) avec l'URL `https://meeradraw.digiafrik.shop/api/webhooks/chariow?token=<CHARIOW_WEBHOOK_SECRET>` ;
+   produit accès `prd_d2ik58za` **publié** (4 900 F, promo −65 %) ; les 4 packs
+   crédits (`prd_0658xmlt`, `prd_68mvngwe`, `prd_0gsbsozy`, `prd_7vx0ru3k`)
+   existent en **draft** avec les bons prix FCFA.
+2. **Variables d'env** : les valeurs prod étant illisibles (type Sensitive),
+   réécriture complète avec les valeurs de la spec : `CHARIOW_PRODUCT_ID=prd_d2ik58za`,
+   `NEXT_PUBLIC_CHARIOW_STORE_URL` (les 2 aussi en Preview), `CHARIOW_API_BASE`,
+   `CHARIOW_WEBHOOK_SECRET` (= token du Pulse), `ADMIN_EMAILS`
+   (manbroukmohamedzei@ + mabroukzeidane04@gmail.com), et **nouvelle
+   `CHARIOW_API_KEY` fournie par l'utilisateur** (testée : 404 sur clé licence
+   bidon = auth OK ; 401 avec une mauvaise clé). Miroir dans `.env.local`.
+3. **Prod redéployée** (`vercel redeploy`, READY).
+
+### Vérifications E2E en prod (toutes ✅)
+- Webhook : token valide → 200 `{received:true}` ; token invalide/absent →
+  403 fail-closed (constant-time).
+- Compte jetable → `GET /api/license/status` → `configured:true, required:true,
+  valid:false` (fini le bypass dev).
+- **Licence d'un autre produit refusée** : activation d'une vraie clé Klik
+  (`prd_fl4at9rv`) → 403 « Cette licence ne correspond pas au produit
+  Meeradraw » (rejet AVANT l'appel activate → aucune activation consommée).
+- Event `license.revoked` accepté (200, idempotent).
+- Nettoyage : comptes test purgés (Auth + Firestore + ledger), events de test
+  supprimés de `chariow_events`.
+
+---
+
 ## 2026-07-22 (suite) — Livres 24 pages + fixes prod à chaud (session interrompue)
 
 ### Réalisé après le sprint

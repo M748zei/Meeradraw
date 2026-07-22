@@ -56,11 +56,12 @@ Dernière mise à jour : 2026-07-21
       interdit partout — protège `credits`/`chariow_license` ; tout passe par
       l'Admin SDK) et **déployées** via l'API firebaserules (service account).
       Index : aucun requis pour l'instant (`firestore.indexes.json` vide).
-- [ ] Configurer le Pulse webhook Chariow (`license.*`) →
-      `https://meeradraw.digiafrik.shop/api/webhooks/chariow?token=<CHARIOW_WEBHOOK_SECRET>`.
-- [ ] Créer / relier le produit licence Meeradraw sur la boutique DigiAfrik
-      et renseigner `CHARIOW_PRODUCT_ID` + `NEXT_PUBLIC_CHARIOW_STORE_URL`.
-- [ ] Stripe (crédits payants) : renseigner `STRIPE_*` en prod.
+- [x] **[2026-07-22]** Pulse webhook Chariow configuré et vérifié E2E en prod
+      (200 token valide / 403 fail-closed).
+- [x] **[2026-07-22]** Produit accès `prd_d2ik58za` relié : `CHARIOW_PRODUCT_ID`,
+      `NEXT_PUBLIC_CHARIOW_STORE_URL`, `CHARIOW_API_KEY` posés en prod +
+      matching produit vérifié E2E (licence Klik → 403).
+- [ ] ~~Stripe~~ → remplacé par les packs de crédits Chariow (étape 2).
 
 ### Qualité & fonctionnalités
 - [ ] Reaper pour les livres bloqués en statut `generating` (timeout).
