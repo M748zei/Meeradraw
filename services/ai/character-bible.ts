@@ -118,7 +118,7 @@ export function normalizeStoryPlan(plan: StoryPlan, pageCount: number): StoryPla
   rawPages.forEach((p, i) => {
     const n = p.pageNumber || i + 1;
     for (const raw of p.characterIds || []) {
-      const id = raw.replace(/\s+/g, "_").toLowerCase();
+      const id = String(raw).replace(/\s+/g, "_").toLowerCase();
       if (validIds.has(id) && !firstSeen.has(id)) firstSeen.set(id, n);
     }
   });
@@ -136,7 +136,7 @@ export function normalizeStoryPlan(plan: StoryPlan, pageCount: number): StoryPla
   const pages = rawPages.map((p, i) => {
     const pageNumber = p.pageNumber || i + 1;
     let characterIds = (p.characterIds || [])
-      .map((id) => id.replace(/\s+/g, "_").toLowerCase())
+      .map((id) => String(id).replace(/\s+/g, "_").toLowerCase())
       .filter((id) => validIds.has(id))
       // Intro-order enforcement: no character on a page before they are met.
       .filter((id) => (introOf.get(id) ?? 1) <= pageNumber);
@@ -160,7 +160,7 @@ export function normalizeStoryPlan(plan: StoryPlan, pageCount: number): StoryPla
     const poses: Record<string, string> = {};
     if (p.characterPoses && typeof p.characterPoses === "object") {
       for (const [rawId, pose] of Object.entries(p.characterPoses)) {
-        const id = rawId.replace(/\s+/g, "_").toLowerCase();
+        const id = String(rawId).replace(/\s+/g, "_").toLowerCase();
         if (characterIds.includes(id) && typeof pose === "string" && pose.trim()) {
           poses[id] = pose.trim();
         }

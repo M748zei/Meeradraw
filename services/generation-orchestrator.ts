@@ -11,6 +11,7 @@ import {
   settingElementsForScene,
 } from "@/services/ai/character-bible";
 import { buildWorldNegative } from "@/services/ai/prompts";
+import { firestoreSafe } from "@/lib/firestore-sanitize";
 import { buildSheetCrops } from "@/services/ai/sheet-crops";
 import { overlayCoverTitle } from "@/lib/cover-title";
 import type { ImageQcStats, SettingBible, StoryPlan } from "@/services/ai/types";
@@ -102,16 +103,20 @@ export class GenerationOrchestrator {
         audience
       );
 
-      await this.db.collection("prompts").add({
-        user_id: userId,
-        universe_id: universeId,
-        book_id: bookId,
-        original_prompt: book.original_idea || idea,
-        optimized_prompt: plan.summary,
-        creative_brief: idea,
-        research_brief: research,
-        created_at: new Date().toISOString(),
-      });
+      // firestoreSafe: LLM output may contain nested arrays / undefined that
+      // Firestore rejects (a single bad field kills the whole generation).
+      await this.db.collection("prompts").add(
+        firestoreSafe({
+          user_id: userId,
+          universe_id: universeId,
+          book_id: bookId,
+          original_prompt: book.original_idea || idea,
+          optimized_prompt: plan.summary,
+          creative_brief: idea,
+          research_brief: research,
+          created_at: new Date().toISOString(),
+        })
+      );
 
       await this.updateGeneration(generationId, {
         current_step: "character_designer",
@@ -126,7 +131,7 @@ export class GenerationOrchestrator {
       await batchDel.commit();
 
       for (const c of plan.characters) {
-        await charsRef.add({
+        await charsRef.add(firestoreSafe({
           id_key: c.id,
           name: c.name,
           description: c.description,
@@ -142,7 +147,7 @@ export class GenerationOrchestrator {
           signature_accessory: c.signatureAccessory ?? null,
           proportions: c.proportions ?? null,
           created_at: new Date().toISOString(),
-        });
+        }));
       }
 
       const fullCharacterBible = formatCharacterLock(plan.characters);
@@ -240,14 +245,14 @@ export class GenerationOrchestrator {
         subtitle: plan.subtitle ?? null,
         character_bible: fullCharacterBible,
         character_sheet_url: characterSheetUrl,
-        story_plan: {
+        story_plan: firestoreSafe({
           concept: plan.concept ?? null,
           summary: plan.summary,
           moral: plan.moral ?? null,
           audience_age: plan.audienceAge,
           world: plan.world,
           characters: plan.characters,
-        },
+        }),
       });
 
       // Reset pages
@@ -302,7 +307,7 @@ export class GenerationOrchestrator {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
-        await pagesCol.doc(pageId).set(row);
+        await pagesCol.doc(pageId).set(firestoreSafe(row));
         insertedPages.push({
           id: pageId,
           scene,
@@ -681,7 +686,7 @@ export class GenerationOrchestrator {
         style,
       });
       await ref.update({
-        setting_bible: bible,
+        setting_bible: firestoreSafe(bible),
         updated_at: new Date().toISOString(),
       });
       return bible;
