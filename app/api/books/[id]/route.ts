@@ -18,7 +18,8 @@ export async function GET(_req: Request, { params }: Params) {
 const patchSchema = z.object({
   title: z.string().min(1).max(120).optional(),
   subtitle: z.string().max(200).optional(),
-  cover_image: z.string().optional(),
+  // cover_image intentionally omitted — only the generation pipeline may set it
+  // (arbitrary URLs would enable SSRF through PDF export).
   status: z.enum(["draft", "generating", "completed", "partial", "archived", "failed"]).optional(),
 });
 

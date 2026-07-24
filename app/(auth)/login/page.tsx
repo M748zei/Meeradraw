@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { getClientAuth, isFirebaseConfigured } from "@/lib/firebase/client";
+import { safeInternalPath } from "@/lib/safe-redirect";
 
 async function establishSession() {
   const auth = getClientAuth();
@@ -28,8 +29,8 @@ async function establishSession() {
 }
 
 async function resolvePostAuthPath(requestedNext: string) {
-  // Respect explicit next (e.g. /license) ; sinon redirige si licence requise
-  if (requestedNext && requestedNext !== "/dashboard") return requestedNext;
+  const safe = safeInternalPath(requestedNext, "/dashboard");
+  if (safe !== "/dashboard") return safe;
   try {
     const st = await fetch("/api/license/status");
     const stJson = await st.json();
@@ -39,13 +40,13 @@ async function resolvePostAuthPath(requestedNext: string) {
   } catch {
     /* keep requested */
   }
-  return requestedNext || "/dashboard";
+  return safe;
 }
 
 function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
-  const next = search.get("next") || "/dashboard";
+  const next = safeInternalPath(search.get("next"), "/dashboard");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);

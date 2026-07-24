@@ -47,6 +47,29 @@ export default async function BookPage({ params }: Props) {
     (book.status === "completed" || book.status === "partial" || Boolean(book.pdf_url)) &&
     missingPages.length < pages.length;
 
+  let generateHref = `/books/${id}/generate`;
+  if (book.status === "generating") {
+    let gid =
+      typeof book.active_generation_id === "string" ? book.active_generation_id : null;
+    if (!gid) {
+      const genSnap = await db
+        .collection("generations")
+        .where("book_id", "==", id)
+        .where("user_id", "==", session.uid)
+        .limit(25)
+        .get();
+      const latest = docsData<{ id: string; created_at?: string; status?: string }>(
+        genSnap.docs
+      )
+        .filter((g) => g.status === "queued" || g.status === "running")
+        .sort((a, b) =>
+          String(b.created_at || "").localeCompare(String(a.created_at || ""))
+        )[0];
+      gid = latest?.id ?? null;
+    }
+    if (gid) generateHref = `/books/${id}/generate?gid=${gid}`;
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-6 md:flex-row md:items-start">
@@ -80,7 +103,7 @@ export default async function BookPage({ params }: Props) {
             {canExportPdf ? (
               <PdfDownloadButton bookId={id} pdfUrl={book.pdf_url} />
             ) : book.status === "generating" ? (
-              <Link href={`/books/${id}/generate`}>
+              <Link href={generateHref}>
                 <Button size="lg">Voir la création</Button>
               </Link>
             ) : (

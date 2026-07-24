@@ -488,7 +488,10 @@ export class GenerationOrchestrator {
 
       // Never mark a book "completed" with blank pages
       if (completedCount === 0) {
-        await this.books.update(userId, bookId, { status: "failed" });
+        await this.books.update(userId, bookId, {
+          status: "failed",
+          active_generation_id: null,
+        });
         // Nothing was produced — refund the entire reservation.
         await this.credits.refund(
           userId,
@@ -505,6 +508,9 @@ export class GenerationOrchestrator {
             "Aucune page illustrée n’a pu être générée. Réessayez ou régénérez les pages.",
           duration_ms: Date.now() - started,
         });
+        if (isTrial) {
+          await this.releaseFreeTrialSlot(userId, generationId);
+        }
         return;
       }
 
@@ -552,6 +558,7 @@ export class GenerationOrchestrator {
       await this.books.update(userId, bookId, {
         status: bookStatus,
         pdf_url: pdfUrl,
+        active_generation_id: null,
       });
 
       // Credits were reserved up-front for `book.page_count` pages in
@@ -606,12 +613,19 @@ export class GenerationOrchestrator {
       // A delivered trial book consumes one free trial. Idempotent: the
       // `trial_counted` flag on the generation doc guards the increment even if
       // this path re-runs (retry after crash, replayed job).
-      if (isTrial && completedCount > 0) {
-        await this.consumeFreeTrial(userId, generationId);
+      if (isTrial) {
+        if (completedCount > 0) {
+          await this.consumeFreeTrial(userId, generationId);
+        } else {
+          await this.releaseFreeTrialSlot(userId, generationId);
+        }
       }
     } catch (err) {
       console.error("generation failed", err);
-      await this.books.update(userId, bookId, { status: "failed" });
+      await this.books.update(userId, bookId, {
+        status: "failed",
+        active_generation_id: null,
+      });
       // Refund the up-front reservation — the run crashed before delivering.
       // Idempotent: if a partial refund already landed this is a no-op.
       try {
@@ -623,6 +637,9 @@ export class GenerationOrchestrator {
         );
       } catch (refundErr) {
         console.error("refund after generation failure failed", refundErr);
+      }
+      if (isTrial) {
+        await this.releaseFreeTrialSlot(userId, generationId);
       }
       await this.updateGeneration(generationId, {
         status: "failed",
@@ -636,7 +653,8 @@ export class GenerationOrchestrator {
   /**
    * Marks one free trial as consumed for a delivered trial book. Runs in a
    * transaction keyed on the generation's `trial_counted` flag so the same
-   * generation can never consume more than one trial.
+   * generation can never consume more than one trial. Also releases the
+   * in-progress slot reserved at generation/start.
    */
   private async consumeFreeTrial(userId: string, generationId: string) {
     const genRef = this.db.collection("generations").doc(generationId);
@@ -647,14 +665,46 @@ export class GenerationOrchestrator {
         if (!gen.exists || gen.data()?.trial_counted === true) return;
         const user = await tx.get(userRef);
         const used = (user.data()?.free_trials_used as number) ?? 0;
+        const inProgress = (user.data()?.free_trials_in_progress as number) ?? 0;
         tx.update(genRef, { trial_counted: true });
         tx.update(userRef, {
           free_trials_used: used + 1,
+          free_trials_in_progress: Math.max(0, inProgress - 1),
           updated_at: new Date().toISOString(),
         });
       });
     } catch (err) {
       console.error("consumeFreeTrial failed", err);
+    }
+  }
+
+  /**
+   * Releases a reserved free-trial slot when a trial run fails with no
+   * delivery. Idempotent via `trial_counted` / metadata.trial_released.
+   */
+  private async releaseFreeTrialSlot(userId: string, generationId: string) {
+    const genRef = this.db.collection("generations").doc(generationId);
+    const userRef = this.db.collection("users").doc(userId);
+    try {
+      await this.db.runTransaction(async (tx) => {
+        const gen = await tx.get(genRef);
+        if (!gen.exists) return;
+        const data = gen.data()!;
+        if (data.trial_counted === true) return;
+        const meta = (data.metadata as Record<string, unknown> | null) ?? {};
+        if (meta.trial_released === true || meta.trial_reserved !== true) return;
+        const user = await tx.get(userRef);
+        const inProgress = (user.data()?.free_trials_in_progress as number) ?? 0;
+        tx.update(genRef, {
+          metadata: { ...meta, trial_released: true },
+        });
+        tx.update(userRef, {
+          free_trials_in_progress: Math.max(0, inProgress - 1),
+          updated_at: new Date().toISOString(),
+        });
+      });
+    } catch (err) {
+      console.error("releaseFreeTrialSlot failed", err);
     }
   }
 

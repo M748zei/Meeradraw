@@ -31,15 +31,6 @@ export async function POST(request: Request) {
     const hasAccess = await new LicenseService(db).hasActiveAccess(user.id, user.email);
     let isTrial = false;
     if (!hasAccess) {
-      const used = profile.free_trials_used ?? 0;
-      const max = profile.free_trials_max ?? FREE_TRIALS_MAX;
-      if (used >= max) {
-        throw new AppError(
-          "TRIALS_EXHAUSTED",
-          "Tu as utilisé tes essais gratuits. Débloque ton accès Meeradraw pour continuer à créer.",
-          403
-        );
-      }
       if ((book.page_count as number) > FREE_TRIAL_MAX_PAGES) {
         throw new AppError(
           "VALIDATION_ERROR",
@@ -51,39 +42,125 @@ export async function POST(request: Request) {
     }
 
     const cost = isTrial ? 0 : estimateBookCost(book.page_count as number, book.type as string);
-
     const generationId = randomUUID();
     const now = new Date().toISOString();
+    const bookRef = db.collection("books").doc(body.book_id);
+    const genRef = db.collection("generations").doc(generationId);
+    const userRef = db.collection("users").doc(user.id);
+
+    // Atomic claim: create the generation doc + lock the book BEFORE reserving
+    // credits. Double-clicks reuse the in-flight generation (idempotent).
+    // Crash after this commit still leaves a durable doc for the reaper.
+    type ClaimResult =
+      | { kind: "existing"; generationId: string }
+      | { kind: "created" };
+
+    const claim = await db.runTransaction(async (tx): Promise<ClaimResult> => {
+      const bookSnap = await tx.get(bookRef);
+      if (!bookSnap.exists || bookSnap.data()?.user_id !== user.id) {
+        throw new AppError("NOT_FOUND", "Livre introuvable", 404);
+      }
+      const bookData = bookSnap.data()!;
+      const status = bookData.status as string;
+      const activeGen =
+        typeof bookData.active_generation_id === "string"
+          ? bookData.active_generation_id
+          : null;
+
+      if (status === "generating" && activeGen) {
+        return { kind: "existing", generationId: activeGen };
+      }
+
+      if (isTrial) {
+        const userSnap = await tx.get(userRef);
+        const used = (userSnap.data()?.free_trials_used as number) ?? 0;
+        const inProgress =
+          (userSnap.data()?.free_trials_in_progress as number) ?? 0;
+        const max =
+          (userSnap.data()?.free_trials_max as number) ??
+          profile.free_trials_max ??
+          FREE_TRIALS_MAX;
+        if (used + inProgress >= max) {
+          throw new AppError(
+            "TRIALS_EXHAUSTED",
+            "Tu as utilisé tes essais gratuits. Débloque ton accès Meeradraw pour continuer à créer.",
+            403
+          );
+        }
+        tx.update(userRef, {
+          free_trials_in_progress: inProgress + 1,
+          updated_at: now,
+        });
+      }
+
+      tx.set(genRef, {
+        user_id: user.id,
+        book_id: body.book_id,
+        generation_type: "full_book",
+        status: "queued",
+        progress: 0,
+        current_step: "queued",
+        credits_used: cost,
+        tokens_used: 0,
+        provider: null,
+        duration_ms: null,
+        error_message: null,
+        metadata: isTrial ? { is_trial: true, trial_reserved: true } : {},
+        created_at: now,
+        updated_at: now,
+      });
+      tx.update(bookRef, {
+        status: "generating",
+        active_generation_id: generationId,
+        updated_at: now,
+      });
+      return { kind: "created" };
+    });
+
+    if (claim.kind === "existing") {
+      return apiSuccess({
+        generation_id: claim.generationId,
+        id: claim.generationId,
+        is_trial: isTrial,
+        status: "queued",
+        reused: true,
+      });
+    }
 
     if (!isTrial) {
-      // Reserve credits up-front (atomic). The orchestrator refunds the unused
-      // portion (failed pages, or the whole reservation on total failure) at the
-      // end. reference_id makes the reservation idempotent per generation.
-      await credits.reserve(
-        user.id,
-        cost,
-        `Réservation génération livre ${String(book.title ?? "")}`.trim(),
-        `gen:${generationId}:reserve`
-      );
+      try {
+        // Reserve after the durable generation exists so a crash here still
+        // leaves a document the reaper can fail (no orphan debit yet).
+        await credits.reserve(
+          user.id,
+          cost,
+          `Réservation génération livre ${String(book.title ?? "")}`.trim(),
+          `gen:${generationId}:reserve`
+        );
+      } catch (err) {
+        await releaseTrialSlot(db, user.id, isTrial);
+        await genRef.set(
+          {
+            status: "failed",
+            error_message:
+              err instanceof AppError
+                ? err.message
+                : "Réservation de crédits impossible",
+            updated_at: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+        await bookRef.set(
+          {
+            status: "draft",
+            active_generation_id: null,
+            updated_at: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+        throw err;
+      }
     }
-    const generation = {
-      user_id: user.id,
-      book_id: body.book_id,
-      generation_type: "full_book",
-      status: "queued",
-      progress: 0,
-      current_step: "queued",
-      credits_used: cost,
-      tokens_used: 0,
-      provider: null,
-      duration_ms: null,
-      error_message: null,
-      metadata: isTrial ? { is_trial: true } : {},
-      created_at: now,
-      updated_at: now,
-    };
-    await db.collection("generations").doc(generationId).set(generation);
-    await books.update(user.id, body.book_id, { status: "generating" });
 
     const orchestrator = new GenerationOrchestrator(db);
     after(async () => {
@@ -91,7 +168,19 @@ export async function POST(request: Request) {
     });
 
     return apiSuccess(
-      { generation_id: generationId, id: generationId, is_trial: isTrial, ...generation },
+      {
+        generation_id: generationId,
+        id: generationId,
+        is_trial: isTrial,
+        user_id: user.id,
+        book_id: body.book_id,
+        generation_type: "full_book",
+        status: "queued",
+        progress: 0,
+        current_step: "queued",
+        credits_used: cost,
+        metadata: isTrial ? { is_trial: true, trial_reserved: true } : {},
+      },
       201
     );
   } catch (e) {
@@ -100,4 +189,21 @@ export async function POST(request: Request) {
     }
     return apiError(e);
   }
+}
+
+async function releaseTrialSlot(
+  db: import("firebase-admin/firestore").Firestore,
+  userId: string,
+  isTrial: boolean
+) {
+  if (!isTrial) return;
+  const userRef = db.collection("users").doc(userId);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    const inProgress = (snap.data()?.free_trials_in_progress as number) ?? 0;
+    tx.update(userRef, {
+      free_trials_in_progress: Math.max(0, inProgress - 1),
+      updated_at: new Date().toISOString(),
+    });
+  });
 }

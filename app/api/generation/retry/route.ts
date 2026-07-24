@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
+import { rateLimit } from "@/lib/rate-limit";
 import { getImageProvider } from "@/services/ai";
 import { buildWorldNegative } from "@/services/ai/prompts";
 import { settingElementsForScene } from "@/services/ai/character-bible";
@@ -23,6 +24,7 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const { db, user } = await requireUser();
+    rateLimit(`genretry:${user.id}`, { limit: 10, windowMs: 60_000 });
     await new LicenseService(db).requireActiveLicense(user.id, user.email);
     const body = schema.parse(await request.json());
     const bookSnap = await db.collection("books").doc(body.book_id).get();
@@ -33,25 +35,75 @@ export async function POST(request: Request) {
     const credits = new CreditService(db);
     const pagesCol = db.collection("books").doc(body.book_id).collection("pages");
     const retryToken = randomUUID();
+    const now = new Date().toISOString();
 
-    let pages: QueryDocumentSnapshot[] = [];
-
+    // Preload candidates, then claim inside a transaction so concurrent retries
+    // cannot double-charge the same page.
+    let candidates: QueryDocumentSnapshot[] = [];
     if (body.page_id) {
       const one = await pagesCol.doc(body.page_id).get();
       if (!one.exists) {
         throw new AppError("NOT_FOUND", "Page introuvable", 404);
       }
-      pages = [one as QueryDocumentSnapshot];
+      candidates = [one as QueryDocumentSnapshot];
     } else {
       const allSnap = await pagesCol.get();
-      pages = allSnap.docs.filter((d) => {
+      candidates = allSnap.docs.filter((d) => {
         const p = d.data();
         return (
           p.generation_status === "failed" ||
           !p.illustration_url ||
           p.generation_status === "pending"
         );
+      }) as QueryDocumentSnapshot[];
+    }
+
+    const claimedIds = await db.runTransaction(async (tx) => {
+      const ids: string[] = [];
+      for (const doc of candidates) {
+        const fresh = await tx.get(doc.ref);
+        if (!fresh.exists) continue;
+        const p = fresh.data()!;
+        if (p.generation_status === "generating") {
+          if (body.page_id) {
+            throw new AppError(
+              "CONFLICT",
+              "Cette page est déjà en cours de régénération.",
+              409
+            );
+          }
+          continue;
+        }
+        const needs =
+          body.page_id != null ||
+          p.generation_status === "failed" ||
+          !p.illustration_url ||
+          p.generation_status === "pending";
+        if (!needs) continue;
+        tx.update(doc.ref, {
+          generation_status: "generating",
+          retry_token: retryToken,
+          updated_at: now,
+        });
+        ids.push(doc.id);
+      }
+      return ids;
+    });
+
+    if (claimedIds.length === 0) {
+      return apiSuccess({
+        retried: 0,
+        recovered: 0,
+        still_failed: 0,
+        book_status: book.status,
+        message: "Aucune page à régénérer.",
       });
+    }
+
+    const claimedSnaps: QueryDocumentSnapshot[] = [];
+    for (const id of claimedIds) {
+      const snap = await pagesCol.doc(id).get();
+      if (snap.exists) claimedSnaps.push(snap as QueryDocumentSnapshot);
     }
 
     const characterBible =
@@ -75,47 +127,72 @@ export async function POST(request: Request) {
             .join(" — ")
         : undefined;
 
-    // Setting bible + world negative (audit T3) — stored on the universe.
     const universeSnap = await db
       .collection("universes")
       .doc(book.universe_id as string)
       .get();
     const settingBible = universeSnap.data()?.setting_bible as SettingBible | undefined;
     const worldNegative = buildWorldNegative(settingBible?.forbiddenElements);
-    // Solo pages use the character's own sheet crop (anti cast-leak, benchmark winner).
     const sheetCrops = (universeSnap.data()?.model_sheet_crops || {}) as Record<
       string,
       { url?: string }
     >;
     const storage = new StorageService();
 
-    // Charge per page up-front (atomic reservation). Pages that still fail are
-    // refunded below, so the customer only pays for pages actually recovered.
     const perPage = CREDIT_COSTS.regenerate_page;
-    const reserveAmount = pages.length * perPage;
+    const reserveAmount = claimedIds.length * perPage;
+    const retryRef = db.collection("generation_retries").doc(retryToken);
+
+    // Durable retry op so the reaper can refund if this process dies mid-run.
+    await retryRef.set({
+      user_id: user.id,
+      book_id: body.book_id,
+      page_ids: claimedIds,
+      reserved_amount: reserveAmount,
+      per_page: perPage,
+      recovered: 0,
+      status: "running",
+      created_at: now,
+      updated_at: now,
+    });
+
     if (reserveAmount > 0) {
-      await credits.reserve(
-        user.id,
-        reserveAmount,
-        `Réservation régénération ${pages.length} page(s)`,
-        `retry:${retryToken}:reserve`
-      );
+      try {
+        await credits.reserve(
+          user.id,
+          reserveAmount,
+          `Réservation régénération ${claimedIds.length} page(s)`,
+          `retry:${retryToken}:reserve`
+        );
+      } catch (err) {
+        // Unlock claimed pages and mark retry failed.
+        await Promise.all(
+          claimedIds.map((id) =>
+            pagesCol.doc(id).set(
+              {
+                generation_status: "failed",
+                retry_token: null,
+                updated_at: new Date().toISOString(),
+              },
+              { merge: true }
+            )
+          )
+        );
+        await retryRef.set(
+          { status: "failed", updated_at: new Date().toISOString() },
+          { merge: true }
+        );
+        throw err;
+      }
     }
 
     const imageProvider = getImageProvider();
     let recovered = 0;
     let stillFailed = 0;
 
-    // Everything after the reservation is wrapped so a crash mid-run always
-    // refunds the unused portion (reserved − paid-for-recovered) rather than
-    // stranding the customer's credits. The refund is idempotent per token.
     try {
-      for (const pageDoc of pages) {
+      for (const pageDoc of claimedSnaps) {
         const page = pageDoc.data();
-        await pageDoc.ref.update({
-          generation_status: "generating",
-          updated_at: new Date().toISOString(),
-        });
         try {
           const pageLock =
             (typeof page.character_lock === "string" && page.character_lock) ||
@@ -154,7 +231,6 @@ export async function POST(request: Request) {
             worldNegative,
           });
           if (!image?.url) throw new Error("Empty image URL");
-          // Persist to Storage (audit T7) — never keep an ephemeral fal URL.
           const persisted = await storage.persistImageFromUrl(
             image.url,
             `books/${body.book_id}/pages/${page.page_number}.png`
@@ -163,33 +239,45 @@ export async function POST(request: Request) {
             illustration_url: persisted.url,
             illustration_path: persisted.path,
             generation_status: "completed",
+            retry_token: null,
             updated_at: new Date().toISOString(),
           });
           recovered += 1;
+          await retryRef.set(
+            { recovered, updated_at: new Date().toISOString() },
+            { merge: true }
+          );
         } catch {
           await pageDoc.ref.update({
             generation_status: "failed",
             illustration_url: null,
+            retry_token: null,
             updated_at: new Date().toISOString(),
           });
           stillFailed += 1;
         }
       }
     } finally {
-      // Refund everything that was reserved but not turned into a recovered
-      // page (covers both still-failed pages and an early crash). Idempotent.
       const refundAmount = Math.max(0, reserveAmount - recovered * perPage);
       if (refundAmount > 0) {
         await credits.refund(
           user.id,
           refundAmount,
-          `Remboursement ${pages.length - recovered} page(s) non régénérée(s)`,
+          `Remboursement ${claimedIds.length - recovered} page(s) non régénérée(s)`,
           `retry:${retryToken}:refund`
         );
       }
+      await retryRef.set(
+        {
+          status: "completed",
+          recovered,
+          still_failed: stillFailed,
+          updated_at: new Date().toISOString(),
+        },
+        { merge: true }
+      );
     }
 
-    // Promote book to completed when every page has an image
     const afterSnap = await pagesCol.get();
     const missing = afterSnap.docs.filter((d) => {
       const p = d.data();
@@ -209,7 +297,7 @@ export async function POST(request: Request) {
     }
 
     return apiSuccess({
-      retried: pages.length,
+      retried: claimedIds.length,
       recovered,
       still_failed: stillFailed,
       book_status: missing === 0 ? "completed" : "partial",

@@ -55,3 +55,8 @@ bench-out/
 # local agent/product workspaces
 /.claude/
 /_chariow_product/
+
+# Firebase emulator logs
+*-debug.log
+firebase-debug.log
+firestore-debug.log

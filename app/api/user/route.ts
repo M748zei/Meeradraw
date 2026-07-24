@@ -1,15 +1,20 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess } from "@/lib/errors";
+import { toPublicProfile } from "@/lib/public-profile";
 import { z } from "zod";
 
 export async function GET() {
   try {
     const { profile, user } = await requireUser();
-    return apiSuccess({
-      ...(profile ?? {}),
-      id: user.id,
-      email: user.email ?? profile?.email ?? "",
-    });
+    return apiSuccess(
+      toPublicProfile(
+        {
+          ...(profile ?? {}),
+          email: user.email ?? profile?.email ?? "",
+        },
+        user.id
+      )
+    );
   } catch (e) {
     return apiError(e);
   }
@@ -30,7 +35,7 @@ export async function PATCH(request: Request) {
       updated_at: new Date().toISOString(),
     });
     const snap = await db.collection("users").doc(user.id).get();
-    return apiSuccess({ id: snap.id, ...snap.data() });
+    return apiSuccess(toPublicProfile(snap.data(), snap.id));
   } catch (e) {
     return apiError(e);
   }

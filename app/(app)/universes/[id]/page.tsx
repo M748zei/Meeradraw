@@ -35,7 +35,8 @@ export default async function UniversePage({ params }: Props) {
   const universe = docData<Universe>(universeSnap);
 
   const booksSnap = await db.collection("books").where("universe_id", "==", id).get();
-  const books = docsData<Book>(booksSnap.docs);
+  // Filter by owner in memory (avoids a composite index; volume per universe is small).
+  const books = docsData<Book>(booksSnap.docs).filter((b) => b.user_id === session.uid);
 
   const ideaSeed = (universe.description?.trim() || universe.title).slice(0, 4000);
   const newBookHref = ideaSeed
