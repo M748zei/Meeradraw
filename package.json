@@ -6,7 +6,10 @@
     "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:functional": "tsx scripts/functional-suite.ts",
+    "test:functional:logic": "tsx scripts/functional-suite.ts --logic-only",
+    "test:functional:http": "tsx scripts/functional-suite.ts --http-only"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
