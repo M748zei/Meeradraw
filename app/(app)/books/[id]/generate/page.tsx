@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { GENERATION_TEAM } from "@/config/generation-steps";
@@ -15,15 +15,57 @@ import type { GenerationProgress } from "@/types/database";
 function GenerateInner() {
   const { id: bookId } = useParams<{ id: string }>();
   const search = useSearchParams();
-  const generationId = search.get("gid");
+  const router = useRouter();
+  const gidParam = search.get("gid");
+  const [resolvedGid, setResolvedGid] = useState<string | null>(null);
+  const generationId = gidParam || resolvedGid;
   const [progress, setProgress] = useState<GenerationProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(!gidParam);
+
+  // Resolve missing gid from the book / latest active generation.
+  useEffect(() => {
+    if (gidParam) return;
+    let active = true;
+    async function resolveGid() {
+      try {
+        const res = await fetch(`/api/books/${bookId}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error?.message || "Livre introuvable");
+        const activeId =
+          typeof json.data?.active_generation_id === "string"
+            ? json.data.active_generation_id
+            : null;
+        if (!active) return;
+        if (activeId) {
+          setResolvedGid(activeId);
+          router.replace(`/books/${bookId}/generate?gid=${activeId}`);
+        } else {
+          setError(
+            "Aucune génération en cours pour ce livre. Relance la création depuis le studio."
+          );
+        }
+      } catch (err) {
+        if (active) {
+          setError(err instanceof Error ? err.message : "Erreur");
+        }
+      } finally {
+        if (active) setResolving(false);
+      }
+    }
+    void resolveGid();
+    return () => {
+      active = false;
+    };
+  }, [bookId, gidParam, router]);
 
   useEffect(() => {
     if (!generationId) return;
     let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
     async function poll() {
+      if (!active) return;
       try {
         const res = await fetch(`/api/generation/${generationId}`);
         const json = await res.json();
@@ -36,12 +78,13 @@ function GenerateInner() {
       } catch (err) {
         if (active) setError(err instanceof Error ? err.message : "Erreur");
       }
-      if (active) setTimeout(poll, 1500);
+      if (active) timer = setTimeout(poll, 1500);
     }
 
-    poll();
+    void poll();
     return () => {
       active = false;
+      if (timer) clearTimeout(timer);
     };
   }, [generationId]);
 
@@ -64,6 +107,10 @@ function GenerateInner() {
   const partial = progress?.status === "partial";
   const failed = progress?.status === "failed";
   const finished = done || partial;
+
+  if (resolving) {
+    return <Skeleton className="h-64 w-full" />;
+  }
 
   return (
     <div className="mx-auto max-w-4xl space-y-8">
@@ -130,13 +177,19 @@ function GenerateInner() {
         <Card className="p-4">
           <p className="mb-3 text-sm font-semibold text-ink-muted">Couverture</p>
           {progress?.cover_image ? (
-            <motion.img
+            <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              src={progress.cover_image}
-              alt="Couverture"
-              className="aspect-[3/4] w-full rounded-2xl object-cover shadow-lift"
-            />
+              className="relative aspect-[3/4] w-full overflow-hidden rounded-2xl shadow-lift"
+            >
+              <Image
+                src={progress.cover_image}
+                alt="Couverture"
+                fill
+                className="object-cover"
+                sizes="240px"
+              />
+            </motion.div>
           ) : (
             <Skeleton className="aspect-[3/4] w-full" />
           )}
@@ -155,14 +208,14 @@ function GenerateInner() {
                   animate={{ opacity: 1, y: 0 }}
                 >
                   <Card className="flex gap-4 p-3">
-                    <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-cream-100">
+                    <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-cream-100">
                       {page.illustration_url ? (
                         <Image
                           src={page.illustration_url}
                           alt=""
-                          width={160}
-                          height={160}
-                          className="h-full w-full object-cover"
+                          fill
+                          className="object-cover"
+                          sizes="80px"
                         />
                       ) : (
                         <Skeleton className="h-full w-full rounded-xl" />

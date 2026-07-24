@@ -21,6 +21,8 @@ export interface Profile {
   credits: number;
   /** Free trial books consumed (successful generations without access). */
   free_trials_used?: number;
+  /** Trials currently reserved by in-flight generations (anti double-start). */
+  free_trials_in_progress?: number;
   /** Per-account trial allowance (defaults to FREE_TRIALS_MAX). */
   free_trials_max?: number;
   /** Mobile Money phone, saved at first recharge to pre-fill Chariow checkout. */
@@ -72,6 +74,8 @@ export interface Book {
   pdf_url: string | null;
   /** Storage object path of the persisted cover (signed URL in cover_image). */
   cover_image_path?: string | null;
+  /** In-flight generation id while status === generating (progress deep-link). */
+  active_generation_id?: string | null;
   style: string | null;
   /** Target audience (e.g. "enfants 4–8 ans"); falls back to audience_age. */
   audience?: string | null;
@@ -149,7 +153,13 @@ export interface Generation {
   /** `{ is_trial: true }` for free-trial runs. */
   metadata: Record<string, unknown> | null;
   /** QC telemetry (pixel/vision re-roll counts) written at the end of a run. */
-  qc_stats?: Record<string, number> | null;
+  qc_stats?: {
+    images?: number;
+    pixel_rerolls?: number;
+    vision_rerolls?: number;
+    vision_verdicts?: Record<string, string[]>;
+    [key: string]: unknown;
+  } | null;
   /** Set once when a delivered trial run consumed a free trial (idempotence flag). */
   trial_counted?: boolean;
   created_at: string;
@@ -158,11 +168,14 @@ export interface Generation {
 
 export interface CreditLedger {
   id: string;
-  user_id: string;
+  /** Present when denormalized; subcollection docs under users/{uid} omit it. */
+  user_id?: string;
   operation: "credit" | "debit";
   amount: number;
   balance_after: number;
   reason: string;
+  /** Idempotency key for the mutation (operation + reference_id). */
+  reference_id?: string | null;
   created_at: string;
 }
 

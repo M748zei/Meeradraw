@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { LicenseService } from "@/services/license-service";
 import { z } from "zod";
 
@@ -10,6 +11,11 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const { db, user } = await requireUser();
+    rateLimit(`license-activate:${user.id}`, { limit: 10, windowMs: 60_000 });
+    rateLimit(`license-activate-ip:${clientIp(request)}`, {
+      limit: 20,
+      windowMs: 60_000,
+    });
     const body = schema.parse(await request.json());
     const license = await new LicenseService(db).activateForUser(user.id, body.license_key);
     return apiSuccess({

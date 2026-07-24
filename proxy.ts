@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const SESSION_COOKIE = "__session";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const session = request.cookies.get(SESSION_COOKIE)?.value;
   const configured = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY);

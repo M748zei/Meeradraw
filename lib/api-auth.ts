@@ -23,6 +23,7 @@ export function buildNewProfile(session: {
     // instead (paid credits only ever come from Chariow purchases).
     credits: 0,
     free_trials_used: 0,
+    free_trials_in_progress: 0,
     free_trials_max: FREE_TRIALS_MAX,
     preferred_language: "fr",
     created_at: now,

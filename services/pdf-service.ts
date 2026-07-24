@@ -1,4 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { detectImageFormat } from "@/lib/image-format";
+import { fetchSafeImageBytes } from "@/lib/safe-image-url";
 
 /** A4 portrait (pts). Print-safe kids coloring book layout. */
 const PAGE_W = 595.28;
@@ -173,28 +175,20 @@ async function embedRemoteImage(
   url: string
 ): Promise<{ image: Awaited<ReturnType<PDFDocument["embedPng"]>> } | null> {
   try {
-    const imgBytes = await fetch(url).then((r) => r.arrayBuffer());
-    const lower = url.toLowerCase();
-    const isPng =
-      lower.includes(".png") ||
-      lower.includes("png?") ||
-      lower.includes("image/png");
-    const image = isPng
-      ? await pdf.embedPng(imgBytes)
-      : await pdf.embedJpg(imgBytes);
-    return { image };
-  } catch {
-    // Try the other format if sniff failed
-    try {
-      const imgBytes = await fetch(url).then((r) => r.arrayBuffer());
-      try {
-        return { image: await pdf.embedPng(imgBytes) };
-      } catch {
-        return { image: await pdf.embedJpg(imgBytes) };
-      }
-    } catch {
-      return null;
+    // SSRF + size/timeout guard (same allowlist as StorageService).
+    const imgBytes = await fetchSafeImageBytes(url);
+    const format = detectImageFormat(imgBytes);
+    if (format === "png") {
+      return { image: await pdf.embedPng(imgBytes) };
     }
+    try {
+      return { image: await pdf.embedJpg(imgBytes) };
+    } catch {
+      // Fallback when magic bytes were ambiguous.
+      return { image: await pdf.embedPng(imgBytes) };
+    }
+  } catch {
+    return null;
   }
 }
 

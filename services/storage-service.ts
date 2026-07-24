@@ -1,6 +1,11 @@
 import { AppError } from "@/lib/errors";
 import { getAdminStorage } from "@/lib/firebase/admin";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
+import {
+  assertSafeImageUrl,
+  fetchSafeImageBytes,
+  isAllowedImageHost,
+} from "@/lib/safe-image-url";
 
 export class StorageService {
   /**
@@ -10,47 +15,54 @@ export class StorageService {
    * returns BOTH the signed URL (for direct display) and the Storage path
    * (persisted in Firestore so URLs can be re-signed later).
    *
-   * Fail-open: on any failure the ORIGINAL url is returned with path=null —
-   * a working ephemeral URL beats a broken page.
+   * Fail-open only for allowlisted provider URLs (ephemeral fal beats a blank
+   * page). Disallowed hosts fail closed — never store an untrusted URL.
    */
   async persistImageFromUrl(
     url: string,
     path: string
   ): Promise<{ url: string; path: string | null }> {
+    // gs:// bucket paths are already ours.
+    if (url.startsWith("gs://")) {
+      const withoutScheme = url.slice("gs://".length);
+      const slash = withoutScheme.indexOf("/");
+      const existingPath = slash >= 0 ? withoutScheme.slice(slash + 1) : null;
+      return { url, path: existingPath || null };
+    }
+
+    let parsed: URL;
     try {
-      // Already ours (previous persist or fal-provider webp upload) → keep as is,
-      // but recover the object path from the signed URL so Firestore can re-sign
-      // it later (format: https://storage.googleapis.com/<bucket>/<path>?X-Goog-…).
-      if (url.includes("storage.googleapis.com") || url.startsWith("gs://")) {
-        try {
-          const u = new URL(url);
-          const segments = u.pathname.split("/").filter(Boolean);
-          const existingPath = decodeURIComponent(segments.slice(1).join("/"));
-          return { url, path: existingPath || null };
-        } catch {
-          return { url, path: null };
-        }
+      parsed = assertSafeImageUrl(url);
+    } catch (err) {
+      console.warn(`persistImageFromUrl rejected unsafe URL for ${path}`, err);
+      throw new AppError("VALIDATION_ERROR", "URL d'image non autorisée", 400);
+    }
+
+    try {
+      // Already ours (signed Storage URL) → keep as is, recover object path.
+      if (
+        parsed.hostname === "storage.googleapis.com" ||
+        parsed.hostname === "firebasestorage.googleapis.com"
+      ) {
+        const segments = parsed.pathname.split("/").filter(Boolean);
+        const existingPath = decodeURIComponent(segments.slice(1).join("/"));
+        return { url, path: existingPath || null };
       }
-      // SSRF guard: only pull images from known providers — never internal
-      // hosts or arbitrary user-influenced URLs.
-      const host = new URL(url).hostname;
-      const allowed =
-        host === "fal.media" ||
-        host.endsWith(".fal.media") ||
-        host === "storage.googleapis.com" ||
-        host === "firebasestorage.googleapis.com" ||
-        host === "placehold.co";
-      if (!allowed) throw new Error(`host not allowed: ${host}`);
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`fetch ${res.status}`);
-      const raw = new Uint8Array(await res.arrayBuffer());
+
+      const raw = await fetchSafeImageBytes(url);
       const png =
         detectImageFormat(raw) === "png" ? Buffer.from(raw) : await toPngBuffer(raw);
       const signedUrl = await this.uploadBytes(path, png, "image/png");
       return { url: signedUrl, path };
     } catch (err) {
-      console.warn(`persistImageFromUrl failed for ${path}; keeping source URL`, err);
-      return { url, path: null };
+      // Only keep the source URL when it is still an allowlisted provider
+      // (typically fal.media) — never persist an arbitrary/untrusted URL.
+      if (isAllowedImageHost(parsed.hostname)) {
+        console.warn(`persistImageFromUrl failed for ${path}; keeping source URL`, err);
+        return { url, path: null };
+      }
+      console.warn(`persistImageFromUrl failed for ${path}`, err);
+      throw new AppError("INTERNAL_ERROR", "Persistance image impossible", 500);
     }
   }
 

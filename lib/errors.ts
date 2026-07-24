@@ -11,6 +11,7 @@ export type AppErrorCode =
   | "GENERATION_FAILED"
   | "PAYMENT_FAILED"
   | "TIMEOUT"
+  | "CONFLICT"
   | "INTERNAL_ERROR";
 
 export class AppError extends Error {
@@ -18,7 +19,8 @@ export class AppError extends Error {
     public code: AppErrorCode,
     message: string,
     public status: number = 400,
-    public action?: string
+    public action?: string,
+    public details?: Record<string, unknown>
   ) {
     super(message);
     this.name = "AppError";
@@ -89,6 +91,11 @@ export const ERROR_MESSAGES: Record<
     description: "L’opération a pris trop de temps. Réessayez ou continuez avec le brief de secours.",
     action: "Réessayer",
   },
+  CONFLICT: {
+    title: "Déjà en cours",
+    description: "Une opération est déjà en cours pour cette ressource.",
+    action: "Continuer",
+  },
   INTERNAL_ERROR: {
     title: "Petit souci technique",
     description: "Nous avons rencontré un petit problème. Essayons à nouveau.",
@@ -111,6 +118,7 @@ export function apiError(error: unknown) {
           message: error.message || meta.description,
           title: meta.title,
           action: error.action || meta.action,
+          ...(error.details ? { details: error.details } : {}),
         },
       },
       { status: error.status }

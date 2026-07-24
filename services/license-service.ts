@@ -404,7 +404,21 @@ export class LicenseService {
    */
   private assertProductMatch(license: ChariowLicense) {
     const expectedId = process.env.CHARIOW_PRODUCT_ID?.trim();
-    if (!expectedId) return; // product scoping not enabled
+    if (!expectedId) {
+      // Fail closed in production when Chariow is configured — otherwise any
+      // usable store license could unlock Meeradraw.
+      if (
+        process.env.NODE_ENV === "production" &&
+        LicenseService.isConfigured()
+      ) {
+        throw new AppError(
+          "INTERNAL_ERROR",
+          "CHARIOW_PRODUCT_ID non configuré — vérification produit impossible.",
+          500
+        );
+      }
+      return;
+    }
 
     const productId =
       license.product?.id != null ? String(license.product.id) : null;
@@ -431,22 +445,45 @@ export class LicenseService {
       last_validated_at: new Date().toISOString(),
     };
 
-    await this.db.collection("users").doc(userId).set(
-      {
-        chariow_license: payload,
-        updated_at: new Date().toISOString(),
-      },
-      { merge: true }
-    );
-
-    await this.db.collection("licenses").doc(license.id).set(
-      {
-        ...payload,
-        user_id: userId,
-        updated_at: new Date().toISOString(),
-      },
-      { merge: true }
-    );
+    // One local owner per license id: reject if another account already holds
+    // an active binding for this key.
+    const licenseRef = this.db.collection("licenses").doc(license.id);
+    await this.db.runTransaction(async (tx) => {
+      const existing = await tx.get(licenseRef);
+      if (existing.exists) {
+        const owner = existing.data()?.user_id;
+        const active = existing.data()?.is_active === true;
+        if (
+          typeof owner === "string" &&
+          owner !== userId &&
+          active &&
+          payload.is_active
+        ) {
+          throw new AppError(
+            "FORBIDDEN",
+            "Ce code d'accès est déjà lié à un autre compte.",
+            403
+          );
+        }
+      }
+      tx.set(
+        this.db.collection("users").doc(userId),
+        {
+          chariow_license: payload,
+          updated_at: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+      tx.set(
+        licenseRef,
+        {
+          ...payload,
+          user_id: userId,
+          updated_at: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    });
   }
 
   private async markLinkedInactive(userId: string, status: string) {

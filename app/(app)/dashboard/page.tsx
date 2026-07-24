@@ -15,6 +15,8 @@ const STORE_URL = process.env.NEXT_PUBLIC_CHARIOW_STORE_URL;
 export default async function DashboardPage() {
   let universes: Array<{ id: string; title: string; description: string | null; cover_image: string | null }> = [];
   let books: Array<{ id: string; title: string; status: string; cover_image: string | null; page_count: number }> = [];
+  let totalUniverses = 0;
+  let totalBooks = 0;
   let credits = 0;
   let name = "Créateur";
   let needsLicense = false;
@@ -29,6 +31,8 @@ export default async function DashboardPage() {
     ]);
     const recency = (d: { updated_at?: string; created_at?: string }) =>
       d.updated_at || d.created_at || "";
+    totalUniverses = uSnap.size;
+    totalBooks = bSnap.size;
     universes = uSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() as Omit<(typeof universes)[0], "id">) }))
       .sort((a, b) => recency(b as never).localeCompare(recency(a as never)))
@@ -100,7 +104,7 @@ export default async function DashboardPage() {
           </div>
           <div>
             <p className="text-sm text-ink-muted">Univers</p>
-            <p className="font-display text-2xl">{universes.length}</p>
+            <p className="font-display text-2xl">{totalUniverses}</p>
           </div>
         </Card>
         <Card className="flex items-center gap-4">
@@ -109,7 +113,7 @@ export default async function DashboardPage() {
           </div>
           <div>
             <p className="text-sm text-ink-muted">Livres</p>
-            <p className="font-display text-2xl">{books.length}</p>
+            <p className="font-display text-2xl">{totalBooks}</p>
           </div>
         </Card>
       </div>

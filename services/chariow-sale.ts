@@ -73,6 +73,77 @@ export async function applyChariowSale(db: Firestore, payload: SalePayload) {
   return { credited: pack.credits, pack: pack.id, pending: false, userId };
 }
 
+/**
+ * Reverse credits granted by a prior `successful.sale` when Chariow reports a
+ * refund/cancellation. Idempotent via `chariow:<saleId>:clawback`. Debits at
+ * most the live balance (never goes negative); remaining debt is recorded on
+ * the sale doc for ops reconciliation.
+ */
+export async function reverseChariowSale(db: Firestore, payload: SalePayload) {
+  const { saleId, productId, email } = extractSale(payload);
+  const pack = packForChariowProduct(productId);
+
+  if (!saleId) {
+    return { reversed: 0, pack: null, pending_cancelled: false };
+  }
+
+  // Cancel any parked pending credit for this sale.
+  const pendingRef = db.collection("chariow_pending_credits").doc(saleId);
+  const pendingSnap = await pendingRef.get();
+  let pendingCancelled = false;
+  if (pendingSnap.exists && pendingSnap.data()?.status === "pending") {
+    await pendingRef.set(
+      {
+        status: "cancelled",
+        cancelled_at: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+    pendingCancelled = true;
+  }
+
+  if (!pack) {
+    return { reversed: 0, pack: null, pending_cancelled: pendingCancelled };
+  }
+
+  const userId = email ? await findUserIdByEmail(db, email) : null;
+  if (!userId) {
+    return { reversed: 0, pack: pack.id, pending_cancelled: pendingCancelled };
+  }
+
+  const credits = new CreditService(db);
+  const balance = await credits.getBalance(userId);
+  const toClaw = Math.min(balance, pack.credits);
+  if (toClaw > 0) {
+    await credits.debit(
+      userId,
+      toClaw,
+      `Annulation achat ${pack.name} — reprise de ${toClaw} crédits`,
+      `chariow:${saleId}:clawback`
+    );
+  }
+  const debt = pack.credits - toClaw;
+  await db.collection("chariow_sale_reversals").doc(saleId).set(
+    {
+      sale_id: saleId,
+      user_id: userId,
+      pack_id: pack.id,
+      requested: pack.credits,
+      reversed: toClaw,
+      debt,
+      created_at: new Date().toISOString(),
+    },
+    { merge: true }
+  );
+  return {
+    reversed: toClaw,
+    debt,
+    pack: pack.id,
+    pending_cancelled: pendingCancelled,
+    userId,
+  };
+}
+
 async function findUserIdByEmail(db: Firestore, email: string): Promise<string | null> {
   const snap = await db.collection("users").where("email", "==", email).limit(1).get();
   if (!snap.empty) return snap.docs[0].id;

@@ -1,7 +1,7 @@
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { LicenseService } from "@/services/license-service";
-import { applyChariowSale } from "@/services/chariow-sale";
+import { applyChariowSale, reverseChariowSale } from "@/services/chariow-sale";
 import { timingSafeEqual } from "crypto";
 
 /**
@@ -48,7 +48,6 @@ export async function POST(request: Request) {
         throw new AppError("FORBIDDEN", "Signature webhook invalide", 403);
       }
     } else if (process.env.NODE_ENV === "production") {
-      // Fail closed: never accept unauthenticated webhooks in production.
       throw new AppError(
         "FORBIDDEN",
         "Webhook non configuré (CHARIOW_WEBHOOK_SECRET requis).",
@@ -60,16 +59,27 @@ export async function POST(request: Request) {
     const db = getAdminDb();
     const result = await new LicenseService(db).handleWebhookEvent(payload);
 
-    // Credit packs: a successful sale of one of our Chariow products adds the
-    // pack's credits to the buyer's account (idempotent per sale_id; parked in
-    // chariow_pending_credits when the buyer has no account yet).
     const event = String(payload?.event || payload?.type || "").toLowerCase();
     let sale: Awaited<ReturnType<typeof applyChariowSale>> | null = null;
+    let reversal: Awaited<ReturnType<typeof reverseChariowSale>> | null = null;
+
     if (event === "successful.sale") {
       sale = await applyChariowSale(db, payload);
+    } else if (
+      event.includes("refund") ||
+      event.includes("cancel") ||
+      event === "failed.sale"
+    ) {
+      reversal = await reverseChariowSale(db, payload);
     }
 
-    return apiSuccess(sale ? { ...result, sale } : result);
+    return apiSuccess(
+      sale
+        ? { ...result, sale }
+        : reversal
+          ? { ...result, reversal }
+          : result
+    );
   } catch (e) {
     return apiError(e);
   }

@@ -61,6 +61,12 @@ export class BookService {
       title?: string;
     }
   ): Promise<Book> {
+    // Cross-tenant guard: never attach a book to someone else's universe.
+    const universeSnap = await this.db.collection("universes").doc(input.universe_id).get();
+    if (!universeSnap.exists || universeSnap.data()?.user_id !== userId) {
+      throw new AppError("NOT_FOUND", "Univers introuvable", 404);
+    }
+
     const id = randomUUID();
     const now = new Date().toISOString();
     const data = {
@@ -76,6 +82,8 @@ export class BookService {
       subtitle: null,
       status: "draft" as const,
       cover_image: null,
+      cover_image_path: null,
+      active_generation_id: null,
       pdf_url: null,
       created_at: now,
       updated_at: now,
@@ -86,10 +94,15 @@ export class BookService {
 
   async update(userId: string, id: string, input: Record<string, unknown>): Promise<Book> {
     await this.get(userId, id);
+    // Never let callers reassign ownership or universe via update.
+    const safe = { ...input };
+    delete safe.user_id;
+    delete safe.universe_id;
+    delete safe.id;
     await this.db
       .collection("books")
       .doc(id)
-      .update({ ...input, updated_at: new Date().toISOString() });
+      .update({ ...safe, updated_at: new Date().toISOString() });
     return this.get(userId, id);
   }
 

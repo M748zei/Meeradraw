@@ -20,7 +20,7 @@ const patchSchema = z.object({
   description: z.string().max(2000).optional(),
   language: z.string().optional(),
   audience_age: z.string().optional(),
-  cover_image: z.string().optional(),
+  // cover_image omitted — set only by the generation pipeline.
   visibility: z.enum(["private", "public"]).optional(),
 });
 
