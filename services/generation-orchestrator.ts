@@ -612,20 +612,17 @@ export class GenerationOrchestrator {
         scene || storyText || plan.summary,
         page.shot_type ? `Shot: ${page.shot_type}.` : "",
         page.comic_beat ? `Beat: ${page.comic_beat}.` : "",
-        "Mandatory rich colorable environment matching the caption. No empty white void. Simplified mitten hands. Max 2 characters. Full figures inside frame with margins.",
+        "Wide full-scene coloring page: rich environment with many large props matching the caption. Hero child is part of the scene, not a portrait. No empty white void. Eyes with dark pupils. Simplified mitten hands. Max 2 characters.",
       ]
         .filter(Boolean)
         .join(" ");
 
       const pageStats: ImageQcStats = {};
-      // Parent: always prefer the hero crop (char_1) for likeness; never full lineup.
+      // Parent books: NEVER feed the white-background photo sheet into Kontext for
+      // pages — it bleeds empty voids. Likeness comes from visualLock text + Ideogram.
       // Studio: solo crop only; duo+ text-only.
-      const heroCrop = sheetCrops["char_1"]?.url;
       const pageReference = isParentBook(book)
-        ? heroCrop ||
-          (characterIds.length === 1
-            ? sheetCrops[characterIds[0]]?.url
-            : undefined)
+        ? undefined
         : characterIds.length === 1 && sheetCrops[characterIds[0]]?.url
           ? sheetCrops[characterIds[0]].url
           : undefined;
@@ -638,6 +635,12 @@ export class GenerationOrchestrator {
         settingBible?.elements,
         `${scene} ${storyText}`
       );
+      // Prefer wide shots for parent pages so the model fills scenery.
+      const shotType = isParentBook(book)
+        ? page.shot_type === "close_safe"
+          ? "wide"
+          : page.shot_type || "wide"
+        : (page.shot_type as string) || undefined;
       const image = await imageProvider.generateImage({
         prompt: scenePrompt,
         style,
@@ -647,8 +650,9 @@ export class GenerationOrchestrator {
         worldSetting,
         isColoringPage: true,
         referenceImageUrl: pageReference,
+        forceTextOnly: isParentBook(book),
         refScene: (page.ref_scene as string) || undefined,
-        shotType: (page.shot_type as string) || undefined,
+        shotType,
         comicBeat: (page.comic_beat as string) || undefined,
         action: (page.action as string) || undefined,
         settingElements,

@@ -348,27 +348,36 @@ export function normalizeStoryPlan(plan: StoryPlan, pageCount: number): StoryPla
   });
 
   // Pad to exact pageCount so parent books never ship short of the paid page count.
+  // Invent DISTINCT continuing scenes — never copy-paste "(suite)" / same caption.
   const heroId = characters[0]?.id || "char_1";
+  const heroName = characters[0]?.name || "Le héros";
+  const worldSetting = (plan.world?.setting || "le monde de l'histoire").trim();
+  const padTemplates = buildPadSceneTemplates(heroName, worldSetting);
+  let padIdx = 0;
   while (pages.length < pageCount) {
     const n = pages.length + 1;
-    const prev = pages[pages.length - 1];
+    const tpl = padTemplates[padIdx % padTemplates.length];
+    padIdx++;
+    const isLast = n >= pageCount;
     pages.push({
       pageNumber: n,
-      title: prev?.title ? `${prev.title} (suite)` : `Page ${n}`,
-      storyText:
-        prev?.storyText ||
-        `${characters[0]?.name || "Le héros"} poursuit l'aventure avec courage.`,
-      action:
-        prev?.action ||
-        `${characters[0]?.name || "hero"} continues the adventure mid-motion`,
+      title: isLast ? tpl.resolutionTitle : tpl.title,
+      storyText: isLast ? tpl.resolutionStory : tpl.storyText,
+      action: isLast ? tpl.resolutionAction : tpl.action,
       characterIds: [heroId],
-      characterPoses: { [heroId]: "dynamic full-body pose mid-action" },
-      comicBeat: n >= pageCount ? "resolution" : "action",
-      shotType: n % 2 === 0 ? "mid_shot" : "full_body",
-      camera: n % 2 === 0 ? "side view child eye level" : "three-quarter view",
-      pageSetting: prev?.pageSetting || plan.world?.setting || "story world",
-      focalPoint: characters[0]?.name || "hero",
-      illustrationDescription: `${characters[0]?.name || "Hero"} in a new dynamic pose in the story setting. Full body, rich environment.`,
+      characterPoses: {
+        [heroId]: isLast
+          ? "joyful full-body pose celebrating with open arms"
+          : tpl.pose,
+      },
+      comicBeat: isLast ? "resolution" : tpl.comicBeat,
+      shotType: isLast ? "wide" : tpl.shotType,
+      camera: tpl.camera,
+      pageSetting: tpl.pageSetting,
+      focalPoint: heroName,
+      illustrationDescription: isLast
+        ? `${heroName} celebrates the happy ending in ${tpl.pageSetting}. Wide shot, rich colorable environment filling the page.`
+        : tpl.illustrationDescription,
       negativePrompt: DEFAULT_PAGE_NEGATIVE,
     });
   }
@@ -521,7 +530,146 @@ export function settingElementsForScene(
 
 /** Reasonable per-page negative used when the model omits one. */
 const DEFAULT_PAGE_NEGATIVE =
-  "color, grayscale, shading, gradients, filled black areas, photorealism, blurry, text, watermark, extra fingers, fused fingers, floating head, cropped limbs, extra people, duplicate characters, inconsistent character design, empty white void";
+  "color, grayscale, shading, gradients, filled black areas, photorealism, blurry, text, watermark, extra fingers, fused fingers, floating head, cropped limbs, extra people, duplicate characters, inconsistent character design, empty white void, blank white eyes, hollow eyes, pupil-less eyes, elongated skull, deformed head, misshapen cranium";
+
+/**
+ * Distinct French scene templates used when the LLM returns fewer pages than
+ * paid pageCount. Each pad page must advance the story with a NEW action/setting —
+ * never append "(suite)" to a copied title/caption.
+ */
+function buildPadSceneTemplates(
+  heroName: string,
+  worldSetting: string
+): Array<{
+  title: string;
+  storyText: string;
+  action: string;
+  pose: string;
+  comicBeat: NonNullable<StoryPlan["pages"][number]["comicBeat"]>;
+  shotType: NonNullable<StoryPlan["pages"][number]["shotType"]>;
+  camera: string;
+  pageSetting: string;
+  illustrationDescription: string;
+  resolutionTitle: string;
+  resolutionStory: string;
+  resolutionAction: string;
+}> {
+  const w = worldSetting || "le monde de l'histoire";
+  return [
+    {
+      title: `Le chemin secret`,
+      storyText: `${heroName} découvre un sentier caché bordé d'arbres et de fleurs.`,
+      action: `${heroName} walking along a hidden path, pointing at a discovery ahead`,
+      pose: "walking mid-stride, one arm pointing forward",
+      comicBeat: "action",
+      shotType: "wide",
+      camera: "three-quarter view child eye level",
+      pageSetting: `sentier bordé d'arbres dans ${w}`,
+      illustrationDescription: `${heroName} walks a winding path with trees, rocks, flowers and sky filling the page. Wide shot, rich environment.`,
+      resolutionTitle: `La belle fin`,
+      resolutionStory: `${heroName} rentre heureux, le cœur plein de souvenirs.`,
+      resolutionAction: `${heroName} celebrating happily with arms open in a warm final scene`,
+    },
+    {
+      title: `L'aide inattendue`,
+      storyText: `${heroName} aide un petit animal coincé près d'un ruisseau.`,
+      action: `${heroName} kneeling by a stream carefully helping a small animal`,
+      pose: "kneeling full-body, gentle hands near water",
+      comicBeat: "help",
+      shotType: "full_body",
+      camera: "side view child eye level",
+      pageSetting: `ruisseau et berges dans ${w}`,
+      illustrationDescription: `${heroName} kneels by a stream with water, stones, plants and sky. Full body in a busy colorable scene.`,
+      resolutionTitle: `Retour au calme`,
+      resolutionStory: `${heroName} sourit, l'aventure se termine en douceur.`,
+      resolutionAction: `${heroName} smiling and waving goodbye in a peaceful closing scene`,
+    },
+    {
+      title: `Le petit marché`,
+      storyText: `${heroName} explore un marché coloré plein de paniers et d'étoffes.`,
+      action: `${heroName} browsing market stalls, reaching for a basket`,
+      pose: "standing reaching toward a stall basket",
+      comicBeat: "action",
+      shotType: "wide",
+      camera: "slight high angle wide",
+      pageSetting: `marché avec étals dans ${w}`,
+      illustrationDescription: `${heroName} at a lively market with stalls, baskets, cloths, ground and sky filling the frame.`,
+      resolutionTitle: `Fête du retour`,
+      resolutionStory: `${heroName} célèbre avec joie la fin de l'aventure.`,
+      resolutionAction: `${heroName} dancing happily among friends in a festive final scene`,
+    },
+    {
+      title: `Sous le grand arbre`,
+      storyText: `${heroName} se repose à l'ombre d'un grand arbre et observe les oiseaux.`,
+      action: `${heroName} sitting under a large tree looking up at birds in the branches`,
+      pose: "sitting cross-legged looking upward",
+      comicBeat: "emotion",
+      shotType: "full_body",
+      camera: "low angle looking slightly up",
+      pageSetting: `grand arbre et clairière dans ${w}`,
+      illustrationDescription: `${heroName} under a huge tree with canopy, roots, grass, birds and sky. Rich colorable nature scene.`,
+      resolutionTitle: `Ciel étoilé`,
+      resolutionStory: `${heroName} regarde le ciel, heureux d'avoir réussi.`,
+      resolutionAction: `${heroName} looking at a gentle starry sky with a warm smile`,
+    },
+    {
+      title: `Le pont de planches`,
+      storyText: `${heroName} traverse un petit pont de planches au-dessus de l'eau.`,
+      action: `${heroName} carefully crossing a wooden plank bridge mid-step`,
+      pose: "mid-step on a bridge, arms balancing",
+      comicBeat: "obstacle",
+      shotType: "wide",
+      camera: "side view dynamic",
+      pageSetting: `pont de planches et rivière dans ${w}`,
+      illustrationDescription: `${heroName} crossing a plank bridge with river, banks, trees and sky filling the page edges.`,
+      resolutionTitle: `Maison douce`,
+      resolutionStory: `${heroName} retrouve un lieu doux et se sent en sécurité.`,
+      resolutionAction: `${heroName} arriving home with a joyful wave`,
+    },
+    {
+      title: `La chasse au trésor`,
+      storyText: `${heroName} cherche un trésor caché derrière des rochers fleuris.`,
+      action: `${heroName} climbing over flowered rocks searching for a hidden treasure`,
+      pose: "climbing over rocks, curious lean forward",
+      comicBeat: "action",
+      shotType: "full_body",
+      camera: "three-quarter view",
+      pageSetting: `rochers fleuris dans ${w}`,
+      illustrationDescription: `${heroName} among flowered rocks, plants, path and sky — busy wide coloring scene.`,
+      resolutionTitle: `Victoire joyeuse`,
+      resolutionStory: `${heroName} a trouvé ce qu'il fallait et rit de bonheur.`,
+      resolutionAction: `${heroName} holding a small found treasure with a big smile`,
+    },
+    {
+      title: `Danse sous la pluie légère`,
+      storyText: `${heroName} danse sous une pluie douce près des cases du village.`,
+      action: `${heroName} dancing joyfully in light rain near village huts`,
+      pose: "dancing with arms raised, one foot lifted",
+      comicBeat: "emotion",
+      shotType: "wide",
+      camera: "front three-quarter wide",
+      pageSetting: `cour de village sous la pluie dans ${w}`,
+      illustrationDescription: `${heroName} dancing in light rain with huts, ground puddles, trees and cloudy sky filling the page.`,
+      resolutionTitle: `Câlin final`,
+      resolutionStory: `${heroName} partage un moment tendre pour clore l'histoire.`,
+      resolutionAction: `${heroName} in a warm gentle closing embrace pose with soft scenery`,
+    },
+    {
+      title: `Les lanternes du soir`,
+      storyText: `${heroName} allume des lanternes pour guider les amis le long du chemin.`,
+      action: `${heroName} hanging paper lanterns along an evening path`,
+      pose: "reaching up to hang a lantern",
+      comicBeat: "help",
+      shotType: "full_body",
+      camera: "side view child eye level",
+      pageSetting: `chemin du soir avec lanternes dans ${w}`,
+      illustrationDescription: `${heroName} hanging lanterns along a path with houses, trees and soft evening sky filling the frame.`,
+      resolutionTitle: `Bonne nuit heureuse`,
+      resolutionStory: `${heroName} s'endort le cœur léger après l'aventure.`,
+      resolutionAction: `${heroName} waving goodnight under a soft evening sky`,
+    },
+  ];
+}
 
 /**
  * Animal characters must stay REAL quadrupeds. The LLM occasionally writes bipedal

@@ -336,17 +336,17 @@ export function analyzePngRegions(
 /**
  * True when the page looks like a subject floating on an empty background: the
  * center carries real ink but the outer margin/background band is nearly empty.
- * Conservative thresholds so pages with a genuine environment are NOT rejected.
+ * Tuned to catch "character-only" coloring pages with almost nothing to color.
  */
 export function hasPoorEnvironment(bytes: Uint8Array): boolean {
   const res = analyzePngRegions(bytes);
   if (!res) return false; // can't analyze → don't reject
   if (res.inkRatio < 0.004) return false; // blank page handled by the blank guard
-  // Only flag the clearest "floating subject on empty void" cases: a real subject in the
-  // center with an almost-completely-empty surrounding band. Thresholds intentionally
-  // conservative so Run-1-quality pages (which have some real background) are NOT flagged;
-  // this guard only triggers a re-roll and never rejects a page outright.
-  return res.centerInkRatio > 0.02 && res.borderInkRatio < 0.003;
+  // Character floating on near-white void (few grass tufts still count as poor).
+  if (res.centerInkRatio > 0.015 && res.borderInkRatio < 0.008) return true;
+  // Very low total ink with most of it in the center = portrait on empty page.
+  if (res.inkRatio < 0.035 && res.centerInkRatio > res.borderInkRatio * 3) return true;
+  return false;
 }
 
 /**

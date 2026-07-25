@@ -405,7 +405,8 @@ export const COLORING_NEGATIVE_PROMPT = [
   "empty white void, blank background, floating characters, only grass tufts,",
   "scary, creepy, distorted anatomy, disfigured, nsfw,",
   "blank white eyes, hollow eyes, empty eyes, staring void eyes, pupil-less eyes, black empty sockets,",
-  "horror, nightmare, traumatic face, uncanny valley, dead stare",
+  "horror, nightmare, traumatic face, uncanny valley, dead stare,",
+  "elongated skull, deformed head, misshapen cranium, giant forehead blob, stretched face",
 ].join(" ");
 
 /**
@@ -420,10 +421,14 @@ export const ANTI_LINEUP_NEGATIVE =
 
 /** Soft, printable child faces — injected into covers and pages. */
 export const CHILD_SAFE_FACE_POSITIVE =
-  "Friendly warm cartoon child faces: big expressive eyes WITH clear pupils and small catchlights, soft rounded cheeks, gentle smile, never blank white eyes, never hollow or staring eyes, never creepy or scary.";
+  "Friendly warm cartoon child faces: each eye MUST show a clear dark pupil AND iris inside a neat eye outline (closed shapes to color), soft rounded cheeks, gentle smile, natural round child head proportions — NEVER blank white eyes, NEVER hollow staring eyes, NEVER elongated or deformed skull, NEVER creepy.";
 
 export const CHILD_SAFE_FACE_NEGATIVE =
-  "blank white eyes, hollow eyes, empty eyes, pupil-less eyes, staring void eyes, black empty sockets, creepy face, horror, nightmare, uncanny valley, traumatic expression, dead stare, sharp teeth";
+  "blank white eyes, hollow eyes, empty eyes, pupil-less eyes, staring void eyes, black empty sockets, creepy face, horror, nightmare, uncanny valley, traumatic expression, dead stare, sharp teeth, elongated skull, deformed head, misshapen cranium, giant forehead blob";
+
+/** Mandatory rich scenery so children have lots to color beyond the hero. */
+export const RICH_ENVIRONMENT_POSITIVE =
+  "MANDATORY RICH COLORABLE ENVIRONMENT filling the whole page edge-to-edge: draw ground/path, sky or canopy, at least 4–6 large props from the scene (trees, baobab, huts, market stalls, baskets, cloths, bridge planks, rocks, flowers, fences, pots). The hero child occupies at most ~40% of the frame. Background and mid-ground must be full of closed shapes to color. FORBIDDEN: empty white void, character floating alone, portrait on blank paper, only 1–2 grass tufts.";
 
 /** Build the final negative prompt for a page (shared base + anti-lineup + optional page/world-specific). */
 export function buildNegativePrompt(pageNegative?: string, worldNegative?: string): string {
@@ -484,7 +489,9 @@ export function buildColoringPagePrompt(params: {
       : "",
     "The characters are IN THE MIDDLE OF THE ACTION described in the scene — dynamic distinct poses, NOT standing in a row, NOT posing front-facing side by side, NOT a static group photo.",
     CHILD_SAFE_FACE_POSITIVE,
-    "Fill the page with the background — never an empty white void or floating characters. Full bodies inside the frame, simple mitten-style kid hands, at most 2 characters, no extra people.",
+    RICH_ENVIRONMENT_POSITIVE,
+    "Prefer a wide or full-body shot inside a busy scene — avoid tight portrait close-ups with empty backgrounds.",
+    "Full bodies inside the frame, simple mitten-style kid hands, at most 2 characters, no extra people.",
     params.comicBeat ? `Story beat: ${params.comicBeat}.` : "",
   ]
     .filter(Boolean)
@@ -629,12 +636,14 @@ export function buildReferenceGuidedScenePrompt(params: {
   // Prefer compact when scene is already structured (refScene / buildCompactScene).
   if ((params.scene || "").length < 420) {
     return [
-      "PURE B&W children's coloring line art. Keep ONLY identity from reference (faces, hair, outfits, species). DISCARD reference lineup/poses/background.",
+      "PURE B&W children's coloring line art. Keep ONLY identity from reference (faces, hair, outfits, species). DISCARD reference poses AND plain white background completely.",
       params.action ? `ACTION mid-motion: ${params.action}.` : "",
-      `SCENE: ${params.scene}`,
-      anchors.length ? `Setting: ${anchors.join(", ")}.` : "",
+      `SCENE with RICH ENVIRONMENT filling the page: ${params.scene}`,
+      anchors.length ? `Draw these props large: ${anchors.join(", ")}.` : "",
+      RICH_ENVIRONMENT_POSITIVE,
+      CHILD_SAFE_FACE_POSITIVE,
       styleKontextCue(params.style),
-      "New camera + dynamic poses. No front-facing standing row. Full bodies in frame. No color, no text.",
+      "New camera + dynamic poses. Wide scene, hero smaller in frame. No blank void. No color, no text.",
     ]
       .filter(Boolean)
       .join(" ");

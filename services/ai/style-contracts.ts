@@ -30,7 +30,7 @@ export type StyleContract = {
 };
 
 const BASE_COLORING =
-  "Bold uniform black outlines, closed shapes, large colorable white areas, pure B&W line art, no grey shading, no color fills, no photorealism, no text, no watermark.";
+  "Bold uniform black outlines, closed shapes, large colorable white areas, pure B&W line art, no grey shading, no color fills, no photorealism, no text, no watermark. Friendly child faces with dark pupils and iris in each eye; natural round child heads — never blank white eyes, never elongated or deformed skulls.";
 
 const CONTRACTS: Record<StyleId, StyleContract> = {
   simple: {
@@ -55,7 +55,7 @@ const CONTRACTS: Record<StyleId, StyleContract> = {
     worldBias:
       "Monde doux et rond : formes organiques, nuages mous, petites maisons arrondies, props mignons — jamais effrayant.",
     forbidden:
-      "no sharp angles, no scary teeth, no thin angular faces, no realistic anatomy, no dark horror mood",
+      "no sharp angles, no scary teeth, no thin angular faces, no blank white eyes, no elongated skull, no deformed head, no realistic anatomy, no dark horror mood",
   },
   cartoon: {
     id: "cartoon",
@@ -79,7 +79,7 @@ const CONTRACTS: Record<StyleId, StyleContract> = {
     worldBias:
       "Ambiance chaleureuse : maison, jardin, école douce, nature accueillante. Émotion douce.",
     forbidden:
-      "no harsh angles, no scary distortion, no overcrowded panels, no cold clinical look",
+      "no harsh angles, no scary distortion, no blank white eyes, no elongated skull, no deformed head, no overcrowded panels, no cold clinical look",
   },
   adventure: {
     id: "adventure",

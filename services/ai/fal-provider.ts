@@ -63,7 +63,9 @@ const CAST_FIX_BOOST =
 const TITLE_FIX_BOOST =
   "CRITICAL: the title text must be rendered LARGE, PERFECTLY LEGIBLE and CORRECTLY SPELLED in bold playful hand-lettering in the top band.";
 const ENV_BOOST =
-  "STRONGER ENVIRONMENT: fill the ENTIRE background with the scene setting (props, nature, weather, or architecture) reaching all page edges; absolutely no empty white void and no floating character.";
+  "CRITICAL ENVIRONMENT: fill AT LEAST 70% of the page with colorable scenery — ground, sky, trees, buildings, furniture, market stalls, props reaching the edges. The child is SMALLER in the frame. Absolutely NO empty white void, NO floating character on blank paper, NO portrait-only composition.";
+const EYES_BOOST =
+  "CRITICAL FACE: draw BOTH eyes with a dark pupil circle AND iris inside each eye outline — never blank white eyes, never empty ovals. Natural round child head, not elongated or deformed.";
 const LINEART_BOOST =
   "STRICT BLACK AND WHITE LINE ART ONLY: pure black outlines on white paper, absolutely NO color, no colored fills, no shading, no grey — a printable coloring page, NOT a colored illustration. No artist signature, no watermark, no text in the corners.";
 /** Re-roll nudge when the hero cast portrait came back B&W (degenerate) instead of colored. */
@@ -268,8 +270,10 @@ export class FalImageProvider implements ImageAIProvider {
         if (
           prevBlankOrEnv ||
           (!prevColored && !requireColored && !prevVisionNudges.length)
-        )
+        ) {
           nudges.push(ENV_BOOST);
+          nudges.push(EYES_BOOST);
+        }
         body.prompt = `${basePrompt} ${nudges.join(" ")}`;
       }
 
@@ -304,9 +308,13 @@ export class FalImageProvider implements ImageAIProvider {
       // degenerate B&W sheet (the "two generic boys" failure) → defect, re-roll.
       const notColored =
         requireColored && current.bytes && !blank ? !isColored(current.bytes) : false;
-      // A colored page is unusable as printable line art (weighted above a sparse B&W page);
-      // a blank page is the worst. Lower total = better.
-      const score = (blank ? 3 : 0) + (colored ? 2 : 0) + (notColored ? 2 : 0) + (poorEnv ? 1 : 0);
+      // Blank / empty-void pages are severe; poor environment is almost as bad for
+      // a coloring book (nothing to color). Weight it high so we re-roll hard.
+      const score =
+        (blank ? 3 : 0) +
+        (colored ? 2 : 0) +
+        (notColored ? 2 : 0) +
+        (poorEnv ? 3 : 0);
       prevBlankOrEnv = blank || poorEnv;
       prevColored = colored;
       prevNotColored = notColored;
