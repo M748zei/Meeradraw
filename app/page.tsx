@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { HeroDrawingLazy } from "@/components/landing/hero-drawing-lazy";
 import { PageGallery } from "@/components/landing/gallery";
 import { Reveal } from "@/components/landing/reveal";
+import { PARENT_PROMISE } from "@/config/parent-create";
 import {
   BookOpen,
   Check,
@@ -21,18 +22,18 @@ const STORE_URL = process.env.NEXT_PUBLIC_CHARIOW_STORE_URL;
 const steps = [
   {
     icon: Wand2,
-    title: "Racontez votre idée",
-    text: "Un paragraphe suffit. Comme si vous la racontiez à un ami.",
+    title: "Âge, thème, prénom",
+    text: "Choisissez l’âge de votre enfant, un thème, et ajoutez son prénom.",
   },
   {
     icon: Sparkles,
-    title: "Nous créons le livre",
-    text: "Histoire, personnages, illustrations et mise en page — tout est automatique.",
+    title: "Nous créons le cahier",
+    text: "Histoire, personnages cohérents, illustrations line art — tout est automatique.",
   },
   {
     icon: Printer,
-    title: "Téléchargez & partagez",
-    text: "Un PDF prêt à imprimer, en moins de cinq minutes.",
+    title: "Téléchargez le PDF",
+    text: "Un cahier parfait prêt à imprimer, en un clic.",
   },
 ];
 
@@ -123,15 +124,15 @@ export default function LandingPage() {
               <Sparkles className="h-3.5 w-3.5" /> Studio de livres de coloriage
             </span>
             <h1 className="max-w-xl font-display text-4xl leading-[1.08] text-ink md:text-6xl">
-              Racontez votre idée.
+              Meeradraw
               <br />
               <span className="bg-gradient-to-r from-sky-600 to-mint-400 bg-clip-text text-transparent">
-                Nous créons votre livre.
+                le cahier de votre enfant
               </span>
             </h1>
             <p className="mt-6 max-w-lg text-lg text-ink-muted">
-              Transformez une simple histoire en livre de coloriage professionnel —
-              cohérent, magnifique, prêt à imprimer. Sans prompt. Sans complexité.
+              {PARENT_PROMISE} Contenu adapté à l’âge, personnages cohérents, PDF prêt à
+              imprimer.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <PrimaryCta label={STORE_URL ? "Prendre mon accès" : "Ouvrir le studio"} />

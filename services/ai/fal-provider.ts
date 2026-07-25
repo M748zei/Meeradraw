@@ -55,7 +55,7 @@ const FAL_QUALITY_REROLLS = Number(process.env.FAL_QUALITY_REROLLS ?? 2);
  * ACCEPTED (fail-open — a static page beats a failed page). Each re-roll is an
  * internal fal cost, never billed to the customer.
  */
-const VISION_QC_REROLLS = Number(process.env.VISION_QC_REROLLS ?? 1);
+const VISION_QC_REROLLS = Number(process.env.VISION_QC_REROLLS ?? 2);
 const ANTI_LINEUP_BOOST =
   "CRITICAL: the characters must be IN MOTION doing the described action with distinct dynamic poses and a non-frontal camera angle — ABSOLUTELY NOT standing in a row, NOT front-facing side by side, NOT a static group photo, NOT a model sheet.";
 const CAST_FIX_BOOST =
@@ -347,11 +347,15 @@ export class FalImageProvider implements ImageAIProvider {
         } else if (input.isColoringPage && input.action) {
           const page = await checkPageAction(current.url, input.action);
           if (page && (page.lineup || !page.actionVisible)) {
-            visionScore += page.lineup ? 2 : 1;
+            // Lineup when vision responds = mandatory defect (score 3), never silent accept.
+            visionScore += page.lineup ? 3 : 1;
             prevVisionNudges.push(ANTI_LINEUP_BOOST);
             verdicts.push(
               `${page.lineup ? "lineup" : "action-missing"}:${page.issue || input.action.slice(0, 60)}`
             );
+            if (page.lineup) {
+              qcStats.lineupDetected = true;
+            }
           }
         }
         if (verdicts.length) {
@@ -422,6 +426,18 @@ export class FalImageProvider implements ImageAIProvider {
       throw lastError instanceof Error
         ? lastError
         : new Error("fal.ai produced no image");
+    }
+    // Lineup still present after vision re-rolls on a reference path → force
+    // text-only Ideogram fallback (composition bleed from the model sheet).
+    const isRefPath = label === "fal-ref" || /kontext/i.test(endpoint);
+    if (
+      isRefPath &&
+      input?.isColoringPage &&
+      qcStats.lineupDetected &&
+      best.score > 0 &&
+      (qcStats.visionVerdicts || []).some((v) => v.startsWith("lineup"))
+    ) {
+      throw new Error("lineup after vision re-rolls");
     }
     if (best.score > 0) {
       console.warn(`[${label}] keeping best available image after re-rolls (score ${best.score})`);
@@ -504,11 +520,11 @@ function buildFalBody(params: {
   };
 
   if (isKontext) {
-    // Kontext derives size from the reference image; keep the body minimal.
+    // Kontext derives size from the reference image. Lower guidance (~3) softens
+    // composition lock to the reference lineup; identity still comes from image_url.
+    // Do NOT send `strength` — Kontext schema rejects it.
     body.image_url = referenceImageUrl;
-    body.guidance_scale = Number(
-      process.env.FAL_REF_GUIDANCE || DEFAULT_GUIDANCE_SCALE
-    );
+    body.guidance_scale = Number(process.env.FAL_REF_GUIDANCE || 3.0);
     return body;
   }
 
@@ -531,7 +547,7 @@ function buildFalBody(params: {
   // Legacy img2img endpoints (non-Kontext) still use `strength`.
   if (useReference) {
     body.image_url = referenceImageUrl;
-    body.strength = Number(process.env.FAL_REF_STRENGTH || 0.55);
+    body.strength = Number(process.env.FAL_REF_STRENGTH || 0.3);
   }
 
   return body;

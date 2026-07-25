@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test:functional": "tsx scripts/functional-suite.ts",
     "test:functional:logic": "tsx scripts/functional-suite.ts --logic-only",
-    "test:functional:http": "tsx scripts/functional-suite.ts --http-only"
+    "test:functional:http": "tsx scripts/functional-suite.ts --http-only",
+    "test:bench-kai": "tsx scripts/bench-kai-fidelity.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

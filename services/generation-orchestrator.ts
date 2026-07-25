@@ -22,6 +22,7 @@ import { PDFService } from "@/services/pdf-service";
 import { StorageService } from "@/services/storage-service";
 import { isBlankOrTooFaint, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
+import { buildBookQualitySummary } from "@/lib/quality-score";
 import { refundForFailedPages } from "@/config/credits";
 import type { Book } from "@/types/database";
 import type { Firestore } from "firebase-admin/firestore";
@@ -118,15 +119,20 @@ export class GenerationOrchestrator {
     });
 
     const book = await this.books.get(userId, bookId);
-    const idea =
-      book.idea || book.original_idea || "Une aventure magique pour enfants";
+    const originalIdea =
+      book.original_idea || book.idea || "Une aventure magique pour enfants";
+    // Pipeline brief may be enriched — research/plan still anchor on original_idea.
+    const idea = book.idea || originalIdea;
     const style = book.style || "cute";
     const pageCount = book.page_count || 12;
     const universeId = book.universe_id;
     const audience = book.audience || book.audience_age || undefined;
+    const childName =
+      (typeof book.child_name === "string" && book.child_name.trim()) || undefined;
 
     const textProvider = getTextProvider();
-    const research = await textProvider.buildResearchBrief(idea);
+    // Research from original idea so style/enrichment cannot erase the hero/theme.
+    const research = await textProvider.buildResearchBrief(originalIdea);
 
     await this.updateGeneration(generationId, {
       current_step: "author",
@@ -138,7 +144,8 @@ export class GenerationOrchestrator {
       pageCount,
       style,
       research,
-      audience
+      audience,
+      { originalIdea, childName }
     );
 
     // firestoreSafe: LLM output may contain nested arrays / undefined that
@@ -148,7 +155,7 @@ export class GenerationOrchestrator {
         user_id: userId,
         universe_id: universeId,
         book_id: bookId,
-        original_prompt: book.original_idea || idea,
+        original_prompt: originalIdea,
         optimized_prompt: plan.summary,
         creative_brief: idea,
         research_brief: research,
@@ -521,12 +528,12 @@ export class GenerationOrchestrator {
         .join(" ");
 
       const pageStats: ImageQcStats = {};
-      // Benchmark winner: solo pages use the character's OWN crop as the
-      // reference (full lineup leaks the absent character back in).
+      // Solo: character crop. Duo+: NO full lineup sheet (lineup pose bleed) —
+      // prefer text-only Ideogram with visualLock text, or skip reference.
       const pageReference =
         characterIds.length === 1 && sheetCrops[characterIds[0]]?.url
           ? sheetCrops[characterIds[0]].url
-          : characterSheetUrl || undefined;
+          : undefined;
       const expectedCast = planPage
         ? expectedCastFor(charactersForPage(plan, planPage))
         : expectedCastFor(
@@ -682,13 +689,32 @@ export class GenerationOrchestrator {
       }
     }
 
-    const bookStatus = failedCount > 0 ? "partial" : "completed";
-    const genStatus = failedCount > 0 ? "partial" : "completed";
+    // QC telemetry first — quality score can force `partial` even when all pages rendered.
+    const qcStatsAll = await this.collectQcStats(generationId, pageDocs);
+    const qcSummary = summarizeQcStats(qcStatsAll);
+    const plannedPages = book.page_count || pageDocs.length;
+    const pageQc = pageDocs
+      .filter((p) => typeof p.page_number === "number")
+      .sort((a, b) => Number(a.page_number) - Number(b.page_number))
+      .map((p) => (p.qc_stats as ImageQcStats | undefined) || null);
+    const quality = buildBookQualitySummary({
+      pagesTotal: Math.max(plannedPages, pageDocs.length),
+      pagesOk: completedCount,
+      pageQc,
+      pixelRerolls: qcSummary.pixel_rerolls,
+      visionRerolls: qcSummary.vision_rerolls,
+    });
+
+    const bookStatus =
+      failedCount > 0 || quality.gate_partial ? "partial" : "completed";
+    const genStatus =
+      failedCount > 0 || quality.gate_partial ? "partial" : "completed";
 
     await this.books.update(userId, bookId, {
       status: bookStatus,
       pdf_url: pdfUrl,
       active_generation_id: null,
+      quality_summary: quality,
     });
 
     // Credits were reserved up-front for `book.page_count` pages in
@@ -696,7 +722,6 @@ export class GenerationOrchestrator {
     // receive — this covers both pages that failed to render AND pages the AI
     // plan never produced (plan shorter than requested). The customer pays
     // only for delivered pages (+ cover + PDF). Idempotent per generation.
-    const plannedPages = book.page_count || pageDocs.length;
     const notDelivered = Math.max(0, plannedPages - completedCount);
     // Clamped to the reservation: a refund can never exceed what was actually
     // reserved (trials reserve 0 → refund 0 → no way to mint free credits).
@@ -714,19 +739,20 @@ export class GenerationOrchestrator {
     }
     const creditsUsed = Math.max(0, cost - refund);
 
-    // QC telemetry (audit T5): re-roll rate = real internal fal cost. Logged
-    // per image on the generation doc so the rate is trackable over time.
-    const qcStatsAll = await this.collectQcStats(generationId, pageDocs);
-    const qcSummary = summarizeQcStats(qcStatsAll);
     console.log(
-      `[gen ${generationId}] QC re-rolls — pixel: ${qcSummary.pixel_rerolls}, vision: ${qcSummary.vision_rerolls}, images: ${qcSummary.images}`
+      `[gen ${generationId}] QC re-rolls — pixel: ${qcSummary.pixel_rerolls}, vision: ${qcSummary.vision_rerolls}, images: ${qcSummary.images}; quality score ${quality.score} (lineup ${quality.lineup_pct}%)`
     );
+
+    const qualityNote =
+      quality.gate_partial && failedCount === 0
+        ? `Qualité ${quality.score}/100 (${quality.label}) — ${quality.lineup_pct}% poses type alignement. Régénérez les pages concernées avant impression.`
+        : null;
 
     await this.updateGeneration(generationId, {
       status: genStatus,
       current_step: "editor",
       progress: 100,
-      qc_stats: qcSummary,
+      qc_stats: { ...qcSummary, quality },
       credits_used: creditsUsed,
       provider:
         process.env.MOCK_AI === "true"
@@ -738,7 +764,7 @@ export class GenerationOrchestrator {
       error_message:
         failedCount > 0
           ? `${failedCount} page(s) sans illustration — utilisez « Régénérer cette page ».`
-          : null,
+          : qualityNote,
     });
 
     // A delivered trial book consumes one free trial. Idempotent: the

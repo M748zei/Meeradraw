@@ -83,9 +83,20 @@ export default async function DashboardPage() {
             Bonjour {name}
             <Sparkles className="h-6 w-6 text-yellow-300" />
           </h1>
-          <p className="mt-2 text-ink-muted">Qu&apos;est-ce qu&apos;on crée aujourd&apos;hui ?</p>
+          <p className="mt-2 text-ink-muted">
+            Créez un cahier pour votre enfant — âge, thème, prénom, PDF prêt à imprimer.
+          </p>
         </div>
-        <Link href="/universes/new"><Button size="lg">Créer un nouvel univers</Button></Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/create">
+            <Button size="lg">Créer pour mon enfant</Button>
+          </Link>
+          <Link href="/universes/new">
+            <Button size="lg" variant="secondary">
+              Studio avancé
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -124,7 +135,12 @@ export default async function DashboardPage() {
           <Link href="/universes/new" className="text-sm font-semibold text-sky-600">Nouveau</Link>
         </div>
         {universes.length === 0 ? (
-          <EmptyState title="Votre premier univers n'attend plus que vous" description="Un univers contient vos personnages, histoires et livres." actionLabel="Créer un univers" actionHref="/universes/new" />
+          <EmptyState
+            title="Créez le cahier de votre enfant"
+            description="Âge, thème, prénom — un PDF prêt à imprimer en quelques minutes. Le studio avancé reste dispo pour les univers multi-livres."
+            actionLabel="Créer pour mon enfant"
+            actionHref="/create"
+          />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {universes.map((u) => (
@@ -153,7 +169,14 @@ export default async function DashboardPage() {
       <section>
         <h2 className="mb-4 font-display text-2xl">Derniers livres</h2>
         {books.length === 0 ? (
-          <p className="text-sm text-ink-muted">Aucun livre pour le moment. Créez un univers pour commencer.</p>
+          <div className="space-y-3">
+            <p className="text-sm text-ink-muted">
+              Aucun livre pour le moment. Commencez par le parcours parent.
+            </p>
+            <Link href="/create">
+              <Button>Créer pour mon enfant</Button>
+            </Link>
+          </div>
         ) : (
           <div className="grid gap-3">
             {books.map((b) => (

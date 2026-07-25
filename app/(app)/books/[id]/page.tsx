@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { PdfDownloadButton } from "@/components/books/pdf-download-button";
+import { QualityScoreCard } from "@/components/books/quality-score-card";
 import { RegeneratePageButton } from "@/components/books/regenerate-page-button";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -92,23 +93,37 @@ export default async function BookPage({ params }: Props) {
           {book.subtitle ? <p className="mt-2 text-lg text-ink-muted">{book.subtitle}</p> : null}
           <p className="mt-4 text-sm text-ink-muted">
             {book.page_count} pages · {book.status}
+            {book.child_name ? ` · pour ${book.child_name}` : ""}
           </p>
+          {book.quality_summary ? (
+            <QualityScoreCard quality={book.quality_summary} />
+          ) : null}
           {missingPages.length > 0 ? (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-ink">
               {missingPages.length} page(s) sans illustration. Utilisez « Régénérer cette page »
               sous chaque page manquante.
             </div>
           ) : null}
+          {book.status === "partial" && !book.quality_summary?.gate_partial ? (
+            <p className="mt-3 text-sm text-amber-800">
+              Génération partielle — certaines pages peuvent être à régénérer avant
+              impression.
+            </p>
+          ) : null}
           <div className="mt-6 flex flex-wrap gap-3">
             {canExportPdf ? (
-              <PdfDownloadButton bookId={id} pdfUrl={book.pdf_url} />
+              <PdfDownloadButton
+                bookId={id}
+                pdfUrl={book.pdf_url}
+                label="Télécharger le PDF"
+              />
             ) : book.status === "generating" ? (
               <Link href={generateHref}>
                 <Button size="lg">Voir la création</Button>
               </Link>
             ) : (
-              <Link href={`/universes/${book.universe_id}/books/new`}>
-                <Button variant="secondary">Créer un autre livre</Button>
+              <Link href="/create">
+                <Button variant="secondary">Créer pour mon enfant</Button>
               </Link>
             )}
             <Link href={`/universes/${book.universe_id}`}>
@@ -143,7 +158,15 @@ export default async function BookPage({ params }: Props) {
                 </div>
                 <div className="space-y-3 p-4">
                   <div>
-                    <p className="text-xs text-ink-muted">Page {page.page_number}</p>
+                    <p className="text-xs text-ink-muted">
+                      Page {page.page_number}
+                      {page.qc_stats?.lineupDetected ||
+                      (page.qc_stats?.visionVerdicts || []).some((v) =>
+                        String(v).toLowerCase().startsWith("lineup")
+                      )
+                        ? " · pose à revoir"
+                        : ""}
+                    </p>
                     <h3 className="font-semibold">{page.title}</h3>
                     <p className="mt-1 text-sm text-ink-muted">{page.story_text}</p>
                   </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { PARENT_PROMISE } from "@/config/parent-create";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -58,7 +59,7 @@ export default function AccessPage() {
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message || "Déblocage impossible");
       await refresh();
-      router.push("/dashboard");
+      router.push("/create");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur");
@@ -82,8 +83,8 @@ export default function AccessPage() {
         </div>
         <h1 className="font-display text-3xl">Ton accès</h1>
         <p className="mt-2 text-ink-muted">
-          Après ton achat, entre ici le code d&apos;accès reçu par email pour
-          débloquer ton studio.
+          {PARENT_PROMISE} Après ton achat, entre ici le code d&apos;accès reçu
+          par email pour débloquer ton studio.
         </p>
         {STORE_URL ? (
           <p className="mt-2 text-sm">
@@ -126,7 +127,10 @@ export default function AccessPage() {
               {trials.remaining > 1 ? "s" : ""}
             </span>{" "}
             ({trials.max_pages} pages max par livre) — tu peux créer sans accès
-            pour découvrir Meeradraw.
+            pour découvrir Meeradraw.{" "}
+            <Link href="/create" className="font-semibold text-sky-700 underline">
+              Créer pour mon enfant
+            </Link>
           </p>
         </Card>
       ) : null}
@@ -142,9 +146,9 @@ export default function AccessPage() {
               {status.message ||
                 "Vérification d'accès désactivée. Les générations sont autorisées en local."}
             </p>
-            <Link href="/dashboard" className="inline-block">
+            <Link href="/create" className="inline-block">
               <Button size="sm" variant="secondary">
-                Continuer vers le studio
+                Créer pour mon enfant
               </Button>
             </Link>
           </div>
@@ -160,10 +164,8 @@ export default function AccessPage() {
             ) : (
               <p>Durée : selon ton offre</p>
             )}
-            <Link href="/dashboard" className="mt-2 inline-block">
-              <Button size="sm" variant="secondary">
-                Retour au studio
-              </Button>
+            <Link href="/create" className="mt-2 inline-block">
+              <Button size="sm">Créer pour mon enfant</Button>
             </Link>
           </div>
         ) : (

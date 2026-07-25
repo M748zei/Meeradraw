@@ -157,6 +157,8 @@ export interface ImageQcStats {
   pixelRerolls?: number;
   visionRerolls?: number;
   visionVerdicts?: string[];
+  /** True when vision QC confirmed lineup syndrome at least once. */
+  lineupDetected?: boolean;
 }
 
 /** Short creative brief shown on the new-book step (before full generation). */
@@ -169,15 +171,22 @@ export interface EnrichedIdea {
   creativeBrief: string;
 }
 
+export interface EnrichIdeaOptions {
+  style?: string;
+  childName?: string;
+  audience?: string;
+}
+
 export interface TextAIProvider {
-  enrichIdea(rawIdea: string): Promise<EnrichedIdea>;
+  enrichIdea(rawIdea: string, opts?: EnrichIdeaOptions): Promise<EnrichedIdea>;
   buildResearchBrief(idea: string): Promise<ResearchBrief>;
   generateStoryPlan(
     idea: string,
     pageCount: number,
     style: string,
     research?: ResearchBrief,
-    audience?: string
+    audience?: string,
+    opts?: { originalIdea?: string; childName?: string }
   ): Promise<StoryPlan>;
   /** Visual world bible for a universe (lazy, cached on the universe doc). */
   generateSettingBible(params: {

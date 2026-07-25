@@ -8,6 +8,9 @@ export const maxDuration = 60;
 
 const schema = z.object({
   idea: z.string().min(3).max(4000),
+  style: z.string().max(80).optional(),
+  childName: z.string().max(60).optional(),
+  audience: z.string().max(80).optional(),
 });
 
 const ENRICH_SOFT_TIMEOUT_MS = 20_000;
@@ -19,7 +22,11 @@ export async function POST(request: Request) {
     const body = schema.parse(await request.json());
 
     const enriched = await Promise.race([
-      getTextProvider().enrichIdea(body.idea),
+      getTextProvider().enrichIdea(body.idea, {
+        style: body.style,
+        childName: body.childName,
+        audience: body.audience,
+      }),
       new Promise<null>((resolve) =>
         setTimeout(() => resolve(null), ENRICH_SOFT_TIMEOUT_MS)
       ),

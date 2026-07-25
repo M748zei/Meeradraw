@@ -601,11 +601,17 @@ async function runHttpSmoke() {
     }
   });
 
-  await test("redirect /create → /universes/new", async () => {
+  await test("/create parent flow is reachable", async () => {
     const res = await get("/create");
-    assert(res.status === 307 || res.status === 308 || res.status === 302, `status=${res.status}`);
-    const loc = res.headers.get("location") || "";
-    assert(loc.includes("/universes/new"), loc);
+    // Auth gate may redirect to login; otherwise the create page itself.
+    assert(
+      res.status === 200 || res.status === 307 || res.status === 308 || res.status === 302,
+      `status=${res.status}`
+    );
+    if (res.status !== 200) {
+      const loc = res.headers.get("location") || "";
+      assert(/login|create/i.test(loc), loc);
+    }
   });
 
   await test("security headers present", async () => {

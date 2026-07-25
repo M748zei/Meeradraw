@@ -29,6 +29,9 @@ const createSchema = z.object({
   page_count: z.number().int().min(4).max(25).default(12),
   style: z.string().default("cute"),
   title: z.string().max(120).optional(),
+  audience: z.string().max(80).optional(),
+  audience_age: z.string().max(40).optional(),
+  child_name: z.string().max(60).optional(),
 });
 
 export async function POST(request: Request) {

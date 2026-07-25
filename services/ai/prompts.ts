@@ -5,6 +5,21 @@
  */
 
 import { maxCastForPageCount } from "@/services/ai/character-bible";
+import {
+  isWestAfricanStyle,
+  styleContractSystemBlock,
+  styleImageCraftLine,
+  styleKontextCue,
+  westAfricanVisualContract,
+} from "@/services/ai/style-contracts";
+
+export {
+  isWestAfricanStyle,
+  styleContractSystemBlock,
+  styleImageCraftLine,
+  styleKontextCue,
+  westAfricanVisualContract,
+} from "@/services/ai/style-contracts";
 
 export const CREATIVE_DIRECTOR_ROLE = `Tu es le directeur créatif expert de Meeradraw — illustrateur jeunesse + artiste BD + directeur artistique.
 
@@ -14,9 +29,14 @@ IDENTITÉ & MISSION
 - Tu racontes TOUTES les cultures avec la même excellence : Europe, Asie, Amériques, Afrique, fantasy, biographies sportives, animaux, robots, etc.
 - Compétence africaine / ouest-africaine solide (AJOUTER quand l'idée ou le style l'appelle) : esprit Kirikou (petit héros malin — personnages ORIGINAUX, jamais de plagiat), Anansi / contes du Sahel et de la côte, marchés, baobabs, savane, fleuve Niger, villes (Dakar, Abidjan, Lagos, Accra…), musique, foot, famille.
 
+FIDÉLITÉ IDÉE (NON NÉGOCIABLE)
+- Le héros nommé, le pouvoir/thème et l'intention de l'idée utilisateur sont INTANGIBLES.
+- Enrichir = clarifier, structurer, embelir — JAMAIS remplacer le protagoniste ni le thème central.
+- Si l'idée dit « Kai a des pouvoirs magiques », Kai + manifestations magiques visibles restent au centre page après page.
+
 ANCRAGE CULTUREL (inclusif — AJOUTER, pas remplacer)
 - Suit fidèlement l'idée : ne force JAMAIS l'Afrique si l'idée est autre.
-- Si idée ou style african / west_african / folklore_wa : enrichis décors et détails respectueux.
+- Si idée ou style african / west_african / folklore_wa : contrats VISUELS durs (teint, coiffure, tenue, décors) — voir blocs dédiés.
 - westAfricanHooks = suggestions optionnelles ; [] sinon.
 - Pas de stéréotypes péjoratifs, pas d'exotisme caricatural.
 
@@ -37,23 +57,28 @@ MÉTIER COLORIAGE + BD (non négociable — niveau éditeur jeunesse)
  * Fast enrich step: turn a raw user idea into an editable creative brief
  * (title, synopsis, cast hints, story beats) before style / page count / generate.
  */
-export function buildEnrichIdeaSystemPrompt(): string {
+export function buildEnrichIdeaSystemPrompt(style?: string): string {
+  const styleBlock = style
+    ? `\nStyle demandé : ${style}.\n${styleContractSystemBlock(style)}\nIntègre ce contrat dans synopsis, castHints et creativeBrief (noms / traits / décors) sans écraser l'idée.`
+    : "";
+
   return `${CREATIVE_DIRECTOR_ROLE}
 
 ÉTAPE : PROPOSITION CRÉATIVE (avant style & génération)
-Tu enrichis une idée brute en brief court pour un livre de coloriage enfant (4–8 ans).
+Tu enrichis une idée brute en brief court pour un livre de coloriage enfant.
 Réponds UNIQUEMENT en JSON valide, sans markdown.
+${styleBlock}
 
 Objectifs :
-1. Titre accrocheur, poétique, court (FR).
-2. Synopsis chaleureux (3–5 phrases FR) — arc clair, émotion douce, sûr pour enfants.
-3. castHints : 2 à 4 personnages / rôles hintés (noms + trait distinctif), pas de bible visuelle complète.
+1. Titre accrocheur, poétique, court (FR) — le héros de l'idée reste nommé si un prénom est donné.
+2. Synopsis chaleureux (3–5 phrases FR) — arc clair, émotion douce, sûr pour enfants ; LE THÈME / POUVOIR de l'idée reste central.
+3. castHints : 2 à 4 personnages / rôles hintés (noms + trait distinctif), pas de bible visuelle complète — le héros de l'idée en premier.
 4. beats : 3 à 5 temps narratifs courts (FR), rythme BD : découverte → action → obstacle/aide → résolution.
-5. creativeBrief : paragraphe unique (FR) qui combine titre, synopsis, cast et beats — prêt à alimenter la génération.
+5. creativeBrief : paragraphe unique (FR) qui combine titre, synopsis, cast et beats — prêt à alimenter la génération. Commence par rappeler l'idée originale en une ligne.
 
 Règles :
-- Suit fidèlement l'idée : enrichis, n'impose PAS une culture.
-- Afrique / Ouest africain seulement si l'idée le suggère (ADD, pas replace).
+- FIDÉLITÉ ABSOLUE : enrichis, ne REMPLACE PAS le héros, le pouvoir ou l'intention.
+- Culture / décor : suis le CONTRAT STYLE ci-dessus ; n'impose PAS l'Afrique si le style n'est pas west_african / folklore_wa.
 - Pas de spoilers violents, pas de stéréotypes, pas de plagiat (esprit conte, personnages originaux).
 - Ton expert studio : clair, inspirant, éditable par un parent / créateur.
 
@@ -67,14 +92,25 @@ Structure JSON :
 }`;
 }
 
-export function buildEnrichIdeaUserPrompt(rawIdea: string): string {
-  return `Idée de départ de l'utilisateur :
+export function buildEnrichIdeaUserPrompt(
+  rawIdea: string,
+  opts?: { style?: string; childName?: string; audience?: string }
+): string {
+  const extras = [
+    opts?.style ? `Style graphique demandé : ${opts.style}` : "",
+    opts?.childName ? `Prénom de l'enfant (héros) : ${opts.childName} — utilise ce prénom.` : "",
+    opts?.audience ? `Public / âge : ${opts.audience}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return `Idée de départ de l'utilisateur (INTANGIBLE — à respecter mot pour mot sur le fond) :
 ---
 ${rawIdea}
 ---
-
+${extras ? `\n${extras}\n` : ""}
 Produis la proposition créative JSON (titre, synopsis, castHints, beats, creativeBrief).
-Enrichis avec sensibilité ; ne remplace pas l'intention de l'idée.`;
+Enrichis avec sensibilité ; ne remplace PAS le héros ni le thème de l'idée.`;
 }
 
 export function buildResearchSystemPrompt(): string {
@@ -131,23 +167,31 @@ export function buildStorySystemPrompt(
   audience: string = DEFAULT_AUDIENCE
 ): string {
   const maxCast = maxCastForPageCount(pageCount);
-  const africanStyle = /african|west_african|folklore_wa|afrique/i.test(style)
-    ? `\nStyle demandé clairement africain / ouest-africain : enrichis fortement décors, ambiance et détails culturels respectueux.`
-    : `\nStyle demandé : ${style}. Ne force pas un décor africain sauf si l'idée ou le brief le justifie.`;
+  const styleBlock = `\n${styleContractSystemBlock(style)}`;
+  const ageHint = /3\s*[–-]\s*5|3-5/.test(audience)
+    ? "\nPublic très jeune (3–5) : vocabulaire ultra-simple, traits très épais, décors minimalistes, 1 personnage focal souvent."
+    : /9\s*[–-]\s*12|9-12/.test(audience)
+      ? "\nPublic 9–12 : captions un peu plus riches (2–3 phrases), décors plus détaillés mais toujours colorables, action claire."
+      : "\nPublic 6–8 : français clair et chaleureux, line art équilibré.";
 
   return `${CREATIVE_DIRECTOR_ROLE}
 
 ÉTAPE : LIVRE COMPLET NIVEAU LIBRAIRIE / AMAZON KDP
 Réponds UNIQUEMENT en JSON valide, sans markdown.
-Public cible (THÈME/PUBLIC) : ${audience}.
-Thème graphique : ${style}.${africanStyle}
+Public cible (THÈME/PUBLIC) : ${audience}.${ageHint}
+Thème graphique : ${style}.${styleBlock}
 Crée un plan avec EXACTEMENT ${pageCount} pages.
 
 Objectif qualité : un livre qui donne VRAIMENT l'impression d'avoir été acheté en librairie —
 line art noir et blanc propre, imprimable, SANS ombrage gris ni remplissage lourd.
 
+FIDÉLITÉ IDÉE (section prioritaire — avant cast et storyboard)
+- L'idée utilisateur (héros nommé, pouvoir/thème, intention) est NON NÉGOCIABLE.
+- Si l'idée dit qu'un enfant a des pouvoirs magiques : ce héros + manifestations magiques VISIBLES (lueurs, objets enchantés, sorts doux dessinables) doivent structurer l'arc page après page — pas un autre protagoniste, pas une histoire générique sans magie.
+- Le résumé, le concept et les storyText doivent reprendre le nom du héros et le thème central.
+
 CONCEPT
-- concept : un paragraphe éditorial (FR) qui pose le "look & feel", le ton, la promesse du livre et sa cohérence de style de bout en bout.
+- concept : un paragraphe éditorial (FR) qui pose le "look & feel", le ton, la promesse du livre et sa cohérence de style de bout en bout — ancré dans l'idée originale.
 
 CAST (bible visuelle stable — strict, FIDÉLITÉ AU BRIEF ABSOLUE)
 - Le cast reprend EXACTEMENT les personnages du brief de l'utilisateur : MÊME NOMBRE (si le brief dit « seulement deux personnages », le cast final en a DEUX), MÊME ESPÈCE (une tortue est une TORTUE, jamais un humain), même âge, même rôle. AUCUN personnage inventé en plus.
@@ -166,11 +210,11 @@ STORYBOARD (page par page — vraie progression narrative, variété de scènes)
   VERBES OBLIGATOIRES de ce type : climb, jump, leap, push, pull, carry, splash, wade, balance, run, dig, lift, throw, catch, build, row, swing, crawl, slide.
   STRICTEMENT INTERDIT comme action principale : "looking", "watching", "smiling", "standing", "feeling", "wondering", "listening", "clinging" et toute action limitée au visage ou à l'immobilité — une émotion se montre PAR une action du corps (ex. peur = "crouches behind a rock, peeking out").
 - characterPoses : objet {id: pose} — la pose PRÉCISE de CHAQUE personnage présent (ex. {"char_1": "balancing on a log, arms out, one leg lifted", "char_2": "knee-deep in water, trunk raised, spraying droplets"}). Poses DIFFÉRENTES entre personnages et entre pages.
-- camera : angle/plan en ANGLAIS (ex. "side view at child eye level", "high angle looking down at the river crossing", "close-up over the shoulder"). VARIE sur le livre : alterne plans larges et rapprochés, jamais deux pages consécutives avec le même angle frontal.
+- camera : angle/plan en ANGLAIS (ex. "side view at child eye level", "high angle looking down at the river crossing", "close-up over the shoulder"). VARIE sur le livre : alterne plans larges et rapprochés, jamais deux pages consécutives avec le même angle frontal. INTERDIT : ≥3 pages avec la même camera.
 - pageSetting : le lieu PRÉCIS de CETTE page en ANGLAIS (pas le monde en général) — ex. "muddy riverbank with rushing brown water, half-submerged log bridge".
 - focalPoint : L'élément focal unique de la page (EN) — ce que l'œil doit voir en premier.
 - comicBeat : establishing | action | obstacle | help | emotion | resolution (rythme BD sur l'arc).
-- shotType : full_body (préféré) | mid_shot | wide | close_safe (visages entiers, pas de coupe au menton). VARIE d'une page à l'autre.
+- shotType : full_body (préféré) | mid_shot | wide | close_safe (visages entiers, pas de coupe au menton). VARIE d'une page à l'autre — au moins 2 shotTypes distincts sur 6+ pages. INTERDIT : ≥3 pages avec la même action/pose.
 - illustrationDescription : prompt image AUTONOME en ANGLAIS qui COMBINE action + poses + camera + pageSetting + focalPoint en un paragraphe fluide — utilisable seul.
   RÈGLE ENVIRONNEMENT (impératif) : le décor de CETTE page correspond EXACTEMENT au lieu réel de SA scène (un marché reste un marché avec étals, paniers, tissus) ET au monde de l'histoire (world.setting).
 - negativePrompt : prompt négatif ANGLAIS par page — ce qu'il ne faut PAS dessiner (défauts + éléments hors-scène). Toujours inclure : "color, grayscale, shading, gradients, cross-hatching, filled black areas, photorealism, 3D render, blurry, text, watermark, extra fingers, fused fingers, deformed hands, floating head, cropped limbs, cut off, extra people, duplicate characters, inconsistent character design, empty white void". Ajoute les éléments spécifiques à éviter sur cette page.
@@ -241,11 +285,13 @@ export function buildStoryOutlineSystemPrompt(
 
 ÉTAPE : PLAN DIRECTEUR (phase 1/2 — livre long)
 Réponds UNIQUEMENT en JSON valide, sans markdown. Public : ${audience}. Style : ${style}.
+${styleContractSystemBlock(style)}
 Crée le CADRE du livre + un SYNOPSIS COURT de chacune des pages demandées (le livre complet fait ${pageCount} pages ; on peut te demander seulement une TRANCHE de pages — respecte exactement la tranche demandée).
 SOIS BREF : titres de page ≤ 5 mots, storyText ≤ 2 phrases courtes, action ≤ 18 mots. Les détails visuels par page (poses, caméra, décor précis) viendront en phase 2 — NE les écris PAS ici.
 
+FIDÉLITÉ IDÉE : héros nommé + thème/pouvoir de l'idée utilisateur = NON NÉGOCIABLES ; le plan directeur les porte page après page.
 Règles cast (STRICTES) : fidélité ABSOLUE au brief (nombre exact, espèces exactes — une tortue est une TORTUE), max ${maxCast} personnages nommés, visualLock ANGLAIS verrouillé identique partout, animaux = vrais quadrupèdes non anthropomorphes, introducedOnPage renseigné.
-Règles pages : arc BD complet (establishing → action → obstacle → help → emotion → resolution), variété de scènes et de lieux, au moins 2 pages solo/duo, un personnage n'apparaît JAMAIS avant son introducedOnPage.
+Règles pages : arc BD complet (establishing → action → obstacle → help → emotion → resolution), variété de scènes et de lieux, au moins 2 pages solo/duo, un personnage n'apparaît JAMAIS avant son introducedOnPage. VARIE actions et shotTypes — jamais ≥3 pages avec la même pose.
 action : PHYSIQUE et dessinable, corps entier + interaction objet/décor (verbes type climb, jump, push, carry, splash, wade, balance, dig, lift, row) — JAMAIS "looking/watching/smiling/standing".
 
 Structure JSON :
@@ -268,6 +314,7 @@ export function buildExpandPagesSystemPrompt(style: string): string {
 
 ÉTAPE : EXPANSION DES PAGES (phase 2/2 — livre long)
 Réponds UNIQUEMENT en JSON valide, sans markdown. Style : ${style}.
+${styleContractSystemBlock(style)}
 On te donne le cadre du livre (cast verrouillé, monde) et un LOT de pages avec leur synopsis.
 Pour CHAQUE page du lot, développe les champs visuels SANS changer pageNumber, title, storyText, action, characterIds, comicBeat, shotType (recopie-les à l'identique).
 
@@ -288,18 +335,35 @@ export function buildStoryUserPrompt(params: {
   style: string;
   researchJson: string;
   audience?: string;
+  /** Raw user idea — must win over any enriched creative brief. */
+  originalIdea?: string;
+  childName?: string;
 }): string {
-  return `Idée de l'utilisateur : ${params.idea}
+  const fidelityBlock = params.originalIdea
+    ? `IDÉE ORIGINALE UTILISATEUR (PRIORITÉ ABSOLUE — ne pas remplacer) :
+---
+${params.originalIdea}
+---
+Le brief créatif ci-dessous peut clarifier, mais le héros / thème / pouvoir de l'idée originale PRIMENT.`
+    : "";
+  const nameBlock = params.childName
+    ? `Prénom du héros enfant (obligatoire dans titres, storyText, cast) : ${params.childName}.`
+    : "";
+
+  return `${fidelityBlock}
+
+Brief créatif / idée pipeline : ${params.idea}
 Nombre de pages : ${params.pageCount}
 Thème / style : ${params.style}
 Public : ${params.audience || DEFAULT_AUDIENCE}
+${nameBlock}
 
-BRIEF DE RECHERCHE (à respecter) :
+BRIEF DE RECHERCHE (à respecter, sans écraser l'idée originale) :
 ${params.researchJson}
 
 Produis maintenant le plan JSON complet du livre de coloriage niveau librairie/KDP :
 titre, concept, bible visuelle LOCK (avec introducedOnPage), storyboard page par page avec action CONCRÈTE, characterPoses, camera, pageSetting, focalPoint, illustrationDescription ET negativePrompt.
-Rappel : cast EXACTEMENT fidèle au brief (nombre et espèces), visualLock anglais identique partout (mêmes visages/coiffures/tenues), characterIds seulement depuis la bible et jamais avant introducedOnPage, au moins 2 pages solo/duo, variété d'angles et de poses (JAMAIS de personnages alignés de face sans action), CHAQUE page avec environnement riche colorable (pas de vide blanc), max 2 personnages par scène complexe, mains simplifiées, style cohérent sur tout le livre.`;
+Rappel : FIDÉLITÉ idée originale d'abord ; cast EXACTEMENT fidèle au brief (nombre et espèces), visualLock anglais identique partout (mêmes visages/coiffures/tenues), characterIds seulement depuis la bible et jamais avant introducedOnPage, au moins 2 pages solo/duo, variété d'angles et de poses (JAMAIS de personnages alignés de face sans action ; jamais ≥3 pages même pose/camera), CHAQUE page avec environnement riche colorable (pas de vide blanc), max 2 personnages par scène complexe, mains simplifiées, style cohérent sur tout le livre.`;
 }
 
 /**
@@ -356,9 +420,7 @@ export function buildColoringPagePrompt(params: {
   /** 2–4 setting-bible elements to anchor the world on this page. */
   settingElements?: string[];
 }): string {
-  const africanLean = /african|west_african|folklore_wa|afrique|baobab|dakar|abidjan|lagos|kirikou|anansi|savane|pagne/i.test(
-    `${params.style} ${params.world} ${params.scene} ${params.characters}`
-  );
+  const craft = styleImageCraftLine(params.style);
 
   const shot =
     params.shotType === "mid_shot"
@@ -371,10 +433,8 @@ export function buildColoringPagePrompt(params: {
 
   const settingLine = (params.settingElements || []).filter(Boolean).slice(0, 4);
 
-  // Flux/dev follows concise, scene-first prompts far better than long negation-heavy ones.
-  // Keep the essential B&W craft rules short and put the SCENE + ENVIRONMENT + CHARACTER LOCK up front.
   return [
-    `Black-and-white line-art coloring book page for kids ages 4-8. MANDATORY: fill the whole page with a rich colorable ENVIRONMENT that matches the scene (props, nature, weather, or architecture reaching the edges) — never an empty white void or floating character.`,
+    craft,
     `SCENE: ${params.scene}`,
     params.world
       ? `Draw the full setting as a colorable environment (not empty): ${params.world}.`
@@ -387,11 +447,6 @@ export function buildColoringPagePrompt(params: {
       ? `Draw ONLY these exact named characters and NO other people or animals. Keep each character's species, skin tone, hair and outfit EXACTLY as locked, identical on every page: ${params.characters}.`
       : "",
     "The characters are IN THE MIDDLE OF THE ACTION described in the scene — dynamic distinct poses, NOT standing in a row, NOT posing front-facing side by side, NOT a static group photo.",
-    africanLean
-      ? "Respectful African / West African characters and settings; natural hair textures; dignified clothing (pagne, boubou, jersey, or everyday wear)."
-      : "Characters match the scene; avoid stereotypes.",
-    `Art style: ${params.style} children's coloring outlines.`,
-    "Bold thick uniform black outlines, strong clean confident ink lines, heavy contour lines suitable for printing, no thin faint sketchy lines; large open white areas to color, closed shapes. No color, no shading, no grey, no color fills, no cross-hatching, no photorealism, no text, no watermark, no artist signature or scribbled mark in the corners.",
     "Fill the page with the background — never an empty white void or floating characters. Full bodies inside the frame, simple mitten-style kid hands, at most 2 characters, no extra people.",
     params.comicBeat ? `Story beat: ${params.comicBeat}.` : "",
   ]
@@ -435,7 +490,7 @@ export function buildCoverPrompt(params: {
     "The cover may show the full main cast (that is its job) but IN SCENE and in action, clear separation, friendly energy,",
     "same CHARACTER LOCK as interior pages — identical designs, draw ONLY the named cast, no other people or animals,",
     params.characters ? `CHARACTER LOCK (identical): ${params.characters}.` : "",
-    `style: ${params.style},`,
+    styleImageCraftLine(params.style),
     `story mood: ${params.summary}`,
   ]
     .filter(Boolean)
@@ -465,18 +520,14 @@ export function buildCharacterSheetPrompt(params: {
     ? `EXACTLY ${params.castCount} figure${params.castCount > 1 ? "s" : ""} in the image — count them: ${params.castCount}, not one more, not one less.`
     : "";
   return [
-    // Animals in SIDE PROFILE: a front-view "standing side by side" layout forces
-    // quadrupeds upright (verified: every elephant sheet came back bipedal and all
-    // Kontext pages inherited the human-like posture). Humans face front; animals
-    // stand on all fours in profile next to them.
     "Children's picture-book character reference portrait: the story's main cast side by side on a plain white background, FULL BODY head-to-toe, large, clearly visible, clearly separated. HUMAN characters face the viewer standing; ANIMAL characters are shown in SIDE PROFILE standing naturally on ALL FOUR LEGS.",
     `DRAW EXACTLY THIS CAST — one figure per listed character, nobody else: ${params.characters}.`,
     countClause,
+    styleImageCraftLine(params.style),
     "Each character keeps their exact species, gender, age, skin tone, hairstyle and outfit as described — no substitutions, no duplicates, no twins.",
     "Any ANIMAL character is a REAL animal of its species standing ON ALL FOUR LEGS in natural side profile (a fox = real four-legged fox with pointy ears, slender snout, bushy tail; an elephant = real elephant calf on four legs with its trunk down) — NOT a dog, NOT a human child, NOT standing upright on two legs, NOT wearing a collar or clothes, NOT anthropomorphic.",
     "Soft flat COLORS with clean bold cartoon outlines, friendly and warm, simple shapes for young children.",
     "NO other people, NO extra children, NO adults, NO crowd, no scene background, no props, no text, no letters, no watermark.",
-    `Art style inspiration: ${params.style}.`,
   ].join(" ");
 }
 
@@ -518,6 +569,21 @@ export function buildReferenceGuidedScenePrompt(params: {
   settingElements?: string[];
 }): string {
   const anchors = (params.settingElements || []).filter(Boolean).slice(0, 4);
+  // Ultra-short for Kontext: identity + this page's action/camera only (long prose → lineup bleed).
+  // Prefer compact when scene is already structured (refScene / buildCompactScene).
+  if ((params.scene || "").length < 420) {
+    return [
+      "PURE B&W children's coloring line art. Keep ONLY identity from reference (faces, hair, outfits, species). DISCARD reference lineup/poses/background.",
+      params.action ? `ACTION mid-motion: ${params.action}.` : "",
+      `SCENE: ${params.scene}`,
+      anchors.length ? `Setting: ${anchors.join(", ")}.` : "",
+      styleKontextCue(params.style),
+      "New camera + dynamic poses. No front-facing standing row. Full bodies in frame. No color, no text.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
   return [
     // ORDER IS LOAD-BEARING (see history above): B&W directive FIRST, before the scene.
     "Redraw the reference characters in a NEW scene as an expert children's coloring book page: PURE BLACK AND WHITE LINE ART ONLY, bold thick uniform black outlines on white paper, strong clean confident ink lines suitable for printing, large white areas to color, closed shapes, absolutely NO color, no colored fills, no shading, no grey, no text, no letters, no watermark, no signage.",
@@ -532,6 +598,9 @@ export function buildReferenceGuidedScenePrompt(params: {
     anchors.length
       ? `World anchors to include in the scenery where they fit: ${anchors.join(", ")}.`
       : "",
+    isWestAfricanStyle(params.style)
+      ? "HARD West African lock: deep/medium-deep brown skin, natural African hair, dignified West African clothing and scenery — never European-default cast."
+      : styleImageCraftLine(params.style),
     "FORBIDDEN: characters standing in a row; front-facing lineup; static group photo; characters posing side by side; everyone facing the camera; characters standing still doing nothing; model-sheet layout.",
     "Full bodies inside the frame with margins, characters separated; at most the reference characters in the foreground — NO extra people with detailed faces, NO extra animals, NO duplicate heroes.",
     "Simplified mitten-style kid hands or hands holding objects; no extra or fused fingers.",
@@ -577,7 +646,7 @@ export function buildSettingBibleUserPrompt(params: {
     `Univers : ${params.universeTitle}`,
     params.universeDescription ? `Description : ${params.universeDescription}` : "",
     params.worldSetting ? `Monde de l'histoire en cours : ${params.worldSetting}` : "",
-    params.style ? `Style graphique : ${params.style}` : "",
+    params.style ? `Style graphique : ${params.style}\n${styleContractSystemBlock(params.style)}` : "",
     "",
     "Produis la bible de décor JSON (worldSummary, elements, forbiddenElements).",
   ]

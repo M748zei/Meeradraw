@@ -73,12 +73,14 @@ export const STYLE_OPTIONS = [
   {
     id: "west_african",
     name: "Afrique de l'Ouest",
-    description: "Marchés, baobabs, pagne — cast stable et digne",
+    description:
+      "Visages et décors Afrique de l'Ouest — obligatoire (teint, coiffure, tenue, marchés / baobabs)",
   },
   {
     id: "folklore_wa",
     name: "Conte africain",
-    description: "Petit héros malin, village, magie douce (original)",
+    description:
+      "Visages et décors Afrique de l'Ouest — obligatoire ; petit héros malin, village, magie douce",
   },
 ] as const;
 

@@ -10,7 +10,10 @@ import type {
 } from "@/services/ai/types";
 
 export class MockTextProvider implements TextAIProvider {
-  async enrichIdea(rawIdea: string): Promise<EnrichedIdea> {
+  async enrichIdea(
+    rawIdea: string,
+    _opts?: import("@/services/ai/types").EnrichIdeaOptions
+  ): Promise<EnrichedIdea> {
     const idea = rawIdea.trim() || "Une aventure magique";
     const africanHint =
       /afrique|baobab|dakar|abidjan|lagos|kirikou|anansi|accra|savane|niger|pagne/i.test(
@@ -72,12 +75,17 @@ export class MockTextProvider implements TextAIProvider {
     pageCount: number,
     style: string,
     _research?: ResearchBrief,
-    audience?: string
+    audience?: string,
+    opts?: { originalIdea?: string; childName?: string }
   ): Promise<StoryPlan> {
-    const hero = idea.split(" ").slice(0, 4).join(" ") || "Petit Héros";
+    const source = opts?.originalIdea || idea;
+    const hero =
+      opts?.childName ||
+      source.split(" ").slice(0, 4).join(" ") ||
+      "Petit Héros";
     const africanHint =
-      /afrique|baobab|dakar|abidjan|lagos|kirikou|anansi|accra|savane|niger|pagne/i.test(
-        idea
+      /afrique|baobab|dakar|abidjan|lagos|kirikou|anansi|accra|savane|niger|pagne|west_african|folklore_wa/i.test(
+        `${source} ${style}`
       );
 
     const characters = africanHint

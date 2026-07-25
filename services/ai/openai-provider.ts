@@ -14,12 +14,15 @@ import {
 } from "@/services/ai/prompts";
 import { gatherWebResearch } from "@/services/ai/research";
 import type {
+  EnrichIdeaOptions,
   EnrichedIdea,
   ResearchBrief,
   SettingBible,
   StoryPlan,
   TextAIProvider,
 } from "@/services/ai/types";
+import { assertPlanFidelity, assertPoseDiversity } from "@/lib/plan-fidelity";
+import { AppError } from "@/lib/errors";
 
 function createTextClient(prefer: "groq" | "openai" = "groq"): OpenAI {
   const groqKey = process.env.GROQ_API_KEY?.trim();
@@ -215,7 +218,7 @@ export class OpenAITextProvider implements TextAIProvider {
     return chatJsonCompletion(this.client, resolveTextModel(), params);
   }
 
-  async enrichIdea(rawIdea: string): Promise<EnrichedIdea> {
+  async enrichIdea(rawIdea: string, opts?: EnrichIdeaOptions): Promise<EnrichedIdea> {
     const idea = rawIdea.trim();
     if (idea.length < 3) return fallbackEnrichedIdea(idea);
 
@@ -224,8 +227,8 @@ export class OpenAITextProvider implements TextAIProvider {
         temperature: 0.7,
         response_format: { type: "json_object" },
         messages: [
-          { role: "system", content: buildEnrichIdeaSystemPrompt() },
-          { role: "user", content: buildEnrichIdeaUserPrompt(idea) },
+          { role: "system", content: buildEnrichIdeaSystemPrompt(opts?.style) },
+          { role: "user", content: buildEnrichIdeaUserPrompt(idea, opts) },
         ],
       });
       const parsed = parseJson<Partial<EnrichedIdea>>(content, "enrich idea");
@@ -271,48 +274,70 @@ export class OpenAITextProvider implements TextAIProvider {
     pageCount: number,
     style: string,
     research?: ResearchBrief,
-    audience?: string
+    audience?: string,
+    opts?: { originalIdea?: string; childName?: string }
   ): Promise<StoryPlan> {
     const brief = research ?? (await this.buildResearchBrief(idea));
+    const originalIdea = opts?.originalIdea || idea;
 
-    // Long books: the Groq free tier cuts completions around ~3k tokens
-    // (finish_reason=length), so a full structured storyboard beyond ~8 pages
-    // truncates into invalid JSON. Two-phase generation keeps every call small:
-    // master outline first, then page expansion in batches.
-    if (pageCount > 8) {
-      return this.generateLongStoryPlan(idea, pageCount, style, brief, audience);
+    const buildOnce = async (): Promise<StoryPlan> => {
+      if (pageCount > 8) {
+        return this.generateLongStoryPlan(idea, pageCount, style, brief, audience, opts);
+      }
+
+      const content = await this.completeJson({
+        temperature: 0.75,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: buildStorySystemPrompt(pageCount, style, audience),
+          },
+          {
+            role: "user",
+            content: buildStoryUserPrompt({
+              idea,
+              pageCount,
+              style,
+              researchJson: JSON.stringify(brief, null, 2),
+              audience,
+              originalIdea,
+              childName: opts?.childName,
+            }),
+          },
+        ],
+      });
+
+      const plan = parseJson<StoryPlan>(content, "story plan");
+      if (!Array.isArray(plan.pages) || plan.pages.length === 0) {
+        throw new Error("Story plan missing pages");
+      }
+      return normalizeStoryPlan(plan, pageCount);
+    };
+
+    let plan = await buildOnce();
+    let fidelity = assertPlanFidelity(originalIdea, plan);
+    let diversity = assertPoseDiversity(plan);
+    if (!fidelity.ok || !diversity.ok) {
+      console.warn("story plan fidelity/diversity failed; retrying once", {
+        fidelity,
+        diversity,
+      });
+      plan = await buildOnce();
+      fidelity = assertPlanFidelity(originalIdea, plan);
+      diversity = assertPoseDiversity(plan);
+      if (!fidelity.ok) {
+        throw new AppError(
+          "GENERATION_FAILED",
+          `Plan hors sujet par rapport à l'idée : ${(fidelity.reasons || []).join(" ")}`,
+          422
+        );
+      }
+      if (!diversity.ok) {
+        console.warn("pose diversity still weak after retry; continuing", diversity);
+      }
     }
-
-    const content = await this.completeJson({
-      temperature: 0.75,
-      // NOTE: do NOT set max_completion_tokens here — Groq's free-tier TPM
-      // pre-check counts it against the 8000-token/min budget and rejects the
-      // whole request ("Request too large"). Left unset, only prompt tokens
-      // are pre-checked and long storyboards (24 pages) stream fine.
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: buildStorySystemPrompt(pageCount, style, audience),
-        },
-        {
-          role: "user",
-          content: buildStoryUserPrompt({
-            idea,
-            pageCount,
-            style,
-            researchJson: JSON.stringify(brief, null, 2),
-            audience,
-          }),
-        },
-      ],
-    });
-
-    const plan = parseJson<StoryPlan>(content, "story plan");
-    if (!Array.isArray(plan.pages) || plan.pages.length === 0) {
-      throw new Error("Story plan missing pages");
-    }
-    return normalizeStoryPlan(plan, pageCount);
+    return plan;
   }
 
   /** Two-phase plan for long books (couvre les livres jusqu'à 25-40 pages). */
@@ -321,7 +346,8 @@ export class OpenAITextProvider implements TextAIProvider {
     pageCount: number,
     style: string,
     brief: ResearchBrief,
-    audience?: string
+    audience?: string,
+    opts?: { originalIdea?: string; childName?: string }
   ): Promise<StoryPlan> {
     // Phase 1 — master outline. The free-tier output cut (~3k tokens) also
     // limits the OUTLINE, so pages are outlined in slices of 12: first call
@@ -341,6 +367,8 @@ export class OpenAITextProvider implements TextAIProvider {
             style,
             researchJson: JSON.stringify(brief, null, 2),
             audience,
+            originalIdea: opts?.originalIdea || idea,
+            childName: opts?.childName,
           })}\n\nTRANCHE DEMANDÉE : cadre complet (title/concept/characters/world) + pages ${1} à ${firstEnd} UNIQUEMENT (le livre continuera jusqu'à la page ${pageCount} ensuite${pageCount > firstEnd ? " — ne conclus PAS l'histoire dans cette tranche" : ""}).`,
         },
       ],

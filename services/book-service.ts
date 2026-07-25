@@ -59,6 +59,9 @@ export class BookService {
       page_count?: number;
       style?: string;
       title?: string;
+      audience?: string;
+      audience_age?: string;
+      child_name?: string;
     }
   ): Promise<Book> {
     // Cross-tenant guard: never attach a book to someone else's universe.
@@ -85,6 +88,9 @@ export class BookService {
       cover_image_path: null,
       active_generation_id: null,
       pdf_url: null,
+      audience: input.audience ?? null,
+      audience_age: input.audience_age ?? null,
+      child_name: input.child_name?.trim() || null,
       created_at: now,
       updated_at: now,
     };

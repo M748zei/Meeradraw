@@ -175,7 +175,7 @@ function NewBookForm() {
       const res = await fetchWithTimeout("/api/ai/enrich-idea", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea: raw }),
+        body: JSON.stringify({ idea: raw, style }),
         timeoutMs: 22_000,
       });
       const json = await res.json();

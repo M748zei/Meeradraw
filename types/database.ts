@@ -80,10 +80,25 @@ export interface Book {
   /** Target audience (e.g. "enfants 4–8 ans"); falls back to audience_age. */
   audience?: string | null;
   audience_age?: string | null;
+  /** Child first name for parent MVP — injected into bible / titles / storyText. */
+  child_name?: string | null;
   /** Locked character descriptors injected into every image prompt. */
   character_bible?: string | null;
   character_sheet_url?: string | null;
   story_plan?: Record<string, unknown> | null;
+  /** Post-run quality score (blank/lineup %) for parent display + partial gate. */
+  quality_summary?: {
+    score: number;
+    pages_ok: number;
+    pages_total: number;
+    failed_pct: number;
+    lineup_pct: number;
+    lineup_pages?: number;
+    pixel_rerolls?: number;
+    vision_rerolls?: number;
+    gate_partial?: boolean;
+    label?: string;
+  } | null;
   created_at: string;
   updated_at: string;
 }
@@ -111,6 +126,14 @@ export interface Page {
   page_setting?: string | null;
   focal_point?: string | null;
   negative_prompt?: string | null;
+  /** Per-page QC telemetry (pixel/vision re-rolls, lineup flags). */
+  qc_stats?: {
+    pixelRerolls?: number;
+    visionRerolls?: number;
+    visionVerdicts?: string[];
+    lineupDetected?: boolean;
+    [key: string]: unknown;
+  } | null;
   created_at: string;
   updated_at: string;
 }
@@ -158,6 +181,15 @@ export interface Generation {
     pixel_rerolls?: number;
     vision_rerolls?: number;
     vision_verdicts?: Record<string, string[]>;
+    quality?: {
+      score: number;
+      pages_ok: number;
+      pages_total: number;
+      failed_pct: number;
+      lineup_pct: number;
+      gate_partial?: boolean;
+      label?: string;
+    };
     [key: string]: unknown;
   } | null;
   /** Set once when a delivered trial run consumed a free trial (idempotence flag). */
