@@ -48,6 +48,9 @@
     "typescript": "^5"
   },
   "overrides": {
+    "next": {
+      "postcss": "8.5.23"
+    },
     "jose": "4.15.9"
   }
 }

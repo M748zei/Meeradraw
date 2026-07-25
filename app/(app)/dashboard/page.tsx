@@ -23,33 +23,38 @@ export default async function DashboardPage() {
 
   const session = await getSessionUser();
   if (session && isFirebaseAdminConfigured()) {
-    const db = getAdminDb();
-    const [uSnap, bSnap, profile] = await Promise.all([
-      db.collection("universes").where("user_id", "==", session.uid).get(),
-      db.collection("books").where("user_id", "==", session.uid).get(),
-      db.collection("users").doc(session.uid).get(),
-    ]);
-    const recency = (d: { updated_at?: string; created_at?: string }) =>
-      d.updated_at || d.created_at || "";
-    totalUniverses = uSnap.size;
-    totalBooks = bSnap.size;
-    universes = uSnap.docs
-      .map((d) => ({ id: d.id, ...(d.data() as Omit<(typeof universes)[0], "id">) }))
-      .sort((a, b) => recency(b as never).localeCompare(recency(a as never)))
-      .slice(0, 6);
-    books = bSnap.docs
-      .map((d) => ({ id: d.id, ...(d.data() as Omit<(typeof books)[0], "id">) }))
-      .sort((a, b) => recency(b as never).localeCompare(recency(a as never)))
-      .slice(0, 6);
-    credits = (profile.data()?.credits as number) ?? 0;
-    name = ((profile.data()?.fullname as string) || "Créateur").split(" ")[0];
+    try {
+      const db = getAdminDb();
+      const [uSnap, bSnap, profile] = await Promise.all([
+        db.collection("universes").where("user_id", "==", session.uid).get(),
+        db.collection("books").where("user_id", "==", session.uid).get(),
+        db.collection("users").doc(session.uid).get(),
+      ]);
+      const recency = (d: { updated_at?: string; created_at?: string }) =>
+        d.updated_at || d.created_at || "";
+      totalUniverses = uSnap.size;
+      totalBooks = bSnap.size;
+      universes = uSnap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<(typeof universes)[0], "id">) }))
+        .sort((a, b) => recency(b as never).localeCompare(recency(a as never)))
+        .slice(0, 6);
+      books = bSnap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<(typeof books)[0], "id">) }))
+        .sort((a, b) => recency(b as never).localeCompare(recency(a as never)))
+        .slice(0, 6);
+      credits = (profile.data()?.credits as number) ?? 0;
+      name = ((profile.data()?.fullname as string) || "Créateur").split(" ")[0];
 
-    if (LicenseService.isConfigured()) {
-      const status = await new LicenseService(db).getStatus(
-        session.uid,
-        session.email as string | undefined
-      );
-      needsLicense = status.required && !status.valid;
+      if (LicenseService.isConfigured()) {
+        const status = await new LicenseService(db).getStatus(
+          session.uid,
+          session.email as string | undefined
+        );
+        needsLicense = status.required && !status.valid;
+      }
+    } catch (err) {
+      // Keep the shell usable if Firestore/license lookup fails.
+      console.error("[dashboard] data load failed", err);
     }
   }
 
