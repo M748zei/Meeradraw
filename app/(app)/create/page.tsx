@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -23,8 +23,20 @@ import { fetchWithTimeout } from "@/lib/async";
 import { cn, formatCredits } from "@/lib/utils";
 import { Check, Sparkles, Upload } from "lucide-react";
 
+const ACCEPTED_PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+function isAcceptedPhotoFile(file: File): boolean {
+  if (ACCEPTED_PHOTO_TYPES.has(file.type.toLowerCase())) return true;
+  // Some mobile browsers leave type empty — fall back to extension.
+  if (!file.type) {
+    return /\.(jpe?g|png|webp)$/i.test(file.name);
+  }
+  return false;
+}
+
 export default function CreateForChildPage() {
   const router = useRouter();
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const [ageId, setAgeId] = useState<string>("6-8");
   const [themeId, setThemeId] = useState<string>("magic");
   const [childName, setChildName] = useState("");
@@ -58,11 +70,30 @@ export default function CreateForChildPage() {
     return theme.ideaTemplate(name);
   }, [theme, childName, parentStory, gender]);
 
-  async function onPhotoChange(file: File | null) {
+  function openPhotoPicker() {
+    const input = photoInputRef.current;
+    if (!input) {
+      setError("Impossible d’ouvrir le sélecteur de photo. Rechargez la page.");
+      return;
+    }
+    // Reset so choosing the same file again still fires onChange.
+    input.value = "";
+    input.click();
+  }
+
+  function onPhotoChange(file: File | null) {
     setPhotoPreview(null);
     setPhotoBase64(null);
     if (!file) return;
-    if (!/^image\/(jpeg|png|webp)$/i.test(file.type)) {
+
+    const mime = (file.type || "").toLowerCase();
+    if (mime === "image/heic" || mime === "image/heif" || /\.heic$/i.test(file.name)) {
+      setError(
+        "Format HEIC non pris en charge. Ouvrez la photo dans Photos, puis exportez-la en JPG."
+      );
+      return;
+    }
+    if (!isAcceptedPhotoFile(file)) {
       setError("Photo : JPG, PNG ou WebP uniquement.");
       return;
     }
@@ -70,9 +101,17 @@ export default function CreateForChildPage() {
       setError("Photo trop lourde (max 5 Mo).");
       return;
     }
+
     const reader = new FileReader();
+    reader.onerror = () => {
+      setError("Impossible de lire la photo. Réessayez avec un autre fichier.");
+    };
     reader.onload = () => {
       const dataUrl = String(reader.result || "");
+      if (!dataUrl.startsWith("data:image/")) {
+        setError("Photo invalide. Réessayez avec un JPG, PNG ou WebP.");
+        return;
+      }
       setPhotoPreview(dataUrl);
       setPhotoBase64(dataUrl);
       setError(null);
@@ -119,13 +158,34 @@ export default function CreateForChildPage() {
           body: JSON.stringify({ imageBase64: photoBase64 }),
           timeoutMs: 45_000,
         });
-        const upJson = await upRes.json();
-        if (!upJson.success) {
-          throw new Error(upJson.error?.message || "Upload de la photo impossible");
+        let upJson: {
+          success?: boolean;
+          data?: { url?: string; path?: string };
+          error?: { message?: string; code?: string };
+        };
+        try {
+          upJson = await upRes.json();
+        } catch {
+          throw new Error("Upload de la photo impossible. Réessayez.");
         }
-        childPhotoUrl = upJson.data.url as string;
+        if (!upRes.ok || !upJson.success) {
+          const code = upJson.error?.code;
+          if (upRes.status === 401 || code === "UNAUTHORIZED") {
+            throw new Error("Connectez-vous pour envoyer la photo de l’enfant.");
+          }
+          if (upRes.status === 429 || code === "RATE_LIMITED") {
+            throw new Error("Trop d’envois. Réessayez dans une minute.");
+          }
+          throw new Error(
+            upJson.error?.message || "Upload de la photo impossible. Réessayez."
+          );
+        }
+        childPhotoUrl = upJson.data?.url as string;
         childPhotoPath =
-          typeof upJson.data.path === "string" ? upJson.data.path : undefined;
+          typeof upJson.data?.path === "string" ? upJson.data.path : undefined;
+        if (!childPhotoUrl) {
+          throw new Error("Upload de la photo incomplet. Réessayez.");
+        }
       }
 
       const uniRes = await fetchWithTimeout("/api/universes", {
@@ -322,28 +382,37 @@ export default function CreateForChildPage() {
         </Card>
 
         <Card className="space-y-4 p-5">
-          <label className="block text-sm font-semibold text-ink">
+          <div className="block text-sm font-semibold text-ink" id="child-photo-label">
             Photo de l’enfant{" "}
             <span className="font-normal text-ink-muted">(recommandée)</span>
-          </label>
+          </div>
           <p className="text-xs text-ink-muted">
-            Pour que le héros lui ressemble. Portrait clair, visage visible. Optionnel.
+            Pour que le héros lui ressemble. Portrait clair, visage visible. JPG, PNG
+            ou WebP · max 5 Mo. Optionnel.
           </p>
-          <label className="flex cursor-pointer flex-col items-center gap-2 rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 px-4 py-6 text-sm text-ink-muted transition hover:border-sky-300">
-            <Upload className="h-5 w-5 text-sky-600" />
+          <input
+            ref={photoInputRef}
+            id="child-photo-input"
+            type="file"
+            accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+            className="sr-only"
+            tabIndex={-1}
+            aria-labelledby="child-photo-label"
+            onChange={(e) => onPhotoChange(e.target.files?.[0] ?? null)}
+          />
+          <button
+            type="button"
+            onClick={openPhotoPicker}
+            className="flex w-full cursor-pointer flex-col items-center gap-2 rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 px-4 py-6 text-sm text-ink-muted transition hover:border-sky-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+          >
+            <Upload className="h-5 w-5 text-sky-600" aria-hidden />
             <span>{photoPreview ? "Changer la photo" : "Ajouter une photo"}</span>
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              className="hidden"
-              onChange={(e) => void onPhotoChange(e.target.files?.[0] ?? null)}
-            />
-          </label>
+          </button>
           {photoPreview ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={photoPreview}
-              alt="Aperçu"
+              alt="Aperçu de la photo sélectionnée"
               className="mx-auto h-28 w-28 rounded-2xl object-cover shadow-soft"
             />
           ) : null}

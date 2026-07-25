@@ -78,6 +78,19 @@ body {
   font-family: var(--font-display), ui-serif, Georgia, serif;
 }
 
+/* Explicit fallback — file inputs must not use display:none (Safari). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
 .h-13 {
   height: 3.25rem;
 }
