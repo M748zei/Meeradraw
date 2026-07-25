@@ -1,4 +1,5 @@
 import type { StoryPlan, StoryCharacter } from "@/services/ai/types";
+import { inferNarrativeThemeKey } from "@/lib/plan-fidelity";
 
 /** Max named cast for short/medium coloring books (kids readability). */
 export function maxCastForPageCount(pageCount: number): number {
@@ -12,10 +13,35 @@ export function maxCastForParentBook(): number {
   return 2;
 }
 
+export type NormalizeStoryPlanOpts = {
+  parentMode?: boolean;
+  narrativeLock?: string;
+  themeKey?: string;
+  childGender?: string | null;
+};
+
 function stripAdultWording(lock: string): string {
   return lock
     .replace(/\b(adult|woman|man|mother|father|lady|gentleman|mature)\b/gi, "child")
     .replace(/\b(tall slender adult|grown[- ]?up)\b/gi, "small child");
+}
+
+function stripConflictingGender(lock: string, gender?: string | null): string {
+  if (gender === "girl") {
+    return lock
+      .replace(/\b(young\s+)?boys?\b/gi, "young girl")
+      .replace(/\bgarçons?\b/gi, "fille")
+      .replace(/\blittle boy\b/gi, "little girl")
+      .replace(/\bson\b/gi, "daughter");
+  }
+  if (gender === "boy") {
+    return lock
+      .replace(/\b(young\s+)?girls?\b/gi, "young boy")
+      .replace(/\bfilles?\b/gi, "garçon")
+      .replace(/\blittle girl\b/gi, "little boy")
+      .replace(/\bdaughter\b/gi, "son");
+  }
+  return lock;
 }
 
 /**
@@ -75,15 +101,25 @@ export function enforceParentChildHero(
   }
 
   const prev = characters[heroIdx];
-  const baseLock = stripAdultWording(
-    prev.visualLock || prev.appearance || "friendly child, consistent outfit"
+  const baseLock = stripConflictingGender(
+    stripAdultWording(
+      prev.visualLock || prev.appearance || "friendly child, consistent outfit"
+    ),
+    opts.childGender
   );
+  const genderNeg =
+    opts.childGender === "girl"
+      ? "NOT a boy, NOT a male child"
+      : opts.childGender === "boy"
+        ? "NOT a girl, NOT a female child"
+        : "NOT an adult";
   const childLock = [
     `${genderEn} ${ageYears}`,
+    genderNeg,
     "REAL CHILD proportions (large head, short limbs) — NEVER an adult woman or man",
     "friendly eyes WITH clear dark pupils and catchlights, soft rounded cheeks, gentle smile",
     baseLock,
-    "identical face hair outfit every page",
+    `${genderEn}, identical face hair outfit every page`,
   ].join(", ");
 
   const hero: StoryCharacter = {
@@ -91,24 +127,30 @@ export function enforceParentChildHero(
     id: "char_1",
     name,
     description: prev.description || `${genderFr}, héros principal, enfant`,
-    appearance: `${genderFr} ${ageYears}, ${prev.appearance || ""}`.trim(),
+    appearance: `${genderFr} ${ageYears}, ${stripConflictingGender(prev.appearance || "", opts.childGender)}`.trim(),
     visualLock: childLock,
     ageBand: `child ${ageYears}`,
     personality: prev.personality || "gentil, courageux, aimé de tous",
     proportions: "large head, short limbs, small child body",
     face:
       prev.face ||
-      "round child face, big friendly eyes with pupils, soft smile",
+      `round ${genderEn} face, big friendly eyes with pupils, soft smile`,
     body: "small child body, not adult",
     introducedOnPage: 1,
   };
 
-  // Keep at most one other character — and force them child-like too (no adults).
+  // Prefer hero-only; keep at most one DISTINCT supporting child (never a lookalike).
   const others = characters
     .filter((_, i) => i !== heroIdx)
     .slice(0, 1)
     .map((c, i) => {
       const lock = stripAdultWording(c.visualLock || c.appearance || "");
+      const looksLikeHero =
+        norm(c.name) === norm(name) ||
+        /same (face|outfit|hair)|identical|twin|clone/i.test(
+          `${c.visualLock} ${c.description}`
+        );
+      if (looksLikeHero) return null;
       const isAdultish = /adult|woman|man|mother|father|elderly|grand/i.test(
         `${c.visualLock} ${c.ageBand} ${c.description}`
       );
@@ -116,14 +158,20 @@ export function enforceParentChildHero(
         return {
           ...c,
           id: `char_${i + 2}`,
+          name: c.name === name ? "Ami" : c.name,
           ageBand: "child friend ~same age",
-          visualLock: `${lock}, child friend same age as hero, NOT an adult`,
+          visualLock: `${lock}, DISTINCT child friend different face/hair/outfit from ${name}, NOT a clone, NOT an adult`,
           body: "small child",
           proportions: "child proportions",
         };
       }
-      return { ...c, id: `char_${i + 2}` };
-    });
+      return {
+        ...c,
+        id: `char_${i + 2}`,
+        visualLock: `${lock}, DISTINCT from hero ${name}, different face hair outfit, never a twin clone`,
+      };
+    })
+    .filter(Boolean) as StoryCharacter[];
 
   const nextChars = [hero, ...others].slice(0, maxCastForParentBook());
   const idMap = new Map<string, string>();
@@ -140,8 +188,9 @@ export function enforceParentChildHero(
       .map((id) => idMap.get(id) || id)
       .filter((id) => nextChars.some((c) => c.id === id));
     if (!ids.includes("char_1")) ids = ["char_1", ...ids];
-    ids = [...new Set(ids)].slice(0, 2);
-    // Rewrite poses keys
+    // Parent default: hero alone — supporting cast only if the page already asked for them.
+    ids = [...new Set(ids)].slice(0, nextChars.length > 1 ? 2 : 1);
+    if (ids.length > 1 && !ids.includes("char_1")) ids = ["char_1"];
     const poses: Record<string, string> = {};
     if (p.characterPoses) {
       for (const [k, v] of Object.entries(p.characterPoses)) {
@@ -153,6 +202,116 @@ export function enforceParentChildHero(
   });
 
   return { ...plan, characters: nextChars, pages };
+}
+
+/**
+ * Last-resort rewrite when the LLM substituted a travel/market plot for the
+ * parent's story. Forces title/summary/world + scrubbed page captions onto the
+ * locked narrative theme (princess/village/etc.).
+ */
+export function lockPlanToParentNarrative(
+  plan: StoryPlan,
+  opts: {
+    sourceNarrative: string;
+    childName: string;
+    childGender?: string | null;
+    audience?: string | null;
+    pageCount: number;
+  }
+): StoryPlan {
+  const name = opts.childName.trim() || plan.characters[0]?.name || "Héros";
+  const themeKey = inferNarrativeThemeKey(opts.sourceNarrative);
+  const source = opts.sourceNarrative.trim();
+  const shortSource = source.slice(0, 220);
+
+  let next = enforceParentChildHero(plan, {
+    childName: name,
+    childGender: opts.childGender,
+    audience: opts.audience,
+  });
+
+  const worldSetting =
+    themeKey === "princess"
+      ? `soft royal village world for little princess ${name} — courtyard, gentle crown, village homes (NOT a market road-trip)`
+      : themeKey === "magic"
+        ? `gentle magical world for ${name} with visible soft magic`
+        : themeKey === "village"
+          ? `joyful village world for ${name}`
+          : next.world?.setting || `world of ${name}'s story`;
+
+  next = {
+    ...next,
+    title: next.title?.trim() || `L'aventure de ${name}`,
+    summary: shortSource || next.summary,
+    concept: `Fidèle à l'histoire du parent : ${shortSource}`,
+    world: {
+      setting: worldSetting,
+      palette: next.world?.palette || "warm joyful",
+      mood: next.world?.mood || "tender and brave",
+    },
+  };
+
+  const subRe =
+    /voyage|road\s*trip|travers(e|er)|across the country|a travers le pays|à travers le pays|parents|dusty road|chemin poussi|journ[eé]e au march|market day|d[eé]part.*march|petit march[eé]/i;
+  const sourceAllowsSub = subRe.test(source);
+
+  next = {
+    ...next,
+    pages: (next.pages || []).map((p, i) => {
+      const hay = `${p.title} ${p.storyText} ${p.action} ${p.pageSetting}`;
+      if (!sourceAllowsSub && subRe.test(hay)) {
+        return rewritePageToTheme(p, name, themeKey, i, (next.pages || []).length);
+      }
+      // Ensure hero name in caption
+      if (p.storyText && !new RegExp(name, "i").test(p.storyText)) {
+        return {
+          ...p,
+          storyText: `${name} : ${p.storyText}`.slice(0, 280),
+        };
+      }
+      return p;
+    }),
+  };
+
+  return normalizeStoryPlan(next, opts.pageCount, {
+    parentMode: true,
+    narrativeLock: source,
+    themeKey,
+    childGender: opts.childGender,
+  });
+}
+
+function rewritePageToTheme(
+  p: StoryPlan["pages"][number],
+  heroName: string,
+  themeKey: string,
+  index: number,
+  total: number
+): StoryPlan["pages"][number] {
+  const tpl = buildPadSceneTemplates(heroName, themeKey, themeKey)[
+    index % 8
+  ];
+  const isLast = index >= total - 1;
+  return {
+    ...p,
+    title: isLast ? tpl.resolutionTitle : tpl.title,
+    storyText: isLast ? tpl.resolutionStory : tpl.storyText,
+    action: isLast ? tpl.resolutionAction : tpl.action,
+    pageSetting: tpl.pageSetting,
+    illustrationDescription: isLast
+      ? `${heroName} celebrates in ${tpl.pageSetting}. Wide shot, rich colorable environment.`
+      : tpl.illustrationDescription,
+    characterIds: ["char_1"],
+    characterPoses: {
+      char_1: isLast
+        ? "joyful full-body pose celebrating with open arms"
+        : tpl.pose,
+    },
+    comicBeat: isLast ? "resolution" : tpl.comicBeat,
+    shotType: isLast ? "wide" : tpl.shotType,
+    camera: tpl.camera,
+    focalPoint: heroName,
+  };
 }
 
 /** Stable English lock string injected identically into every image prompt. */
@@ -215,8 +374,14 @@ export function formatPageCharacterLock(
 /**
  * Normalize LLM story plans: ids, cast size, page cast lists, visual locks.
  */
-export function normalizeStoryPlan(plan: StoryPlan, pageCount: number): StoryPlan {
-  const maxCast = maxCastForPageCount(pageCount);
+export function normalizeStoryPlan(
+  plan: StoryPlan,
+  pageCount: number,
+  opts?: NormalizeStoryPlanOpts
+): StoryPlan {
+  const maxCast = opts?.parentMode
+    ? maxCastForParentBook()
+    : maxCastForPageCount(pageCount);
   let characters = (plan.characters || []).slice(0, maxCast).map((c, i) => {
     const id = (c.id || `char_${i + 1}`).replace(/\s+/g, "_").toLowerCase();
     const visualLock = sanitizeAnimalLock(
@@ -348,11 +513,17 @@ export function normalizeStoryPlan(plan: StoryPlan, pageCount: number): StoryPla
   });
 
   // Pad to exact pageCount so parent books never ship short of the paid page count.
-  // Invent DISTINCT continuing scenes — never copy-paste "(suite)" / same caption.
+  // Invent DISTINCT continuing scenes ON THE LOCKED THEME — never market/travel tropes
+  // unless the locked narrative asks for them; never copy-paste "(suite)".
   const heroId = characters[0]?.id || "char_1";
   const heroName = characters[0]?.name || "Le héros";
   const worldSetting = (plan.world?.setting || "le monde de l'histoire").trim();
-  const padTemplates = buildPadSceneTemplates(heroName, worldSetting);
+  const themeKey =
+    opts?.themeKey ||
+    inferNarrativeThemeKey(
+      `${opts?.narrativeLock || ""} ${plan.summary || ""} ${plan.concept || ""} ${worldSetting}`
+    );
+  const padTemplates = buildPadSceneTemplates(heroName, worldSetting, themeKey);
   let padIdx = 0;
   while (pages.length < pageCount) {
     const n = pages.length + 1;
@@ -530,17 +701,9 @@ export function settingElementsForScene(
 
 /** Reasonable per-page negative used when the model omits one. */
 const DEFAULT_PAGE_NEGATIVE =
-  "color, grayscale, shading, gradients, filled black areas, photorealism, blurry, text, watermark, extra fingers, fused fingers, floating head, cropped limbs, extra people, duplicate characters, inconsistent character design, empty white void, blank white eyes, hollow eyes, pupil-less eyes, elongated skull, deformed head, misshapen cranium";
+  "color, grayscale, shading, gradients, filled black areas, photorealism, blurry, text, watermark, extra fingers, fused fingers, floating head, cropped limbs, extra people, extra children, duplicate characters, twin clones, identical twin of hero, inconsistent character design, wrong gender, empty white void, blank white eyes, hollow eyes, pupil-less eyes, elongated skull, deformed head, misshapen cranium, inconsistent line weight, different art style";
 
-/**
- * Distinct French scene templates used when the LLM returns fewer pages than
- * paid pageCount. Each pad page must advance the story with a NEW action/setting —
- * never append "(suite)" to a copied title/caption.
- */
-function buildPadSceneTemplates(
-  heroName: string,
-  worldSetting: string
-): Array<{
+type PadTemplate = {
   title: string;
   storyText: string;
   action: string;
@@ -553,9 +716,257 @@ function buildPadSceneTemplates(
   resolutionTitle: string;
   resolutionStory: string;
   resolutionAction: string;
-}> {
+};
+
+/**
+ * Distinct French scene templates used when the LLM returns fewer pages than
+ * paid pageCount. Pads MUST continue the locked theme — never invent market /
+ * travel tropes unless themeKey is market/travel.
+ */
+function buildPadSceneTemplates(
+  heroName: string,
+  worldSetting: string,
+  themeKey = "adventure"
+): PadTemplate[] {
   const w = worldSetting || "le monde de l'histoire";
-  return [
+
+  if (themeKey === "princess") {
+    return [
+      {
+        title: `La petite couronne`,
+        storyText: `${heroName}, petite princesse du village, ajuste sa douce couronne dans la cour.`,
+        action: `${heroName} carefully placing a soft child crown on her head in a village courtyard`,
+        pose: "standing full-body, both hands adjusting a small crown",
+        comicBeat: "establishing",
+        shotType: "full_body",
+        camera: "three-quarter view child eye level",
+        pageSetting: `cour de village royale douce dans ${w}`,
+        illustrationDescription: `${heroName} young girl princess with a soft crown in a village courtyard with houses, flowers, sky — rich colorable scene. ONE girl only.`,
+        resolutionTitle: `Princesse aimée`,
+        resolutionStory: `${heroName} est célébrée par son village, le cœur joyeux.`,
+        resolutionAction: `${heroName} waving happily as village friends cheer from a distance as soft silhouettes`,
+      },
+      {
+        title: `Aide au village`,
+        storyText: `${heroName} aide les villageois avec gentillesse près des cases.`,
+        action: `${heroName} carrying a basket of flowers to help villagers near round huts`,
+        pose: "walking with a basket, kind smile",
+        comicBeat: "help",
+        shotType: "wide",
+        camera: "side view child eye level",
+        pageSetting: `cases du village et fleurs dans ${w}`,
+        illustrationDescription: `${heroName} girl princess helping near village huts with flowers, path, sky. No market stalls. ONE child.`,
+        resolutionTitle: `Cœur du village`,
+        resolutionStory: `${heroName} ressent l'amour de tout le village.`,
+        resolutionAction: `${heroName} hugging a soft cloth banner with a warm smile`,
+      },
+      {
+        title: `Le jardin royal`,
+        storyText: `${heroName} découvre un jardin secret derrière le grand arbre du village.`,
+        action: `${heroName} pushing aside leaves to reveal a secret garden behind a large tree`,
+        pose: "pushing leaves aside, leaning forward curiously",
+        comicBeat: "action",
+        shotType: "wide",
+        camera: "slight high angle",
+        pageSetting: `jardin secret du village dans ${w}`,
+        illustrationDescription: `${heroName} in a secret garden with trees, flowers, fence and sky. Princess child only.`,
+        resolutionTitle: `Fête douce`,
+        resolutionStory: `${heroName} danse de joie, princesse aimée de tous.`,
+        resolutionAction: `${heroName} dancing joyfully with her soft crown in a festive courtyard`,
+      },
+      {
+        title: `Le pont du village`,
+        storyText: `${heroName} traverse le petit pont pour rejoindre ses amis.`,
+        action: `${heroName} carefully crossing a wooden bridge toward village friends`,
+        pose: "mid-step on bridge, arms balancing",
+        comicBeat: "obstacle",
+        shotType: "wide",
+        camera: "side view dynamic",
+        pageSetting: `pont de village et rivière dans ${w}`,
+        illustrationDescription: `${heroName} crossing a village bridge with river, banks, trees, sky. ONE girl.`,
+        resolutionTitle: `Retour heureux`,
+        resolutionStory: `${heroName} rentre au village, couronne brillante de fierté.`,
+        resolutionAction: `${heroName} arriving home waving with a gentle crown`,
+      },
+      {
+        title: `Chanson du soir`,
+        storyText: `${heroName} chante pour le village sous les lanternes.`,
+        action: `${heroName} singing joyfully under paper lanterns in the village square`,
+        pose: "standing singing, one hand on heart",
+        comicBeat: "emotion",
+        shotType: "full_body",
+        camera: "front three-quarter",
+        pageSetting: `place du village avec lanternes dans ${w}`,
+        illustrationDescription: `${heroName} singing under lanterns with houses and soft evening sky. Princess girl only.`,
+        resolutionTitle: `Bonne nuit princesse`,
+        resolutionStory: `${heroName} s'endort aimée de tout son village.`,
+        resolutionAction: `${heroName} waving goodnight under a soft evening sky`,
+      },
+      {
+        title: `La mission douce`,
+        storyText: `${heroName} apporte de l'eau fraîche aux aînés du village.`,
+        action: `${heroName} carrying a small water calabash carefully to elders' porch`,
+        pose: "walking carefully holding a calabash with both hands",
+        comicBeat: "help",
+        shotType: "full_body",
+        camera: "three-quarter view",
+        pageSetting: `porche de case dans ${w}`,
+        illustrationDescription: `${heroName} bringing water near a village porch with pots, trees, sky. ONE child.`,
+        resolutionTitle: `Victoire douce`,
+        resolutionStory: `${heroName} a aidé tout le monde et rit de bonheur.`,
+        resolutionAction: `${heroName} celebrating with open arms in the courtyard`,
+      },
+      {
+        title: `Sous le baobab`,
+        storyText: `${heroName} écoute les contes à l'ombre du grand baobab.`,
+        action: `${heroName} sitting under a giant baobab listening with bright eyes`,
+        pose: "sitting cross-legged looking up",
+        comicBeat: "emotion",
+        shotType: "wide",
+        camera: "low angle looking slightly up",
+        pageSetting: `baobab et clairière dans ${w}`,
+        illustrationDescription: `${heroName} under a baobab with roots, grass, sky. Soft princess outfit. ONE girl.`,
+        resolutionTitle: `Étoiles du village`,
+        resolutionStory: `${heroName} regarde les étoiles, princesse apaisée.`,
+        resolutionAction: `${heroName} looking at a gentle starry sky with a warm smile`,
+      },
+      {
+        title: `Couronne de fleurs`,
+        storyText: `${heroName} tresse une couronne de fleurs pour son village.`,
+        action: `${heroName} weaving a flower crown sitting among blooms`,
+        pose: "sitting weaving flowers with both hands",
+        comicBeat: "action",
+        shotType: "mid_shot",
+        camera: "child eye level",
+        pageSetting: `parterre de fleurs du village dans ${w}`,
+        illustrationDescription: `${heroName} weaving a flower crown among blooms, fence, sky. ONE girl princess.`,
+        resolutionTitle: `Aimée de tous`,
+        resolutionStory: `${heroName} offre sa couronne de fleurs, aimée de tous.`,
+        resolutionAction: `${heroName} offering a flower crown with a joyful smile`,
+      },
+    ];
+  }
+
+  if (themeKey === "magic") {
+    return [
+      {
+        title: `Éveil magique`,
+        storyText: `${heroName} voit sa magie douce briller entre ses mains.`,
+        action: `${heroName} raising glowing soft magic orbs between both hands`,
+        pose: "arms raised, glowing orbs as open circles",
+        comicBeat: "establishing",
+        shotType: "full_body",
+        camera: "low angle",
+        pageSetting: `clairière magique dans ${w}`,
+        illustrationDescription: `${heroName} with visible soft magic sparkles (open star shapes) in a clearing. Rich environment.`,
+        resolutionTitle: `Magie partagée`,
+        resolutionStory: `${heroName} utilise sa magie pour aider, puis sourit.`,
+        resolutionAction: `${heroName} celebrating with soft glowing sparkles around`,
+      },
+      {
+        title: `Sort utile`,
+        storyText: `${heroName} aide un ami avec un sort léger et visible.`,
+        action: `${heroName} casting a gentle spark toward a stuck cart wheel`,
+        pose: "leaning forward casting with one arm",
+        comicBeat: "help",
+        shotType: "wide",
+        camera: "side view",
+        pageSetting: `chemin et charrette dans ${w}`,
+        illustrationDescription: `${heroName} using soft drawable magic near a cart, trees, sky.`,
+        resolutionTitle: `Fin enchantée`,
+        resolutionStory: `${heroName} range sa magie, le cœur léger.`,
+        resolutionAction: `${heroName} waving goodbye with a tiny glowing orb`,
+      },
+      {
+        title: `Pont enchanté`,
+        storyText: `${heroName} traverse un pont que sa magie éclaire.`,
+        action: `${heroName} crossing a bridge lit by soft magic sparkles`,
+        pose: "mid-step on bridge, one hand glowing",
+        comicBeat: "obstacle",
+        shotType: "wide",
+        camera: "side view dynamic",
+        pageSetting: `pont magique dans ${w}`,
+        illustrationDescription: `${heroName} on a magic-lit bridge with river, trees, sky.`,
+        resolutionTitle: `Maison douce`,
+        resolutionStory: `${heroName} rentre heureux après l'aventure magique.`,
+        resolutionAction: `${heroName} arriving home with a joyful wave`,
+      },
+      {
+        title: `Jardin des sorts`,
+        storyText: `${heroName} fait pousser des fleurs avec un sort doux.`,
+        action: `${heroName} kneeling making flowers bloom with soft sparkles`,
+        pose: "kneeling, hands near blooming flowers",
+        comicBeat: "action",
+        shotType: "full_body",
+        camera: "three-quarter view",
+        pageSetting: `jardin enchanté dans ${w}`,
+        illustrationDescription: `${heroName} in a flower garden with visible soft magic shapes.`,
+        resolutionTitle: `Ciel magique`,
+        resolutionStory: `${heroName} regarde le ciel, fier de sa magie gentille.`,
+        resolutionAction: `${heroName} looking at a gentle starry sky smiling`,
+      },
+      {
+        title: `Animal ami`,
+        storyText: `${heroName} apaise un petit animal avec sa magie.`,
+        action: `${heroName} gently calming a small animal with soft glowing hands`,
+        pose: "kneeling gentle hands near animal",
+        comicBeat: "help",
+        shotType: "full_body",
+        camera: "child eye level",
+        pageSetting: `lisière boisée dans ${w}`,
+        illustrationDescription: `${heroName} helping a small animal among trees and rocks.`,
+        resolutionTitle: `Câlin magique`,
+        resolutionStory: `${heroName} partage un moment tendre pour clore l'histoire.`,
+        resolutionAction: `${heroName} in a warm gentle closing pose`,
+      },
+      {
+        title: `Course étincelante`,
+        storyText: `${heroName} court en laissant une traînée d'étoiles dessinables.`,
+        action: `${heroName} running with a trail of open star sparkles behind`,
+        pose: "running mid-stride, arm forward",
+        comicBeat: "action",
+        shotType: "wide",
+        camera: "side view",
+        pageSetting: `sentier étincelant dans ${w}`,
+        illustrationDescription: `${heroName} running on a path with star sparkles, trees, sky.`,
+        resolutionTitle: `Victoire joyeuse`,
+        resolutionStory: `${heroName} a réussi et rit de bonheur.`,
+        resolutionAction: `${heroName} holding a small glowing orb with a big smile`,
+      },
+      {
+        title: `Arbre gardien`,
+        storyText: `${heroName} parle à un grand arbre ami.`,
+        action: `${heroName} placing a hand on a great tree trunk with soft glow`,
+        pose: "standing hand on tree",
+        comicBeat: "emotion",
+        shotType: "wide",
+        camera: "low angle",
+        pageSetting: `grand arbre dans ${w}`,
+        illustrationDescription: `${heroName} by a huge tree with canopy, roots, grass, sky.`,
+        resolutionTitle: `Bonne nuit magique`,
+        resolutionStory: `${heroName} s'endort le cœur léger.`,
+        resolutionAction: `${heroName} waving goodnight under soft evening sky`,
+      },
+      {
+        title: `Lanternes magiques`,
+        storyText: `${heroName} allume des lanternes avec une étincelle douce.`,
+        action: `${heroName} lighting paper lanterns with a fingertip spark`,
+        pose: "reaching up to light a lantern",
+        comicBeat: "help",
+        shotType: "full_body",
+        camera: "side view",
+        pageSetting: `chemin de lanternes dans ${w}`,
+        illustrationDescription: `${heroName} hanging/lighting lanterns along a path with houses and sky.`,
+        resolutionTitle: `Fin lumineuse`,
+        resolutionStory: `${heroName} sourit, l'aventure magique est terminée.`,
+        resolutionAction: `${heroName} smiling and waving in a peaceful closing scene`,
+      },
+    ];
+  }
+
+  // Default adventure pads — NO market unless themeKey is market.
+  const allowMarket = themeKey === "market";
+  const templates: PadTemplate[] = [
     {
       title: `Le chemin secret`,
       storyText: `${heroName} découvre un sentier caché bordé d'arbres et de fleurs.`,
@@ -583,20 +994,6 @@ function buildPadSceneTemplates(
       resolutionTitle: `Retour au calme`,
       resolutionStory: `${heroName} sourit, l'aventure se termine en douceur.`,
       resolutionAction: `${heroName} smiling and waving goodbye in a peaceful closing scene`,
-    },
-    {
-      title: `Le petit marché`,
-      storyText: `${heroName} explore un marché coloré plein de paniers et d'étoffes.`,
-      action: `${heroName} browsing market stalls, reaching for a basket`,
-      pose: "standing reaching toward a stall basket",
-      comicBeat: "action",
-      shotType: "wide",
-      camera: "slight high angle wide",
-      pageSetting: `marché avec étals dans ${w}`,
-      illustrationDescription: `${heroName} at a lively market with stalls, baskets, cloths, ground and sky filling the frame.`,
-      resolutionTitle: `Fête du retour`,
-      resolutionStory: `${heroName} célèbre avec joie la fin de l'aventure.`,
-      resolutionAction: `${heroName} dancing happily among friends in a festive final scene`,
     },
     {
       title: `Sous le grand arbre`,
@@ -642,14 +1039,14 @@ function buildPadSceneTemplates(
     },
     {
       title: `Danse sous la pluie légère`,
-      storyText: `${heroName} danse sous une pluie douce près des cases du village.`,
-      action: `${heroName} dancing joyfully in light rain near village huts`,
+      storyText: `${heroName} danse sous une pluie douce près des maisons.`,
+      action: `${heroName} dancing joyfully in light rain near simple houses`,
       pose: "dancing with arms raised, one foot lifted",
       comicBeat: "emotion",
       shotType: "wide",
       camera: "front three-quarter wide",
-      pageSetting: `cour de village sous la pluie dans ${w}`,
-      illustrationDescription: `${heroName} dancing in light rain with huts, ground puddles, trees and cloudy sky filling the page.`,
+      pageSetting: `cour sous la pluie dans ${w}`,
+      illustrationDescription: `${heroName} dancing in light rain with houses, ground puddles, trees and cloudy sky filling the page.`,
       resolutionTitle: `Câlin final`,
       resolutionStory: `${heroName} partage un moment tendre pour clore l'histoire.`,
       resolutionAction: `${heroName} in a warm gentle closing embrace pose with soft scenery`,
@@ -669,6 +1066,25 @@ function buildPadSceneTemplates(
       resolutionAction: `${heroName} waving goodnight under a soft evening sky`,
     },
   ];
+
+  if (allowMarket) {
+    templates.splice(2, 0, {
+      title: `Le petit marché`,
+      storyText: `${heroName} explore un marché coloré plein de paniers et d'étoffes.`,
+      action: `${heroName} browsing market stalls, reaching for a basket`,
+      pose: "standing reaching toward a stall basket",
+      comicBeat: "action",
+      shotType: "wide",
+      camera: "slight high angle wide",
+      pageSetting: `marché avec étals dans ${w}`,
+      illustrationDescription: `${heroName} at a lively market with stalls, baskets, cloths, ground and sky filling the frame.`,
+      resolutionTitle: `Fête du retour`,
+      resolutionStory: `${heroName} célèbre avec joie la fin de l'aventure.`,
+      resolutionAction: `${heroName} dancing happily in a festive final scene`,
+    });
+  }
+
+  return templates;
 }
 
 /**
@@ -794,9 +1210,20 @@ function ensureRichEnvironment(
     return "";
   };
 
-  // Prefer the world setting so the book's theme is respected on every page; only use
-  // the per-page scene inference when the world setting itself gives no clear place.
-  let envHint = envFor(worldHay) || envFor(sceneHay);
+  // Prefer THIS page's scene so a polluted world.setting ("…market…") cannot
+  // overwrite a princess/village page. Fall back to world only when scene is vague.
+  const sceneIsRoyal =
+    /princess|princesse|castle|chateau|château|crown|couronne|royal|royaume/i.test(
+      sceneHay
+    );
+  let envHint = "";
+  if (sceneIsRoyal) {
+    envHint =
+      envFor(sceneHay) ||
+      "ENVIRONMENT: soft royal village courtyard with houses, flowers, a path and sky — large colorable shapes. NOT a market road-trip.";
+  } else {
+    envHint = envFor(sceneHay) || envFor(worldHay);
+  }
   if (!envHint) {
     envHint = worldSetting?.trim()
       ? `ENVIRONMENT matching the story setting "${worldSetting.trim()}": include mid-ground props and a simple readable background with large colorable closed shapes (never an empty white void, never only tiny grass tufts).`

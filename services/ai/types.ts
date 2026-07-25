@@ -156,6 +156,23 @@ export interface ImageGenerationInput {
   identityFromPhoto?: boolean;
   /** Override default VISION_QC_REROLLS for this call. */
   maxVisionRerolls?: number;
+  /**
+   * Stable seed for Ideogram/Flux — same book seed family keeps line weight /
+   * cartoon hand coherent across pages (parent books especially).
+   */
+  seed?: number;
+  /**
+   * Ideogram V3 style_preset (e.g. COLORING_BOOK_I). Applied identically on
+   * every page of a book so heal/reroll cannot jump to another aesthetic.
+   */
+  stylePreset?: string;
+  /** Parent hero gender for prompt/negative gender lock. */
+  heroGender?: "girl" | "boy" | "unspecified" | string;
+  /**
+   * When true: identical series craft lock, style-preserving rerolls (seed+1),
+   * recovery keeps the style contract (no aesthetic jump).
+   */
+  consistencyMode?: boolean;
 }
 
 /** Per-image QC telemetry so re-roll cost is observable (logged on generations). */

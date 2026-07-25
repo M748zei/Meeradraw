@@ -2,7 +2,15 @@
  * Phase 1 exit criteria (logic bench): Kai + West African fidelity & style contracts.
  * Run: npx tsx scripts/bench-kai-fidelity.ts
  */
-import { assertPlanFidelity, assertPoseDiversity } from "../lib/plan-fidelity";
+import {
+  assertHeroGender,
+  assertParentNarrativeLock,
+  assertPlanFidelity,
+  assertPoseDiversity,
+  inferNarrativeThemeKey,
+} from "../lib/plan-fidelity";
+import { pageStyleSeed } from "../lib/book-style-seed";
+import { BOOK_SERIES_STYLE_LOCK, heroGenderPromptBits } from "../services/ai/prompts";
 import {
   getStyleContract,
   normalizeStyleId,
@@ -222,7 +230,7 @@ test("image prompts include style craft (page/cover/sheet/kontext)", () => {
       world: "village",
       action: "Kai climbs",
     });
-    assert(ref.length < 900, `${s} kontext should stay compact: ${ref.length}`);
+    assert(ref.length < 1200, `${s} kontext should stay compact: ${ref.length}`);
     assert(/identity|IDENTITY|B&W|line art/i.test(ref), `${s} kontext identity`);
   }
 });
@@ -255,6 +263,64 @@ test("parent style: 3-5 uses simple unless WA theme", () => {
   assert(resolveParentStyle("3-5", "magic") === "simple", "3-5 magic → simple");
   assert(resolveParentStyle("3-5", "africa") === "west_african", "3-5 africa keeps WA");
   assert(resolveParentStyle("6-8", "magic") === "fantasy", "6-8 magic → fantasy");
+});
+
+test("parent narrative lock rejects travel substitution for princess story", () => {
+  const source =
+    "Khadija est une petite fille. Khadija, princesse de son village, aimée de tous.";
+  assert(inferNarrativeThemeKey(source) === "princess", "theme key princess");
+  const drifted: StoryPlan = {
+    ...goodPlan,
+    title: "Voyage avec les parents",
+    summary: "Khadija part en voyage avec ses parents à travers le pays sur une dusty road.",
+    pages: goodPlan.pages.map((p) => ({
+      ...p,
+      storyText: "Départ au marché avec les parents.",
+      action: "walking dusty road to market",
+      pageSetting: "dusty road to market",
+    })),
+  };
+  const r = assertParentNarrativeLock(source, drifted);
+  assert(!r.ok, "expected narrative lock failure");
+});
+
+test("hero gender lock fails when girl described as boy", () => {
+  const badGender: StoryPlan = {
+    ...goodPlan,
+    characters: [
+      {
+        ...goodPlan.characters[0],
+        name: "Khadija",
+        visualLock: "young boy about 7 years old, short hair",
+        appearance: "petit garçon",
+      },
+    ],
+  };
+  const r = assertHeroGender(badGender, "girl", "Khadija");
+  assert(!r.ok, "expected gender failure");
+});
+
+test("book page seeds stay in same family", () => {
+  const a = pageStyleSeed("book-abc", 1);
+  const b = pageStyleSeed("book-abc", 2);
+  const c = pageStyleSeed("book-xyz", 1);
+  assert(a !== b, "pages differ slightly");
+  assert(a !== c, "books differ");
+  assert(Math.abs(a - b) < 1000, "same book seeds close");
+});
+
+test("series style lock + girl gender bits present in page prompt", () => {
+  const page = buildColoringPagePrompt({
+    scene: "Khadija dances in the courtyard",
+    characters: "Khadija young girl",
+    style: "fantasy",
+    world: "village courtyard",
+    heroGender: "girl",
+    consistencyMode: true,
+  });
+  assert(page.includes(BOOK_SERIES_STYLE_LOCK.slice(0, 20)), "series lock");
+  assert(/YOUNG GIRL|young girl/i.test(page), "girl lock");
+  assert(heroGenderPromptBits("girl").negative.includes("boy"), "girl negatives");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

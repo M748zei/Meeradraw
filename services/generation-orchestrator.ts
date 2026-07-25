@@ -16,6 +16,8 @@ import { buildSheetCrops } from "@/services/ai/sheet-crops";
 import { overlayCoverTitle } from "@/lib/cover-title";
 import type { ImageQcStats, SettingBible, StoryPlan } from "@/services/ai/types";
 import { getImageProvider, getTextProvider } from "@/services/ai";
+import { pageStyleSeed } from "@/lib/book-style-seed";
+import { heroGenderPromptBits } from "@/services/ai/prompts";
 import { BookService } from "@/services/book-service";
 import { CreditService } from "@/services/credit-service";
 import { PDFService } from "@/services/pdf-service";
@@ -146,20 +148,39 @@ export class GenerationOrchestrator {
     });
 
     const book = await this.books.get(userId, bookId);
-    const originalIdea =
-      book.original_idea || book.idea || "Une aventure magique pour enfants";
-    // Pipeline brief may be enriched — research/plan still anchor on original_idea.
-    const idea = book.idea || originalIdea;
-    const style = book.style || "cute";
-    const pageCount = book.page_count || 12;
-    const universeId = book.universe_id;
-    const audience = book.audience || book.audience_age || undefined;
+    const parentStory =
+      (typeof book.parent_story === "string" && book.parent_story.trim()) || "";
     const childName =
       (typeof book.child_name === "string" && book.child_name.trim()) || undefined;
     const childGender =
       (typeof book.child_gender === "string" && book.child_gender.trim()) ||
       undefined;
     const parentMode = isParentBook(book);
+
+    // Parent books: plan from the parent's story ONLY — never the bloated creative
+    // brief (theme labels like "Afrique" primed market/travel substitutions).
+    const genderLead =
+      childName && childGender === "girl"
+        ? `${childName} est une petite fille.`
+        : childName && childGender === "boy"
+          ? `${childName} est un petit garçon.`
+          : childName
+            ? `${childName} est un enfant.`
+            : "";
+    const narrativeAnchor = parentMode
+      ? [genderLead, parentStory || book.original_idea || book.idea]
+          .filter(Boolean)
+          .join(" ")
+          .trim()
+      : book.original_idea || book.idea || "Une aventure magique pour enfants";
+    const originalIdea = narrativeAnchor;
+    const idea = parentMode
+      ? narrativeAnchor
+      : book.idea || originalIdea;
+    const style = book.style || "cute";
+    const pageCount = book.page_count || 12;
+    const universeId = book.universe_id;
+    const audience = book.audience || book.audience_age || undefined;
 
     const textProvider = getTextProvider();
     // Parent fast path: skip web research (biggest text latency). Studio keeps full research.
@@ -471,6 +492,9 @@ export class GenerationOrchestrator {
     const coverStats: ImageQcStats = {};
     // Prefer sheet identity (photo→cartoon) + server title overlay — never a random crowd.
     const useOverlayTitle = Boolean(characterSheetUrl);
+    const coverGender =
+      (typeof book.child_gender === "string" && book.child_gender.trim()) ||
+      undefined;
     const cover = await imageProvider.generateImage({
       prompt: `${plan.title}. ${plan.summary}`,
       style,
@@ -478,7 +502,8 @@ export class GenerationOrchestrator {
       worldSetting,
       isCover: true,
       referenceImageUrl: characterSheetUrl || undefined,
-      forceTextOnly: !characterSheetUrl,
+      // Parent: always text-only Ideogram with shared seed/preset so cover matches pages.
+      forceTextOnly: parentMode ? true : !characterSheetUrl,
       coverTitle: useOverlayTitle ? undefined : plan.title,
       action: coverAction,
       refScene: `${coverAction}. Draw ONLY the one hero child in action — no crowd of extra children.`,
@@ -491,6 +516,10 @@ export class GenerationOrchestrator {
       expectedCast: expectedCastFor(coverHero),
       qcStats: coverStats,
       maxVisionRerolls: parentMode ? 1 : undefined,
+      seed: parentMode ? pageStyleSeed(bookId, 0) : undefined,
+      stylePreset: parentMode ? "COLORING_BOOK_I" : undefined,
+      heroGender: coverGender,
+      consistencyMode: parentMode,
     });
     await this.setQcImage(generationId, "cover", coverStats);
     const persistedCover = await this.persistCover(
@@ -608,20 +637,27 @@ export class GenerationOrchestrator {
 
     await pagesCol.doc(pageId).update({ generation_status: "generating" });
     try {
+      const parentMode = isParentBook(book);
+      const childGender =
+        (typeof book.child_gender === "string" && book.child_gender.trim()) ||
+        undefined;
+      const genderBits = heroGenderPromptBits(childGender);
       const scenePrompt = [
         scene || storyText || plan.summary,
         page.shot_type ? `Shot: ${page.shot_type}.` : "",
         page.comic_beat ? `Beat: ${page.comic_beat}.` : "",
-        "Wide full-scene coloring page: rich environment with many large props matching the caption. Hero child is part of the scene, not a portrait. No empty white void. Eyes with dark pupils. Simplified mitten hands. Max 2 characters.",
+        parentMode ? genderBits.positive : "",
+        "Wide full-scene coloring page: rich environment with many large props matching the caption. Hero child is part of the scene, not a portrait. No empty white void. Eyes with dark pupils. Simplified mitten hands. Max 2 characters. EXACTLY the named cast — no clone twins, no background children.",
       ]
         .filter(Boolean)
         .join(" ");
 
       const pageStats: ImageQcStats = {};
       // Parent books: NEVER feed the white-background photo sheet into Kontext for
-      // pages — it bleeds empty voids. Likeness comes from visualLock text + Ideogram.
+      // pages — it bleeds empty voids. Likeness comes from visualLock text + Ideogram
+      // with a shared book seed + COLORING_BOOK preset (cross-page style lock).
       // Studio: solo crop only; duo+ text-only.
-      const pageReference = isParentBook(book)
+      const pageReference = parentMode
         ? undefined
         : characterIds.length === 1 && sheetCrops[characterIds[0]]?.url
           ? sheetCrops[characterIds[0]].url
@@ -636,21 +672,27 @@ export class GenerationOrchestrator {
         `${scene} ${storyText}`
       );
       // Prefer wide shots for parent pages so the model fills scenery.
-      const shotType = isParentBook(book)
+      const shotType = parentMode
         ? page.shot_type === "close_safe"
           ? "wide"
           : page.shot_type || "wide"
         : (page.shot_type as string) || undefined;
+      const pageNeg = [
+        (page.negative_prompt as string) || "",
+        parentMode ? genderBits.negative : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
       const image = await imageProvider.generateImage({
         prompt: scenePrompt,
         style,
         characterBible:
           (page.character_lock as string) || fullCharacterBible,
-        negativePrompt: (page.negative_prompt as string) || undefined,
+        negativePrompt: pageNeg || undefined,
         worldSetting,
         isColoringPage: true,
         referenceImageUrl: pageReference,
-        forceTextOnly: isParentBook(book),
+        forceTextOnly: parentMode,
         refScene: (page.ref_scene as string) || undefined,
         shotType,
         comicBeat: (page.comic_beat as string) || undefined,
@@ -659,7 +701,11 @@ export class GenerationOrchestrator {
         worldNegative,
         expectedCast,
         qcStats: pageStats,
-        maxVisionRerolls: isParentBook(book) ? 1 : undefined,
+        maxVisionRerolls: parentMode ? 1 : undefined,
+        seed: parentMode ? pageStyleSeed(bookId, pageNumber) : undefined,
+        stylePreset: parentMode ? "COLORING_BOOK_I" : undefined,
+        heroGender: childGender,
+        consistencyMode: parentMode,
       });
 
       if (!image?.url) {

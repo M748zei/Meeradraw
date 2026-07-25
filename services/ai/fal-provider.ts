@@ -1,18 +1,25 @@
 import type { ImageAIProvider, ImageGenerationInput, ImageQcStats } from "@/services/ai/types";
 import {
+  BOOK_SERIES_STYLE_LOCK,
   buildCharacterSheetPrompt,
   buildColoringPagePrompt,
   buildCoverPrompt,
   buildNegativePrompt,
   buildReferenceGuidedScenePrompt,
   CHARACTER_SHEET_NEGATIVE_PROMPT,
+  heroGenderPromptBits,
 } from "@/services/ai/prompts";
+import { styleImageCraftLine } from "@/services/ai/style-contracts";
 import { withRetry } from "@/lib/async";
 import { isBlankOrTooFaint, hasPoorEnvironment, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
 import { checkCast, checkCoverTitle, checkPageAction } from "@/lib/vision-qc";
 import { StorageService } from "@/services/storage-service";
 import { randomUUID } from "crypto";
+
+/** Default Ideogram preset for pages/covers — locks coloring-book aesthetic book-wide. */
+const DEFAULT_PAGE_STYLE_PRESET =
+  process.env.FAL_IDEOGRAM_STYLE_PRESET?.trim() || "COLORING_BOOK_I";
 
 /**
  * Whether an endpoint accepts a real `negative_prompt` param.
@@ -63,11 +70,13 @@ const CAST_FIX_BOOST =
 const TITLE_FIX_BOOST =
   "CRITICAL: the title text must be rendered LARGE, PERFECTLY LEGIBLE and CORRECTLY SPELLED in bold playful hand-lettering in the top band.";
 const ENV_BOOST =
-  "CRITICAL ENVIRONMENT: fill AT LEAST 70% of the page with colorable scenery — ground, sky, trees, buildings, furniture, market stalls, props reaching the edges. The child is SMALLER in the frame. Absolutely NO empty white void, NO floating character on blank paper, NO portrait-only composition.";
+  "CRITICAL ENVIRONMENT: fill AT LEAST 70% of the page with colorable scenery that matches THIS scene — ground, sky, trees, buildings, furniture, props reaching the edges. The child is SMALLER in the frame. Absolutely NO empty white void, NO floating character on blank paper, NO portrait-only composition. Do NOT invent a market unless the scene is a market.";
 const EYES_BOOST =
   "CRITICAL FACE: draw BOTH eyes with a dark pupil circle AND iris inside each eye outline — never blank white eyes, never empty ovals. Natural round child head, not elongated or deformed.";
 const LINEART_BOOST =
   "STRICT BLACK AND WHITE LINE ART ONLY: pure black outlines on white paper, absolutely NO color, no colored fills, no shading, no grey — a printable coloring page, NOT a colored illustration. No artist signature, no watermark, no text in the corners.";
+const STYLE_PRESERVE_BOOST =
+  "CRITICAL STYLE PRESERVE: keep the EXACT same outline weight, cartoon hand, and coloring-book aesthetic as the rest of this book — do not switch artists or line styles.";
 /** Re-roll nudge when the hero cast portrait came back B&W (degenerate) instead of colored. */
 const COLOR_SHEET_BOOST =
   "IMPORTANT: render the characters in soft flat COLORS (colored skin, hair, outfits and fur) with bold cartoon outlines — this reference portrait must NOT be black-and-white line art.";
@@ -129,6 +138,10 @@ export class FalImageProvider implements ImageAIProvider {
       negativePrompt: input.negativePrompt,
       worldNegative: input.worldNegative,
       referenceImageUrl: useReference ? input.referenceImageUrl : undefined,
+      seed: input.seed,
+      stylePreset: input.stylePreset,
+      heroGender: input.heroGender,
+      consistencyMode: input.consistencyMode,
     });
 
     try {
@@ -145,6 +158,8 @@ export class FalImageProvider implements ImageAIProvider {
         label: useReference ? "fal-ref" : "fal",
         input,
         maxVisionRerolls: visionCap,
+        consistencyMode: Boolean(input.consistencyMode),
+        baseSeed: typeof input.seed === "number" ? input.seed : undefined,
       });
 
       // Reference-guided Kontext sometimes keeps the hero's colors despite the B&W prompt.
@@ -172,6 +187,10 @@ export class FalImageProvider implements ImageAIProvider {
           isCharacterSheet: Boolean(input.isCharacterSheet),
           negativePrompt: input.negativePrompt,
           worldNegative: input.worldNegative,
+          seed: input.seed,
+          stylePreset: input.stylePreset || DEFAULT_PAGE_STYLE_PRESET,
+          heroGender: input.heroGender,
+          consistencyMode: true,
         });
         return await this.generateWithEnvRetry({
           endpoint: textEndpoint,
@@ -186,6 +205,8 @@ export class FalImageProvider implements ImageAIProvider {
           label: "fal-fallback",
           input,
           maxVisionRerolls: visionCap,
+          consistencyMode: true,
+          baseSeed: typeof input.seed === "number" ? input.seed : undefined,
         });
       }
       throw err;
@@ -216,6 +237,9 @@ export class FalImageProvider implements ImageAIProvider {
     /** Original input — drives the vision QC (action / expected cast / cover title). */
     input?: ImageGenerationInput;
     maxVisionRerolls?: number;
+    /** Parent books: keep seed family + style lock on rerolls. */
+    consistencyMode?: boolean;
+    baseSeed?: number;
   }): Promise<{ url: string; provider: string }> {
     const {
       endpoint,
@@ -230,6 +254,8 @@ export class FalImageProvider implements ImageAIProvider {
       label,
       input,
       maxVisionRerolls = VISION_QC_REROLLS,
+      consistencyMode = false,
+      baseSeed,
     } = params;
 
     const wantsQualityCheck =
@@ -262,8 +288,15 @@ export class FalImageProvider implements ImageAIProvider {
     let prevVisionNudges: string[] = [];
 
     for (let attempt = 0; attempt <= maxRerolls; attempt++) {
+      // Consistency mode: keep seed in the same family (seed+attempt) so rerolls
+      // fix defects without jumping to a different artist aesthetic.
+      if (typeof baseSeed === "number" && Number.isFinite(baseSeed)) {
+        body.seed = (baseSeed + attempt) % 2147483647;
+      } else if (attempt > 0 && !consistencyMode) {
+        delete body.seed; // legacy: fresh random seed on reroll
+      }
+
       if (attempt > 0) {
-        // Fresh seed (fal randomizes when unset) + a nudge targeting the last defect.
         const nudges: string[] = [...prevVisionNudges];
         if (prevColored) nudges.push(LINEART_BOOST);
         if (prevNotColored) nudges.push(COLOR_SHEET_BOOST);
@@ -274,6 +307,7 @@ export class FalImageProvider implements ImageAIProvider {
           nudges.push(ENV_BOOST);
           nudges.push(EYES_BOOST);
         }
+        if (consistencyMode) nudges.push(STYLE_PRESERVE_BOOST);
         body.prompt = `${basePrompt} ${nudges.join(" ")}`;
       }
 
@@ -505,12 +539,29 @@ function buildFalBody(params: {
   negativePrompt?: string;
   worldNegative?: string;
   referenceImageUrl?: string;
+  seed?: number;
+  stylePreset?: string;
+  heroGender?: string;
+  consistencyMode?: boolean;
 }): Record<string, unknown> {
-  const { prompt, endpoint, isCharacterSheet, negativePrompt, worldNegative, referenceImageUrl } =
-    params;
+  const {
+    prompt,
+    endpoint,
+    isCharacterSheet,
+    negativePrompt,
+    worldNegative,
+    referenceImageUrl,
+    seed,
+    stylePreset,
+    heroGender,
+    consistencyMode,
+  } = params;
   const isKontext = /kontext/i.test(endpoint);
   const isIdeogram = /ideogram/i.test(endpoint);
   const useReference = Boolean(referenceImageUrl);
+  const pageNegative = isCharacterSheet
+    ? CHARACTER_SHEET_NEGATIVE_PROMPT
+    : buildNegativePrompt(negativePrompt, worldNegative, heroGender);
 
   // Ideogram V3: DESIGN style + expand_prompt:false (disables MagicPrompt so OUR exact
   // prompt is used) + a real negative_prompt. NO steps/guidance/output_format in schema.
@@ -522,12 +573,18 @@ function buildFalBody(params: {
       rendering_speed: "QUALITY",
       style: "DESIGN",
       expand_prompt: false,
+      negative_prompt: pageNegative,
     };
-    // The hero cast portrait gets its own negative (blocks cast/species drift and B&W
-    // degeneration); pages/cover get the standard coloring negative.
-    ideoBody.negative_prompt = isCharacterSheet
-      ? CHARACTER_SHEET_NEGATIVE_PROMPT
-      : buildNegativePrompt(negativePrompt, worldNegative);
+    // Pages/covers: lock COLORING_BOOK preset so every page shares one aesthetic.
+    // Character sheets stay colored DESIGN (no coloring preset).
+    if (!isCharacterSheet) {
+      ideoBody.style_preset = stylePreset || DEFAULT_PAGE_STYLE_PRESET;
+    }
+    if (typeof seed === "number" && Number.isFinite(seed)) {
+      ideoBody.seed = seed % 2147483647;
+    }
+    // Keep unused vars referenced for API clarity / future style_codes path.
+    void consistencyMode;
     return ideoBody;
   }
 
@@ -543,6 +600,9 @@ function buildFalBody(params: {
     // Do NOT send `strength` — Kontext schema rejects it.
     body.image_url = referenceImageUrl;
     body.guidance_scale = Number(process.env.FAL_REF_GUIDANCE || 3.0);
+    if (typeof seed === "number" && Number.isFinite(seed)) {
+      body.seed = seed % 2147483647;
+    }
     return body;
   }
 
@@ -551,15 +611,17 @@ function buildFalBody(params: {
 
   // Send real negative_prompt only for models that accept it (Flux ignores/rejects it).
   if (endpointSupportsNegative(endpoint)) {
-    body.negative_prompt = isCharacterSheet
-      ? CHARACTER_SHEET_NEGATIVE_PROMPT
-      : buildNegativePrompt(negativePrompt, worldNegative);
+    body.negative_prompt = pageNegative;
   }
 
   // flux/dev benefits from more steps; schnell ignores or caps low
   if (!endpoint.includes("schnell")) {
     body.num_inference_steps = Number(process.env.FAL_INFERENCE_STEPS || 28);
     body.guidance_scale = DEFAULT_GUIDANCE_SCALE;
+  }
+
+  if (typeof seed === "number" && Number.isFinite(seed)) {
+    body.seed = seed % 2147483647;
   }
 
   // Legacy img2img endpoints (non-Kontext) still use `strength`.
@@ -578,11 +640,16 @@ function buildFalBody(params: {
  */
 function buildRecoveryPrompt(input: ImageGenerationInput): string {
   const scene = (input.prompt || "").slice(0, 240).trim();
+  const craft = styleImageCraftLine(input.style || "cute").slice(0, 220);
+  const gender = heroGenderPromptBits(input.heroGender).positive;
   return [
+    input.consistencyMode ? BOOK_SERIES_STYLE_LOCK : "",
+    craft,
     "Simple black and white line-art coloring page for young children.",
+    gender,
     scene ? `Scene: ${scene}.` : "",
     "Bold thick black outlines, big clear shapes, plenty of detail filling the whole page, plain white inside shapes.",
-    "No color, no shading, no grey, no text, no watermark.",
+    "No color, no shading, no grey, no text, no watermark. Same outline weight as the rest of the book.",
   ]
     .filter(Boolean)
     .join(" ");
@@ -639,8 +706,12 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
     comicBeat: input.comicBeat,
     negativePrompt: input.negativePrompt,
     settingElements: input.settingElements,
+    heroGender: input.heroGender,
+    consistencyMode: input.consistencyMode,
   });
 }
+
+export { bookStyleSeed, pageStyleSeed } from "@/lib/book-style-seed";
 
 async function callFal(
   endpoint: string,

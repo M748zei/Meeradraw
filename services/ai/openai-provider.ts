@@ -1,5 +1,9 @@
 import OpenAI from "openai";
-import { enforceParentChildHero, normalizeStoryPlan } from "@/services/ai/character-bible";
+import {
+  enforceParentChildHero,
+  lockPlanToParentNarrative,
+  normalizeStoryPlan,
+} from "@/services/ai/character-bible";
 import {
   buildEnrichIdeaSystemPrompt,
   buildEnrichIdeaUserPrompt,
@@ -21,7 +25,14 @@ import type {
   StoryPlan,
   TextAIProvider,
 } from "@/services/ai/types";
-import { assertHeroIsChild, assertPlanFidelity, assertPoseDiversity } from "@/lib/plan-fidelity";
+import {
+  assertHeroGender,
+  assertHeroIsChild,
+  assertParentNarrativeLock,
+  assertPlanFidelity,
+  assertPoseDiversity,
+  inferNarrativeThemeKey,
+} from "@/lib/plan-fidelity";
 import { AppError } from "@/lib/errors";
 
 function createTextClient(prefer: "groq" | "openai" = "groq"): OpenAI {
@@ -285,15 +296,24 @@ export class OpenAITextProvider implements TextAIProvider {
     const brief = research ?? (await this.buildResearchBrief(idea));
     const originalIdea = opts?.originalIdea || idea;
 
+    const parentNormOpts = opts?.parentMode
+      ? {
+          parentMode: true as const,
+          narrativeLock: originalIdea,
+          themeKey: inferNarrativeThemeKey(originalIdea),
+          childGender: opts.childGender,
+        }
+      : undefined;
+
     const finalize = (raw: StoryPlan): StoryPlan => {
-      let plan = normalizeStoryPlan(raw, pageCount);
+      let plan = normalizeStoryPlan(raw, pageCount, parentNormOpts);
       if (opts?.parentMode && opts.childName) {
         plan = enforceParentChildHero(plan, {
           childName: opts.childName,
           childGender: opts.childGender,
           audience,
         });
-        plan = normalizeStoryPlan(plan, pageCount);
+        plan = normalizeStoryPlan(plan, pageCount, parentNormOpts);
       }
       return plan;
     };
@@ -306,7 +326,7 @@ export class OpenAITextProvider implements TextAIProvider {
       }
 
       const content = await this.completeJson({
-        temperature: 0.75,
+        temperature: opts?.parentMode ? 0.55 : 0.75,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -339,38 +359,85 @@ export class OpenAITextProvider implements TextAIProvider {
 
     let plan = await buildOnce();
     let fidelity = assertPlanFidelity(originalIdea, plan);
+    let narrative = opts?.parentMode
+      ? assertParentNarrativeLock(originalIdea, plan)
+      : ({ ok: true } as const);
     let diversity = assertPoseDiversity(plan);
     let childOk = opts?.parentMode
       ? assertHeroIsChild(plan, opts.childName)
       : ({ ok: true } as const);
-    if (!fidelity.ok || !diversity.ok || !childOk.ok) {
-      console.warn("story plan fidelity/diversity/child failed; retrying once", {
+    let genderOk = opts?.parentMode
+      ? assertHeroGender(plan, opts.childGender, opts.childName)
+      : ({ ok: true } as const);
+
+    if (!fidelity.ok || !narrative.ok || !diversity.ok || !childOk.ok || !genderOk.ok) {
+      console.warn("story plan fidelity/narrative/diversity/child failed; retrying once", {
         fidelity,
+        narrative,
         diversity,
         childOk,
+        genderOk,
       });
       plan = await buildOnce();
       fidelity = assertPlanFidelity(originalIdea, plan);
+      narrative = opts?.parentMode
+        ? assertParentNarrativeLock(originalIdea, plan)
+        : ({ ok: true } as const);
       diversity = assertPoseDiversity(plan);
       childOk = opts?.parentMode
         ? assertHeroIsChild(plan, opts.childName)
         : ({ ok: true } as const);
-      if (!fidelity.ok) {
+      genderOk = opts?.parentMode
+        ? assertHeroGender(plan, opts.childGender, opts.childName)
+        : ({ ok: true } as const);
+
+      // Parent books: rewrite drifted plots instead of shipping a wrong adventure.
+      if (
+        opts?.parentMode &&
+        opts.childName &&
+        (!fidelity.ok || !narrative.ok || !childOk.ok || !genderOk.ok)
+      ) {
+        console.warn("parent plan still drifted after retry; locking to parent narrative", {
+          fidelity,
+          narrative,
+          childOk,
+          genderOk,
+        });
+        plan = lockPlanToParentNarrative(plan, {
+          sourceNarrative: originalIdea,
+          childName: opts.childName,
+          childGender: opts.childGender,
+          audience,
+          pageCount,
+        });
+        fidelity = assertPlanFidelity(originalIdea, plan);
+        narrative = assertParentNarrativeLock(originalIdea, plan);
+        childOk = assertHeroIsChild(plan, opts.childName);
+        genderOk = assertHeroGender(plan, opts.childGender, opts.childName);
+      }
+
+      if (!opts?.parentMode && !fidelity.ok) {
         throw new AppError(
           "GENERATION_FAILED",
           `Plan hors sujet par rapport à l'idée : ${(fidelity.reasons || []).join(" ")}`,
           422
         );
       }
-      if (!childOk.ok) {
-        // Last resort: force child lock even if LLM drifted
+      if (opts?.parentMode && (!fidelity.ok || !narrative.ok)) {
+        // Already rewrote — if still failing, ship the locked rewrite (better than wrong plot).
+        console.warn("parent narrative lock soft-accepting rewritten plan", {
+          fidelity,
+          narrative,
+        });
+      }
+      if (!childOk.ok || !genderOk.ok) {
         if (opts?.childName) {
           plan = enforceParentChildHero(plan, {
             childName: opts.childName,
             childGender: opts.childGender,
             audience,
           });
-          plan = normalizeStoryPlan(plan, pageCount);
+          plan = normalizeStoryPlan(plan, pageCount, parentNormOpts);
         }
       }
       if (!diversity.ok) {

@@ -52,7 +52,8 @@ export default function CreateForChildPage() {
             ? `${name} est un petit garçon.`
             : `${name} est un enfant.`;
       // Theme is visual ambiance only — NEVER rewrite the parent's plot.
-      return `${genderBit} ${story}`;
+      // Keep the parent's words first; do not append Africa/market idea templates.
+      return `${genderBit} HISTOIRE DU PARENT (intrigue obligatoire, ne pas remplacer) : ${story}`;
     }
     return theme.ideaTemplate(name);
   }, [theme, childName, parentStory, gender]);
@@ -144,20 +145,29 @@ export default function CreateForChildPage() {
         gender === "girl" ? "fille" : gender === "boy" ? "garçon" : "enfant";
       const creativeBrief = [
         `Titre : L'aventure de ${name}`,
-        `Histoire du parent (SOURCE NARRATIVE) : ${story}`,
-        `Personnages : ${name}, ${genderLabel} ENFANT, héros unique`,
+        `Histoire du parent (SOURCE NARRATIVE — seule intrigue autorisée) : ${story}`,
+        `Personnages : ${name}, ${genderLabel} ENFANT, héros unique — pas de clones`,
         `Idée originale : ${idea}`,
         `Style graphique seulement (ne change PAS l'intrigue) : ${theme.label} / ${style}`,
         `Public : ${age.audience}`,
         age.promptHint,
-        `RÈGLE : ${name} est un ENFANT, jamais un adulte. L'histoire suit le texte du parent.`,
+        `RÈGLE : ${name} est un ENFANT ${genderLabel}, jamais un adulte ni le mauvais genre. L'histoire suit le texte du parent — INTERDIT de substituer un voyage/marché générique.`,
       ].join("\n");
+
+      // Beats derived from the parent's story words — not generic market/travel fillers.
+      const storyBeats = [
+        `${name} vit l'histoire : ${story.slice(0, 80)}`,
+        `${name} agit dans son monde`,
+        `${name} surmonte un petit défi`,
+        `${name} termine joyeusement son aventure`,
+      ];
 
       const bookRes = await fetchWithTimeout("/api/books", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           universe_id: universeId,
+          // Keep creative brief for audit, but original_idea + parent_story drive planning.
           idea: creativeBrief.slice(0, 4000),
           original_idea: idea.slice(0, 4000),
           title: `L'aventure de ${name}`.slice(0, 120),
@@ -174,13 +184,8 @@ export default function CreateForChildPage() {
           enrichment: {
             title: `L'aventure de ${name}`,
             synopsis: idea,
-            castHints: [`${name}, ${genderLabel}, héros principal`],
-            beats: [
-              `${name} découvre son monde`,
-              "Un défi apparaît",
-              "Un ami aide",
-              "Résolution joyeuse",
-            ],
+            castHints: [`${name}, ${genderLabel}, héros principal unique`],
+            beats: storyBeats,
           },
         }),
         timeoutMs: 20_000,

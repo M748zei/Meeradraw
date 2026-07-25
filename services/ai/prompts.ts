@@ -361,17 +361,19 @@ Si le parent dit « princesse du village aimée de tous », l'histoire DOIT êtr
           ? "Genre du héros : enfant — visualLock = young child (NOT adult)."
           : "";
   const parentBlock = params.parentMode
-    ? `MODE PARENT (STRICT) :
-- L'intrigue suit UNIQUEMENT l'histoire du parent ci-dessus.
+    ? `MODE PARENT (STRICT — ÉCHEC PRODUIT SI VIOLÉ) :
+- L'intrigue suit UNIQUEMENT l'histoire du parent ci-dessus (title, summary, concept, ET chaque storyText/action/pageSetting).
+- INTERDIT de substituer une autre aventure (voyage avec les parents, road-trip, journée/départ au marché, chemin poussiéreux) SAUF si le parent l'a EXPLICITEMENT demandé.
+- Si le parent demande princesse / village / couronne / être aimée : CHAQUE page porte cette intrigue — pas un marché générique ouest-africain.
 - Le style graphique (${params.style}) influence décors / tenues / ambiance — JAMAIS l'intrigue.
-- Cast max 2 : le héros enfant nommé + éventuellement UN ami enfant. AUCUN adulte nommé (mère, marchand…) sauf figurant silhouette.
-- visualLock du héros : âge enfant explicite ("about 4/7/10 years old"), proportions enfant, yeux avec pupilles — INTERDIT adult woman/man.
+- Cast max 2 : le héros enfant nommé + éventuellement UN ami enfant DISTINCT (jamais un clone du héros). AUCUN adulte nommé sauf figurant silhouette sans visage.
+- visualLock du héros : âge enfant explicite ("about 4/7/10 years old"), genre verrouillé, proportions enfant, yeux avec pupilles — INTERDIT adult woman/man, INTERDIT wrong gender.
 - Chaque page : le héros enfant EST visible et central ; storyText mentionne son prénom.`
     : "";
 
   return `${fidelityBlock}
 
-Brief créatif / idée pipeline : ${params.idea}
+${params.parentMode ? "Ancre narrative (histoire du parent — seule source d'intrigue) :" : "Brief créatif / idée pipeline :"} ${params.idea}
 Nombre de pages : ${params.pageCount}
 Thème / style : ${params.style}
 Public : ${params.audience || DEFAULT_AUDIENCE}
@@ -384,7 +386,7 @@ ${params.researchJson}
 
 Produis maintenant le plan JSON complet du livre de coloriage niveau librairie/KDP :
 titre, concept, bible visuelle LOCK (avec introducedOnPage), storyboard page par page avec action CONCRÈTE, characterPoses, camera, pageSetting, focalPoint, illustrationDescription ET negativePrompt.
-Rappel : FIDÉLITÉ idée originale d'abord ; héros = ENFANT ; cast serré ; visualLock anglais identique partout ; characterIds seulement depuis la bible ; variété d'angles et de poses ; CHAQUE page avec environnement riche colorable ; max 2 personnages par scène.`;
+Rappel : FIDÉLITÉ histoire du parent d'abord ; héros = ENFANT au bon genre ; cast serré ; visualLock anglais identique partout ; characterIds seulement depuis la bible ; variété d'angles et de poses ; CHAQUE page avec environnement riche colorable ; max 2 personnages par scène.`;
 }
 
 /**
@@ -428,14 +430,57 @@ export const CHILD_SAFE_FACE_NEGATIVE =
 
 /** Mandatory rich scenery so children have lots to color beyond the hero. */
 export const RICH_ENVIRONMENT_POSITIVE =
-  "MANDATORY RICH COLORABLE ENVIRONMENT filling the whole page edge-to-edge: draw ground/path, sky or canopy, at least 4–6 large props from the scene (trees, baobab, huts, market stalls, baskets, cloths, bridge planks, rocks, flowers, fences, pots). The hero child occupies at most ~40% of the frame. Background and mid-ground must be full of closed shapes to color. FORBIDDEN: empty white void, character floating alone, portrait on blank paper, only 1–2 grass tufts.";
+  "MANDATORY RICH COLORABLE ENVIRONMENT edge-to-edge: ground/path, sky or canopy, 4–6 large props from THIS scene (trees, huts, rocks, flowers, fences, pots, cloths — market stalls only if the scene is a market). Hero ≤40% of frame. FORBIDDEN: empty white void, floating character, portrait on blank paper.";
+
+/**
+ * Injected identically on every page of a book so Ideogram does not switch
+ * "artist hand" / line weight mid-book (parent text-only path especially).
+ */
+export const BOOK_SERIES_STYLE_LOCK =
+  "BOOK SERIES LOCK (identical every page): same uniform thick black outline weight, same children's cartoon line-art hand, same character face/hair/outfit proportions, same world drawing language — looks like ONE artist drew the whole book. Never switch style, never sketchier/thinner/more detailed than other pages.";
+
+/** Gender-specific positives/negatives for parent hero identity. */
+export function heroGenderPromptBits(gender?: string | null): {
+  positive: string;
+  negative: string;
+} {
+  if (gender === "girl") {
+    return {
+      positive:
+        "HERO GENDER LOCK: this hero is a YOUNG GIRL child — feminine child face and hair, NEVER a boy, NEVER an adult woman or man.",
+      negative:
+        "boy, young boy, little boy, male child, son, brother, adult woman, adult man, twin, clone, duplicate child, identical twin, crowd of children, extra children, extra kids",
+    };
+  }
+  if (gender === "boy") {
+    return {
+      positive:
+        "HERO GENDER LOCK: this hero is a YOUNG BOY child — masculine child face and hair, NEVER a girl, NEVER an adult man or woman.",
+      negative:
+        "girl, young girl, little girl, female child, daughter, sister, adult woman, adult man, twin, clone, duplicate child, identical twin, crowd of children, extra children, extra kids",
+    };
+  }
+  return {
+    positive:
+      "HERO LOCK: ONE young child hero only — never an adult, never duplicate clones of the hero.",
+    negative:
+      "adult, twin, clone, duplicate child, identical twin, crowd of children, extra children, extra kids",
+  };
+}
 
 /** Build the final negative prompt for a page (shared base + anti-lineup + optional page/world-specific). */
-export function buildNegativePrompt(pageNegative?: string, worldNegative?: string): string {
+export function buildNegativePrompt(
+  pageNegative?: string,
+  worldNegative?: string,
+  heroGender?: string | null
+): string {
+  const genderNeg = heroGenderPromptBits(heroGender).negative;
   return [
     COLORING_NEGATIVE_PROMPT,
     ANTI_LINEUP_NEGATIVE,
     CHILD_SAFE_FACE_NEGATIVE,
+    "wrong art style mid-book, inconsistent line weight, different artist style, sketchy thin lines mixed with thick, photoreal jump, painterly style",
+    genderNeg,
     (pageNegative || "").trim(),
     (worldNegative || "").trim(),
   ]
@@ -460,8 +505,12 @@ export function buildColoringPagePrompt(params: {
   negativePrompt?: string;
   /** 2–4 setting-bible elements to anchor the world on this page. */
   settingElements?: string[];
+  /** Parent books: lock gender + series hand. */
+  heroGender?: string | null;
+  consistencyMode?: boolean;
 }): string {
   const craft = styleImageCraftLine(params.style);
+  const genderBits = heroGenderPromptBits(params.heroGender);
 
   const shot =
     params.shotType === "mid_shot"
@@ -476,6 +525,8 @@ export function buildColoringPagePrompt(params: {
 
   return [
     craft,
+    params.consistencyMode ? BOOK_SERIES_STYLE_LOCK : "",
+    genderBits.positive,
     `SCENE: ${params.scene}`,
     params.world
       ? `Draw the full setting as a colorable environment (not empty): ${params.world}.`
@@ -485,7 +536,7 @@ export function buildColoringPagePrompt(params: {
       : "",
     shot,
     params.characters
-      ? `Draw ONLY these exact named characters and NO other people or animals. Keep each character's species, skin tone, hair and outfit EXACTLY as locked, identical on every page: ${params.characters}.`
+      ? `Draw ONLY these exact named characters and NO other people or animals — EXACTLY the named cast, zero background children, zero clone twins of the hero. Keep each character's species, gender, skin tone, hair and outfit EXACTLY as locked, identical on every page: ${params.characters}.`
       : "",
     "The characters are IN THE MIDDLE OF THE ACTION described in the scene — dynamic distinct poses, NOT standing in a row, NOT posing front-facing side by side, NOT a static group photo.",
     CHILD_SAFE_FACE_POSITIVE,

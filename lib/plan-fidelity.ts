@@ -1,6 +1,6 @@
 /**
  * Guard: story plans must honor the user's original idea (hero name, power/theme).
- * Used after LLM planning — retry once, then fail clearly rather than ship off-topic.
+ * Used after LLM planning — retry once, then rewrite or fail rather than ship off-topic.
  */
 
 import type { StoryPlan } from "@/services/ai/types";
@@ -113,12 +113,47 @@ const THEME_MARKERS: Array<{ re: RegExp; labels: string[] }> = [
     labels: ["foot", "football", "ballon", "soccer"],
   },
   {
-    re: /princesse|princess|prince\b/i,
-    labels: ["princesse", "princess", "prince"],
+    re: /princesse|princess|prince\b|couronne|crown|royal|royaume|château|chateau|castle/i,
+    labels: [
+      "princesse",
+      "princess",
+      "prince",
+      "couronne",
+      "crown",
+      "royal",
+      "château",
+      "castle",
+    ],
   },
   {
     re: /aimé|aimee|aimée|loved|adoré|adoree|adorée/i,
     labels: ["aime", "aimee", "loved", "adore"],
+  },
+  {
+    re: /village/i,
+    labels: ["village"],
+  },
+];
+
+/**
+ * Generic substitute adventures the model loves to invent.
+ * Banned when the parent/source narrative does NOT ask for them.
+ */
+const SUBSTITUTE_TROPES: Array<{ id: string; re: RegExp; label: string }> = [
+  {
+    id: "travel_parents",
+    re: /voyage|road\s*trip|travers(e|er|ée|ee)|across the country|a travers le pays|à travers le pays|trip with (my |the )?parents|voyage avec (ses |les )?parents|parents.*pays|pays.*parents|départ pour|dusty road|chemin poussi[eé]reux|route poussi[eé]reuse/i,
+    label: "voyage / road-trip avec les parents",
+  },
+  {
+    id: "market_day",
+    re: /journ[eé]e au march[eé]|market day|d[eé]part.*march[eé]|march[eé].*d[eé]part|au march[eé] avec|open-air market adventure|aventure au march[eé]/i,
+    label: "journée / départ au marché",
+  },
+  {
+    id: "generic_market_arc",
+    re: /petit march[eé]|explore un march[eé]|browsing market|market stalls/i,
+    label: "arc marché générique",
   },
 ];
 
@@ -150,6 +185,49 @@ export function assertHeroIsChild(
   if (!/\b(child|girl|boy|kid|years?|enfant|petite|petit)\b/.test(lock)) {
     reasons.push(`visualLock de « ${hero.name} » ne précise pas que c'est un enfant.`);
   }
+  return reasons.length ? { ok: false, reasons } : { ok: true };
+}
+
+/**
+ * Hero gender must match the parent's choice on every visualLock / appearance.
+ */
+export function assertHeroGender(
+  plan: StoryPlan,
+  childGender?: string | null,
+  childName?: string
+): FidelityResult {
+  if (!childGender || childGender === "unspecified") return { ok: true };
+
+  const hero =
+    (childName &&
+      plan.characters.find(
+        (c) => normalize(c.name) === normalize(childName)
+      )) ||
+    plan.characters[0];
+  if (!hero) return { ok: false, reasons: ["Aucun héros dans le plan."] };
+
+  const lock = normalize(
+    `${hero.visualLock || ""} ${hero.appearance || ""} ${hero.description || ""} ${hero.body || ""}`
+  );
+  const reasons: string[] = [];
+
+  if (childGender === "girl") {
+    if (/\b(young )?boy\b|\bgarcon\b|\bson\b|\blittle boy\b/.test(lock)) {
+      reasons.push(`« ${hero.name} » est décrit comme un garçon — doit être une fille.`);
+    }
+    if (!/\b(girl|fille|young girl|petite fille)\b/.test(lock)) {
+      reasons.push(`visualLock de « ${hero.name} » ne précise pas que c'est une fille.`);
+    }
+  }
+  if (childGender === "boy") {
+    if (/\b(young )?girl\b|\bfille\b|\bdaughter\b|\blittle girl\b/.test(lock)) {
+      reasons.push(`« ${hero.name} » est décrit comme une fille — doit être un garçon.`);
+    }
+    if (!/\b(boy|garcon|young boy|petit garcon)\b/.test(lock)) {
+      reasons.push(`visualLock de « ${hero.name} » ne précise pas que c'est un garçon.`);
+    }
+  }
+
   return reasons.length ? { ok: false, reasons } : { ok: true };
 }
 
@@ -201,6 +279,25 @@ export type FidelityResult =
   | { ok: true }
   | { ok: false; reasons: string[] };
 
+function planHaystack(plan: StoryPlan): string {
+  return normalize(
+    [
+      plan.title,
+      plan.subtitle,
+      plan.summary,
+      plan.concept,
+      plan.world?.setting,
+      ...plan.characters.map((c) => `${c.name} ${c.description} ${c.personality}`),
+      ...plan.pages.map(
+        (p) =>
+          `${p.title} ${p.storyText} ${p.action} ${p.illustrationDescription} ${p.pageSetting}`
+      ),
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+}
+
 /**
  * Soft check: original idea's hero name + core theme must surface in the plan.
  * Skips when the idea is too vague (< 3 meaningful tokens).
@@ -217,21 +314,7 @@ export function assertPlanFidelity(
     return { ok: true };
   }
 
-  const hay = normalize(
-    [
-      plan.title,
-      plan.subtitle,
-      plan.summary,
-      plan.concept,
-      ...plan.characters.map((c) => `${c.name} ${c.description} ${c.personality}`),
-      ...plan.pages.map(
-        (p) => `${p.title} ${p.storyText} ${p.action} ${p.illustrationDescription}`
-      ),
-    ]
-      .filter(Boolean)
-      .join(" ")
-  );
-
+  const hay = planHaystack(plan);
   const reasons: string[] = [];
 
   for (const name of names) {
@@ -261,6 +344,105 @@ export function assertPlanFidelity(
   }
 
   return reasons.length ? { ok: false, reasons } : { ok: true };
+}
+
+/**
+ * Hard parent lock: ban substitute adventures (travel/market) when the parent
+ * asked for something else (princess/village/custom story), and require the
+ * parent's distinctive words across title + summary + pages.
+ */
+export function assertParentNarrativeLock(
+  sourceNarrative: string,
+  plan: StoryPlan
+): FidelityResult {
+  const source = sourceNarrative.trim();
+  if (source.length < 12) return { ok: true };
+
+  const sourceN = normalize(source);
+  const hay = planHaystack(plan);
+  const reasons: string[] = [];
+
+  for (const trope of SUBSTITUTE_TROPES) {
+    const inSource = trope.re.test(source);
+    const inPlan = trope.re.test(hay);
+    if (!inSource && inPlan) {
+      reasons.push(
+        `Intrigue substituée détectée (« ${trope.label} ») alors que l'histoire du parent ne la demande pas.`
+      );
+    }
+  }
+
+  // Core theme markers from source must survive in the plan (harder than soft fidelity).
+  for (const themeGroup of THEME_MARKERS) {
+    if (!themeGroup.re.test(source)) continue;
+    const hit = themeGroup.labels.some((l) => hay.includes(normalize(l)));
+    if (!hit) {
+      reasons.push(
+        `Le thème central « ${themeGroup.labels[0]} » du parent a disparu du plan.`
+      );
+    }
+  }
+
+  const { tokens } = extractIdeaKeywords(source);
+  if (tokens.length >= 5) {
+    const hits = tokens.filter((t) => hay.includes(t)).length;
+    if (hits / tokens.length < 0.35) {
+      reasons.push(
+        "Le plan ne conserve pas assez de mots de l'histoire du parent (substitution probable)."
+      );
+    }
+  }
+
+  // Every page caption must mention the hero name if we can extract one, OR
+  // share at least one distinctive source token (blocks total plot replacement).
+  const { names } = extractIdeaKeywords(source);
+  const heroName = names[0];
+  if (heroName && plan.pages?.length) {
+    const heroN = normalize(heroName);
+    const pagesMissingHero = plan.pages.filter((p) => {
+      const pageN = normalize(
+        `${p.storyText || ""} ${p.title || ""} ${p.action || ""}`
+      );
+      return !pageN.includes(heroN);
+    });
+    if (pagesMissingHero.length >= Math.max(2, Math.ceil(plan.pages.length * 0.4))) {
+      reasons.push(
+        `Trop de pages omettent le héros « ${heroName} » dans le texte / l'action.`
+      );
+    }
+  }
+
+  // If source is NOT about travel/market, title+summary must not lead with that.
+  const lead = normalize(`${plan.title || ""} ${plan.summary || ""}`);
+  if (
+    !/voyage|road\s*trip|march[eé]|market|parents/i.test(sourceN) &&
+    /voyage|road\s*trip|journ[eé]e au march|avec (ses |les )?parents|dusty road/i.test(
+      lead
+    )
+  ) {
+    reasons.push(
+      "Le titre/résumé raconte un voyage ou un marché différent de l'histoire du parent."
+    );
+  }
+
+  return reasons.length ? { ok: false, reasons } : { ok: true };
+}
+
+/**
+ * Infer a short theme key for pad-scene generation from the locked narrative.
+ */
+export function inferNarrativeThemeKey(sourceNarrative: string): string {
+  const s = sourceNarrative || "";
+  if (/princesse|princess|prince\b|couronne|crown|royal|château|chateau|castle/i.test(s)) {
+    return "princess";
+  }
+  if (/pouvoir|magie|magique|spell|wizard|magic/i.test(s)) return "magic";
+  if (/école|school|classe/i.test(s)) return "school";
+  if (/animal|animaux|renard|lion|éléphant|elephant|tortue/i.test(s)) return "animals";
+  if (/marché|market|étal|etal/i.test(s)) return "market";
+  if (/voyage|road\s*trip|travers/i.test(s)) return "travel";
+  if (/village|baobab|afrique/i.test(s)) return "village";
+  return "adventure";
 }
 
 /**
