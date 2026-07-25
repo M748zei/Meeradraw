@@ -62,6 +62,10 @@ export class BookService {
       audience?: string;
       audience_age?: string;
       child_name?: string;
+      child_gender?: string;
+      parent_story?: string;
+      child_photo_url?: string;
+      source?: string;
     }
   ): Promise<Book> {
     // Cross-tenant guard: never attach a book to someone else's universe.
@@ -91,6 +95,10 @@ export class BookService {
       audience: input.audience ?? null,
       audience_age: input.audience_age ?? null,
       child_name: input.child_name?.trim() || null,
+      child_gender: input.child_gender?.trim() || null,
+      parent_story: input.parent_story?.trim() || null,
+      child_photo_url: input.child_photo_url?.trim() || null,
+      source: input.source?.trim() || null,
       created_at: now,
       updated_at: now,
     };

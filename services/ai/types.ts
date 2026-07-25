@@ -150,6 +150,12 @@ export interface ImageGenerationInput {
   expectedCast?: Array<{ name: string; kind: string }>;
   /** Collector for QC/re-roll stats (mutated by the provider; optional). */
   qcStats?: ImageQcStats;
+  /** Force Ideogram text-only (no Kontext) — parent covers. */
+  forceTextOnly?: boolean;
+  /** Character sheet guided by a real child photo (identity). */
+  identityFromPhoto?: boolean;
+  /** Override default VISION_QC_REROLLS for this call. */
+  maxVisionRerolls?: number;
 }
 
 /** Per-image QC telemetry so re-roll cost is observable (logged on generations). */
@@ -186,7 +192,7 @@ export interface TextAIProvider {
     style: string,
     research?: ResearchBrief,
     audience?: string,
-    opts?: { originalIdea?: string; childName?: string }
+    opts?: { originalIdea?: string; childName?: string; childGender?: string }
   ): Promise<StoryPlan>;
   /** Visual world bible for a universe (lazy, cached on the universe doc). */
   generateSettingBible(params: {

@@ -88,14 +88,20 @@ export class FalImageProvider implements ImageAIProvider {
 
     // Cover WITH lettered title always goes text-only Ideogram: Kontext cannot
     // render reliable lettering, and Ideogram's is the whole point (audit T6).
+    // Character sheets normally text-only, except photo-identity sheets.
     const useReference =
       Boolean(refEndpoint) &&
       Boolean(input.referenceImageUrl) &&
-      !input.isCharacterSheet &&
-      !(input.isCover && input.coverTitle);
+      !input.forceTextOnly &&
+      !(input.isCover && input.coverTitle) &&
+      (!input.isCharacterSheet || Boolean(input.identityFromPhoto));
 
     const prompt = buildPrompt(input, useReference);
     const endpoint = useReference ? refEndpoint : textEndpoint;
+    const visionCap =
+      typeof input.maxVisionRerolls === "number" && input.maxVisionRerolls >= 0
+        ? input.maxVisionRerolls
+        : VISION_QC_REROLLS;
     // Short, high-adherence fallback used ONLY to rescue a persistently blank story page.
     const recoveryPrompt =
       !input.isCharacterSheet && !input.isCover
@@ -136,6 +142,7 @@ export class FalImageProvider implements ImageAIProvider {
         recoveryPrompt,
         label: useReference ? "fal-ref" : "fal",
         input,
+        maxVisionRerolls: visionCap,
       });
 
       // Reference-guided Kontext sometimes keeps the hero's colors despite the B&W prompt.
@@ -176,6 +183,7 @@ export class FalImageProvider implements ImageAIProvider {
           recoveryPrompt,
           label: "fal-fallback",
           input,
+          maxVisionRerolls: visionCap,
         });
       }
       throw err;
@@ -205,6 +213,7 @@ export class FalImageProvider implements ImageAIProvider {
     label: string;
     /** Original input — drives the vision QC (action / expected cast / cover title). */
     input?: ImageGenerationInput;
+    maxVisionRerolls?: number;
   }): Promise<{ url: string; provider: string }> {
     const {
       endpoint,
@@ -218,13 +227,14 @@ export class FalImageProvider implements ImageAIProvider {
       recoveryPrompt,
       label,
       input,
+      maxVisionRerolls = VISION_QC_REROLLS,
     } = params;
 
     const wantsQualityCheck =
       validateNonBlank || validateEnvironment || validateLineArt || Boolean(requireColored);
     // Vision re-rolls extend the loop but keep their own (smaller) cap.
     const maxRerolls = wantsQualityCheck
-      ? FAL_QUALITY_REROLLS + VISION_QC_REROLLS
+      ? FAL_QUALITY_REROLLS + maxVisionRerolls
       : 0;
     let visionRerollsUsed = 0;
     let pixelRerollsUsed = 0;
@@ -305,7 +315,7 @@ export class FalImageProvider implements ImageAIProvider {
       // own re-roll cap. Fail-open: null verdict = cannot judge = accept.
       let visionScore = 0;
       prevVisionNudges = [];
-      if (score === 0 && input && visionRerollsUsed < VISION_QC_REROLLS + 1) {
+      if (score === 0 && input && visionRerollsUsed < maxVisionRerolls + 1) {
         const verdicts: string[] = [];
         if (input.isCharacterSheet && input.expectedCast?.length) {
           const cast = await checkCast(current.url, input.expectedCast);
@@ -383,13 +393,13 @@ export class FalImageProvider implements ImageAIProvider {
         pixelRerollsUsed++;
         qcStats.pixelRerolls = pixelRerollsUsed;
       } else {
-        if (visionRerollsUsed >= VISION_QC_REROLLS) break;
+        if (visionRerollsUsed >= maxVisionRerolls) break;
         visionRerollsUsed++;
         qcStats.visionRerolls = visionRerollsUsed;
       }
       if (attempt < maxRerolls) {
         console.warn(
-          `[${label}] quality re-roll (blank=${blank}, colored=${colored}, notColored=${notColored}, poorEnv=${poorEnv}, vision=${prevVisionNudges.length > 0}); pixel ${pixelRerollsUsed}/${FAL_QUALITY_REROLLS}, vision ${visionRerollsUsed}/${VISION_QC_REROLLS}`
+          `[${label}] quality re-roll (blank=${blank}, colored=${colored}, notColored=${notColored}, poorEnv=${poorEnv}, vision=${prevVisionNudges.length > 0}); pixel ${pixelRerollsUsed}/${FAL_QUALITY_REROLLS}, vision ${visionRerollsUsed}/${maxVisionRerolls}`
         );
       }
     }
@@ -576,6 +586,7 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
       characters: input.characterBible || "",
       style: input.style,
       castCount: input.expectedCast?.length,
+      identityFromPhoto: Boolean(input.identityFromPhoto),
     });
   }
   if (input.isCover) {

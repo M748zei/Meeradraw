@@ -11,11 +11,6 @@ export type GenerateBookArgs = {
   startedAt: number;
 };
 
-const PAGE_WAVE = Math.max(
-  1,
-  Math.min(6, Number(process.env.PAGE_GEN_CONCURRENCY || 3) || 3)
-);
-
 /**
  * Durable book generation — one step per phase / page wave so a 12–25 page
  * book survives Vercel function timeouts (the old after()+orchestrator.run
@@ -33,10 +28,17 @@ export async function generateBookWorkflow(args: GenerateBookArgs) {
     await stepSheet(args);
     const pageIds = await stepCoverAndSetup(args);
 
-    for (let i = 0; i < pageIds.length; i += PAGE_WAVE) {
-      const wave = pageIds.slice(i, i + PAGE_WAVE);
+    // Parent books: larger waves (faster wall-clock). Studio keeps default.
+    const waveSize = await stepResolveWaveSize(args);
+
+    for (let i = 0; i < pageIds.length; i += waveSize) {
+      const wave = pageIds.slice(i, i + waveSize);
       await Promise.all(wave.map((pageId) => stepOnePage(args, pageId)));
     }
+
+    // Heal failed pages before finalize (1–2 passes) so we don't ship 1/N.
+    await stepHealFailedPages(args, 1);
+    await stepHealFailedPages(args, 2);
 
     await stepFinalize(args);
     console.log(`[workflow] generateBook done gen=${args.generationId}`);
@@ -44,11 +46,30 @@ export async function generateBookWorkflow(args: GenerateBookArgs) {
   } catch (err) {
     console.error(`[workflow] generateBook failed gen=${args.generationId}`, err);
     await stepFail(args, err);
-    // Don't retry the whole workflow — failRun already refunded.
     throw new FatalError(
       err instanceof Error ? err.message : "Génération interrompue"
     );
   }
+}
+
+async function stepResolveWaveSize(args: GenerateBookArgs): Promise<number> {
+  "use step";
+  const orch = new GenerationOrchestrator(getAdminDb());
+  return orch.resolvePageWaveSize(args.userId, args.bookId);
+}
+
+async function stepHealFailedPages(args: GenerateBookArgs, pass: number) {
+  "use step";
+  console.log(
+    `[workflow] step heal pass=${pass} gen=${args.generationId}`
+  );
+  const orch = new GenerationOrchestrator(getAdminDb());
+  await orch.runHealFailedPagesPhase(
+    args.userId,
+    args.bookId,
+    args.generationId,
+    pass
+  );
 }
 
 async function stepStory(args: GenerateBookArgs) {

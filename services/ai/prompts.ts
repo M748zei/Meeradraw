@@ -338,6 +338,7 @@ export function buildStoryUserPrompt(params: {
   /** Raw user idea — must win over any enriched creative brief. */
   originalIdea?: string;
   childName?: string;
+  childGender?: string;
 }): string {
   const fidelityBlock = params.originalIdea
     ? `IDÉE ORIGINALE UTILISATEUR (PRIORITÉ ABSOLUE — ne pas remplacer) :
@@ -349,6 +350,14 @@ Le brief créatif ci-dessous peut clarifier, mais le héros / thème / pouvoir d
   const nameBlock = params.childName
     ? `Prénom du héros enfant (obligatoire dans titres, storyText, cast) : ${params.childName}.`
     : "";
+  const genderBlock =
+    params.childGender === "girl"
+      ? "Genre du héros : FILLE — visualLock et storyText doivent refléter une fille (she/elle)."
+      : params.childGender === "boy"
+        ? "Genre du héros : GARÇON — visualLock et storyText doivent refléter un garçon (he/il)."
+        : params.childGender === "unspecified"
+          ? "Genre du héros : non précisé — reste neutre / adaptable."
+          : "";
 
   return `${fidelityBlock}
 
@@ -357,6 +366,7 @@ Nombre de pages : ${params.pageCount}
 Thème / style : ${params.style}
 Public : ${params.audience || DEFAULT_AUDIENCE}
 ${nameBlock}
+${genderBlock}
 
 BRIEF DE RECHERCHE (à respecter, sans écraser l'idée originale) :
 ${params.researchJson}
@@ -382,7 +392,9 @@ export const COLORING_NEGATIVE_PROMPT = [
   "extra people, duplicate characters, cloned faces, inconsistent character design, changing outfits,",
   "unrelated extra adults, random adult bystanders with detailed faces, unrelated extra animals, wrong animal species,",
   "empty white void, blank background, floating characters, only grass tufts,",
-  "scary, creepy, distorted anatomy, disfigured, nsfw",
+  "scary, creepy, distorted anatomy, disfigured, nsfw,",
+  "blank white eyes, hollow eyes, empty eyes, staring void eyes, pupil-less eyes, black empty sockets,",
+  "horror, nightmare, traumatic face, uncanny valley, dead stare",
 ].join(" ");
 
 /**
@@ -395,9 +407,22 @@ export const COLORING_NEGATIVE_PROMPT = [
 export const ANTI_LINEUP_NEGATIVE =
   "characters standing in a row, front-facing lineup, model sheet, character reference sheet, static group photo, characters posing side by side, everyone facing the camera, characters standing still doing nothing";
 
+/** Soft, printable child faces — injected into covers and pages. */
+export const CHILD_SAFE_FACE_POSITIVE =
+  "Friendly warm cartoon child faces: big expressive eyes WITH clear pupils and small catchlights, soft rounded cheeks, gentle smile, never blank white eyes, never hollow or staring eyes, never creepy or scary.";
+
+export const CHILD_SAFE_FACE_NEGATIVE =
+  "blank white eyes, hollow eyes, empty eyes, pupil-less eyes, staring void eyes, black empty sockets, creepy face, horror, nightmare, uncanny valley, traumatic expression, dead stare, sharp teeth";
+
 /** Build the final negative prompt for a page (shared base + anti-lineup + optional page/world-specific). */
 export function buildNegativePrompt(pageNegative?: string, worldNegative?: string): string {
-  return [COLORING_NEGATIVE_PROMPT, ANTI_LINEUP_NEGATIVE, (pageNegative || "").trim(), (worldNegative || "").trim()]
+  return [
+    COLORING_NEGATIVE_PROMPT,
+    ANTI_LINEUP_NEGATIVE,
+    CHILD_SAFE_FACE_NEGATIVE,
+    (pageNegative || "").trim(),
+    (worldNegative || "").trim(),
+  ]
     .filter(Boolean)
     .join(" ");
 }
@@ -447,6 +472,7 @@ export function buildColoringPagePrompt(params: {
       ? `Draw ONLY these exact named characters and NO other people or animals. Keep each character's species, skin tone, hair and outfit EXACTLY as locked, identical on every page: ${params.characters}.`
       : "",
     "The characters are IN THE MIDDLE OF THE ACTION described in the scene — dynamic distinct poses, NOT standing in a row, NOT posing front-facing side by side, NOT a static group photo.",
+    CHILD_SAFE_FACE_POSITIVE,
     "Fill the page with the background — never an empty white void or floating characters. Full bodies inside the frame, simple mitten-style kid hands, at most 2 characters, no extra people.",
     params.comicBeat ? `Story beat: ${params.comicBeat}.` : "",
   ]
@@ -483,6 +509,7 @@ export function buildCoverPrompt(params: {
     titleClause,
     `MAIN SCENE (lower two thirds): the heroes IN THE MIDDLE OF AN ACTION — ${params.action || params.summary} —`,
     "dynamic distinct poses telling the story at a glance; NOT standing in a row, NOT a front-facing lineup, NOT posing side by side on an empty background.",
+    CHILD_SAFE_FACE_POSITIVE,
     anchors.length
       ? `Set them in the world's signature scenery: ${anchors.join(", ")} — rich colorable environment filling the frame.`
       : "Rich colorable signature environment of the story filling the frame.",
@@ -515,14 +542,30 @@ export function buildCharacterSheetPrompt(params: {
   style: string;
   /** Exact number of characters in the brief — the sheet must contain EXACTLY this many figures. */
   castCount?: number;
+  /** When true, keep likeness of a real child photo (Kontext/img2img). */
+  identityFromPhoto?: boolean;
 }): string {
   const countClause = params.castCount
     ? `EXACTLY ${params.castCount} figure${params.castCount > 1 ? "s" : ""} in the image — count them: ${params.castCount}, not one more, not one less.`
     : "";
+  if (params.identityFromPhoto) {
+    return [
+      "Transform the reference PHOTO into a friendly children's picture-book CHARACTER PORTRAIT (colored flat cartoon), FULL BODY head-to-toe on a plain white background.",
+      "Keep the child's likeness: similar face shape, hair, skin tone, and age — but as a soft cartoon, NOT photorealistic.",
+      CHILD_SAFE_FACE_POSITIVE,
+      `CHARACTER LOCK to honor: ${params.characters}.`,
+      countClause,
+      styleImageCraftLine(params.style),
+      "Soft flat COLORS, clean bold cartoon outlines, warm and joyful. NO text, no letters, no watermark, no scary eyes.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
   return [
     "Children's picture-book character reference portrait: the story's main cast side by side on a plain white background, FULL BODY head-to-toe, large, clearly visible, clearly separated. HUMAN characters face the viewer standing; ANIMAL characters are shown in SIDE PROFILE standing naturally on ALL FOUR LEGS.",
     `DRAW EXACTLY THIS CAST — one figure per listed character, nobody else: ${params.characters}.`,
     countClause,
+    CHILD_SAFE_FACE_POSITIVE,
     styleImageCraftLine(params.style),
     "Each character keeps their exact species, gender, age, skin tone, hairstyle and outfit as described — no substitutions, no duplicates, no twins.",
     "Any ANIMAL character is a REAL animal of its species standing ON ALL FOUR LEGS in natural side profile (a fox = real four-legged fox with pointy ears, slender snout, bushy tail; an elephant = real elephant calf on four legs with its trunk down) — NOT a dog, NOT a human child, NOT standing upright on two legs, NOT wearing a collar or clothes, NOT anthropomorphic.",
@@ -545,7 +588,8 @@ export const CHARACTER_SHEET_NEGATIVE_PROMPT = [
   "bipedal animal, animal standing on two legs, animal wearing clothes, animal wearing a collar, anthropomorphic animal,",
   "scene background, landscape, props, furniture,",
   "text, letters, words, labels, watermark, logo, signature,",
-  "photorealistic, photo, 3D render, scary, distorted anatomy, nsfw",
+  "photorealistic, photo, 3D render, scary, distorted anatomy, nsfw,",
+  CHILD_SAFE_FACE_NEGATIVE,
 ].join(" ");
 
 /**

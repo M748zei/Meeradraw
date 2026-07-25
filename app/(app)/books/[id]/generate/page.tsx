@@ -107,6 +107,14 @@ function GenerateInner() {
   const partial = progress?.status === "partial";
   const failed = progress?.status === "failed";
   const finished = done || partial;
+  const parentFacingError = (() => {
+    const raw = error || progress?.error_message || "";
+    if (!raw) return null;
+    if (/qualité\s*\d|\/100|alignement|lineup/i.test(raw)) {
+      return "On termine encore quelques pages pour vous offrir un cahier complet.";
+    }
+    return raw;
+  })();
 
   if (resolving) {
     return <Skeleton className="h-64 w-full" />;
@@ -119,14 +127,14 @@ function GenerateInner() {
           {done
             ? "Votre livre est prêt ✦"
             : partial
-              ? "Livre presque prêt"
+              ? "Presque terminé…"
               : "Votre livre prend vie…"}
         </h1>
         <p className="mt-2 text-ink-muted">
           {done
-            ? "Une équipe virtuelle a travaillé pour vous."
+            ? "Votre cahier est prêt à imprimer."
             : partial
-              ? "Certaines pages n’ont pas d’illustration — régénérez-les ci-dessous."
+              ? "On finalise encore les dernières pages."
               : "Regardez votre histoire se construire page après page."}
         </p>
       </div>
@@ -159,7 +167,7 @@ function GenerateInner() {
             Nous avons rencontré un petit problème.
           </p>
           <p className="mt-1 text-sm text-ink-muted">
-            {error || progress?.error_message || "Essayons à nouveau."}
+            {parentFacingError || "Essayons à nouveau."}
           </p>
           <Link href={`/books/${bookId}`} className="mt-4 inline-block">
             <Button variant="secondary">Retour au livre</Button>
@@ -167,9 +175,9 @@ function GenerateInner() {
         </Card>
       ) : null}
 
-      {partial && progress?.error_message ? (
+      {partial && parentFacingError ? (
         <Card className="border-amber-200 bg-amber-50">
-          <p className="text-sm text-ink">{progress.error_message}</p>
+          <p className="text-sm text-ink">{parentFacingError}</p>
         </Card>
       ) : null}
 

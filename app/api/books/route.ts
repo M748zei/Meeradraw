@@ -32,6 +32,10 @@ const createSchema = z.object({
   audience: z.string().max(80).optional(),
   audience_age: z.string().max(40).optional(),
   child_name: z.string().max(60).optional(),
+  child_gender: z.enum(["girl", "boy", "unspecified"]).optional(),
+  parent_story: z.string().max(2000).optional(),
+  child_photo_url: z.string().min(8).max(4000).optional(),
+  source: z.enum(["parent_create", "studio"]).optional(),
 });
 
 export async function POST(request: Request) {

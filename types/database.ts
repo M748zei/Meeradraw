@@ -82,6 +82,14 @@ export interface Book {
   audience_age?: string | null;
   /** Child first name for parent MVP — injected into bible / titles / storyText. */
   child_name?: string | null;
+  /** Parent create: girl | boy | unspecified */
+  child_gender?: string | null;
+  /** Parent's free-text story brief (becomes original_idea). */
+  parent_story?: string | null;
+  /** Optional child photo URL used as identity reference for the model sheet. */
+  child_photo_url?: string | null;
+  /** "parent_create" enables the fast reliable parent pipeline. */
+  source?: string | null;
   /** Locked character descriptors injected into every image prompt. */
   character_bible?: string | null;
   character_sheet_url?: string | null;

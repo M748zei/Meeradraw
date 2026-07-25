@@ -23,7 +23,7 @@ const steps = [
   {
     icon: Wand2,
     title: "Âge, thème, prénom",
-    text: "Choisissez l’âge de votre enfant, un thème, et ajoutez son prénom.",
+    text: "Âge, genre, prénom, votre histoire — et une photo pour qu’il lui ressemble.",
   },
   {
     icon: Sparkles,

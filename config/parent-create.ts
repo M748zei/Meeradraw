@@ -130,4 +130,12 @@ export function resolveParentStyle(ageId: string, themeId: string): string {
 }
 
 export const PARENT_PROMISE =
-  "Choisissez l’âge, le thème, ajoutez un prénom — recevez un cahier parfait prêt à imprimer.";
+  "Âge, genre, prénom, votre histoire — et une photo si vous voulez : un cahier qui ressemble à votre enfant, prêt à imprimer.";
+
+export const CHILD_GENDERS = [
+  { id: "girl" as const, label: "Fille" },
+  { id: "boy" as const, label: "Garçon" },
+  { id: "unspecified" as const, label: "Non précisé" },
+];
+
+export type ChildGenderId = (typeof CHILD_GENDERS)[number]["id"];

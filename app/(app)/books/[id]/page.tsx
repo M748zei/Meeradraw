@@ -2,7 +2,6 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { PdfDownloadButton } from "@/components/books/pdf-download-button";
-import { QualityScoreCard } from "@/components/books/quality-score-card";
 import { RegeneratePageButton } from "@/components/books/regenerate-page-button";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -95,20 +94,22 @@ export default async function BookPage({ params }: Props) {
             {book.page_count} pages · {book.status}
             {book.child_name ? ` · pour ${book.child_name}` : ""}
           </p>
-          {book.quality_summary ? (
-            <QualityScoreCard quality={book.quality_summary} />
-          ) : null}
-          {missingPages.length > 0 ? (
-            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-ink">
-              {missingPages.length} page(s) sans illustration. Utilisez « Régénérer cette page »
-              sous chaque page manquante.
+          {book.status === "generating" ? (
+            <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-ink">
+              On termine encore votre cahier — quelques pages arrivent.
             </div>
           ) : null}
-          {book.status === "partial" && !book.quality_summary?.gate_partial ? (
-            <p className="mt-3 text-sm text-amber-800">
-              Génération partielle — certaines pages peuvent être à régénérer avant
-              impression.
-            </p>
+          {book.status === "failed" ? (
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-ink">
+              La création n&apos;a pas abouti. Vos crédits ont été remboursés — réessayez
+              depuis « Créer pour mon enfant ».
+            </div>
+          ) : null}
+          {missingPages.length > 0 && book.status !== "generating" && book.status !== "failed" ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-ink">
+              Quelques pages manquent encore. Utilisez « Régénérer cette page » ci-dessous —
+              on vise un cahier complet avant impression.
+            </div>
           ) : null}
           <div className="mt-6 flex flex-wrap gap-3">
             {canExportPdf ? (
@@ -158,15 +159,7 @@ export default async function BookPage({ params }: Props) {
                 </div>
                 <div className="space-y-3 p-4">
                   <div>
-                    <p className="text-xs text-ink-muted">
-                      Page {page.page_number}
-                      {page.qc_stats?.lineupDetected ||
-                      (page.qc_stats?.visionVerdicts || []).some((v) =>
-                        String(v).toLowerCase().startsWith("lineup")
-                      )
-                        ? " · pose à revoir"
-                        : ""}
-                    </p>
+                    <p className="text-xs text-ink-muted">Page {page.page_number}</p>
                     <h3 className="font-semibold">{page.title}</h3>
                     <p className="mt-1 text-sm text-ink-muted">{page.story_text}</p>
                   </div>

@@ -275,7 +275,7 @@ export class OpenAITextProvider implements TextAIProvider {
     style: string,
     research?: ResearchBrief,
     audience?: string,
-    opts?: { originalIdea?: string; childName?: string }
+    opts?: { originalIdea?: string; childName?: string; childGender?: string }
   ): Promise<StoryPlan> {
     const brief = research ?? (await this.buildResearchBrief(idea));
     const originalIdea = opts?.originalIdea || idea;
@@ -303,6 +303,7 @@ export class OpenAITextProvider implements TextAIProvider {
               audience,
               originalIdea,
               childName: opts?.childName,
+              childGender: opts?.childGender,
             }),
           },
         ],
@@ -347,7 +348,7 @@ export class OpenAITextProvider implements TextAIProvider {
     style: string,
     brief: ResearchBrief,
     audience?: string,
-    opts?: { originalIdea?: string; childName?: string }
+    opts?: { originalIdea?: string; childName?: string; childGender?: string }
   ): Promise<StoryPlan> {
     // Phase 1 — master outline. The free-tier output cut (~3k tokens) also
     // limits the OUTLINE, so pages are outlined in slices of 12: first call
@@ -369,6 +370,7 @@ export class OpenAITextProvider implements TextAIProvider {
             audience,
             originalIdea: opts?.originalIdea || idea,
             childName: opts?.childName,
+            childGender: opts?.childGender,
           })}\n\nTRANCHE DEMANDÉE : cadre complet (title/concept/characters/world) + pages ${1} à ${firstEnd} UNIQUEMENT (le livre continuera jusqu'à la page ${pageCount} ensuite${pageCount > firstEnd ? " — ne conclus PAS l'histoire dans cette tranche" : ""}).`,
         },
       ],
