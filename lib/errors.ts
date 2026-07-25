@@ -11,6 +11,7 @@ export type AppErrorCode =
   | "GENERATION_FAILED"
   | "PAYMENT_FAILED"
   | "TIMEOUT"
+  | "RATE_LIMITED"
   | "CONFLICT"
   | "INTERNAL_ERROR";
 
@@ -89,6 +90,11 @@ export const ERROR_MESSAGES: Record<
   TIMEOUT: {
     title: "Délai dépassé",
     description: "L’opération a pris trop de temps. Réessayez ou continuez avec le brief de secours.",
+    action: "Réessayer",
+  },
+  RATE_LIMITED: {
+    title: "Trop de requêtes",
+    description: "Tu vas un peu vite — réessaie dans une minute.",
     action: "Réessayer",
   },
   CONFLICT: {
