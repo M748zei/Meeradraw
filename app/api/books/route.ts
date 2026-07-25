@@ -26,7 +26,7 @@ const createSchema = z.object({
     })
     .optional(),
   type: z.enum(["colorbook", "storybook", "activitybook", "workbook"]).default("colorbook"),
-  page_count: z.number().int().min(4).max(40).default(12),
+  page_count: z.number().int().min(4).max(25).default(12),
   style: z.string().default("cute"),
   title: z.string().max(120).optional(),
 });

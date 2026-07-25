@@ -37,7 +37,7 @@ export const BOOK_TYPES: Array<{
   },
 ];
 
-export const PAGE_OPTIONS = [6, 8, 12, 16, 20, 24] as const;
+export const PAGE_OPTIONS = [6, 8, 12, 16, 20, 24, 25] as const;
 
 export const STYLE_OPTIONS = [
   {

@@ -23,6 +23,7 @@ import { StorageService } from "@/services/storage-service";
 import { isBlankOrTooFaint, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
 import { refundForFailedPages } from "@/config/credits";
+import type { Book } from "@/types/database";
 import type { Firestore } from "firebase-admin/firestore";
 import { randomUUID } from "crypto";
 
@@ -78,69 +79,104 @@ export class GenerationOrchestrator {
     const started = Date.now();
     const isTrial = Boolean(opts?.isTrial);
     try {
-      await this.updateGeneration(generationId, {
-        status: "running",
-        current_step: "researcher",
-        progress: 8,
-      });
-
-      const book = await this.books.get(userId, bookId);
-      const idea =
-        book.idea ||
-        book.original_idea ||
-        "Une aventure magique pour enfants";
-      const style = book.style || "cute";
-      const pageCount = book.page_count || 12;
-      const universeId = book.universe_id;
-      const audience = book.audience || book.audience_age || undefined;
-
-      const textProvider = getTextProvider();
-      const research = await textProvider.buildResearchBrief(idea);
-
-      await this.updateGeneration(generationId, {
-        current_step: "author",
-        progress: 18,
-      });
-
-      const plan = await textProvider.generateStoryPlan(
-        idea,
-        pageCount,
-        style,
-        research,
-        audience
+      await this.runStoryPhase(userId, bookId, generationId);
+      await this.runSheetPhase(userId, bookId, generationId);
+      const pageIds = await this.runCoverAndPagesSetupPhase(
+        userId,
+        bookId,
+        generationId
       );
+      await mapWithConcurrency(pageIds, PAGE_GEN_CONCURRENCY, (pageId) =>
+        this.runOnePagePhase(userId, bookId, generationId, pageId)
+      );
+      await this.runFinalizePhase(
+        userId,
+        bookId,
+        generationId,
+        cost,
+        isTrial,
+        started
+      );
+    } catch (err) {
+      await this.failRun(userId, bookId, generationId, cost, started, err, isTrial);
+    }
+  }
 
-      // firestoreSafe: LLM output may contain nested arrays / undefined that
-      // Firestore rejects (a single bad field kills the whole generation).
-      await this.db.collection("prompts").add(
+  /**
+   * Research → story plan → prompts audit → replace characters → setting bible.
+   * Persists title/bible/full story_plan (including pages) for later phases.
+   */
+  async runStoryPhase(
+    userId: string,
+    bookId: string,
+    generationId: string
+  ): Promise<void> {
+    await this.updateGeneration(generationId, {
+      status: "running",
+      current_step: "researcher",
+      progress: 8,
+    });
+
+    const book = await this.books.get(userId, bookId);
+    const idea =
+      book.idea || book.original_idea || "Une aventure magique pour enfants";
+    const style = book.style || "cute";
+    const pageCount = book.page_count || 12;
+    const universeId = book.universe_id;
+    const audience = book.audience || book.audience_age || undefined;
+
+    const textProvider = getTextProvider();
+    const research = await textProvider.buildResearchBrief(idea);
+
+    await this.updateGeneration(generationId, {
+      current_step: "author",
+      progress: 18,
+    });
+
+    const plan = await textProvider.generateStoryPlan(
+      idea,
+      pageCount,
+      style,
+      research,
+      audience
+    );
+
+    // firestoreSafe: LLM output may contain nested arrays / undefined that
+    // Firestore rejects (a single bad field kills the whole generation).
+    await this.db.collection("prompts").add(
+      firestoreSafe({
+        user_id: userId,
+        universe_id: universeId,
+        book_id: bookId,
+        original_prompt: book.original_idea || idea,
+        optimized_prompt: plan.summary,
+        creative_brief: idea,
+        research_brief: research,
+        created_at: new Date().toISOString(),
+      })
+    );
+
+    await this.updateGeneration(generationId, {
+      current_step: "character_designer",
+      progress: 30,
+    });
+
+    // Characters
+    const charsRef = this.db
+      .collection("universes")
+      .doc(universeId)
+      .collection("characters");
+    const existing = await charsRef.get();
+    const batchDel = this.db.batch();
+    existing.docs.forEach((d) => batchDel.delete(d.ref));
+    await batchDel.commit();
+
+    // One batched write for the whole cast (was one round-trip per character).
+    const batchChars = this.db.batch();
+    for (const c of plan.characters) {
+      batchChars.set(
+        charsRef.doc(),
         firestoreSafe({
-          user_id: userId,
-          universe_id: universeId,
-          book_id: bookId,
-          original_prompt: book.original_idea || idea,
-          optimized_prompt: plan.summary,
-          creative_brief: idea,
-          research_brief: research,
-          created_at: new Date().toISOString(),
-        })
-      );
-
-      await this.updateGeneration(generationId, {
-        current_step: "character_designer",
-        progress: 30,
-      });
-
-      // Characters
-      const charsRef = this.db.collection("universes").doc(universeId).collection("characters");
-      const existing = await charsRef.get();
-      const batchDel = this.db.batch();
-      existing.docs.forEach((d) => batchDel.delete(d.ref));
-      await batchDel.commit();
-
-      // One batched write for the whole cast (was one round-trip per character).
-      const batchChars = this.db.batch();
-      for (const c of plan.characters) {
-        batchChars.set(charsRef.doc(), firestoreSafe({
           id_key: c.id,
           name: c.name,
           description: c.description,
@@ -156,505 +192,692 @@ export class GenerationOrchestrator {
           signature_accessory: c.signatureAccessory ?? null,
           proportions: c.proportions ?? null,
           created_at: new Date().toISOString(),
-        }));
-      }
-      await batchChars.commit();
-
-      const fullCharacterBible = formatCharacterLock(plan.characters);
-      const worldSetting = [plan.world?.setting, plan.world?.mood]
-        .filter(Boolean)
-        .join(" — ");
-
-      // Setting bible (audit T3): lazy per-universe visual world contract —
-      // generated once, stored on the universe, reused by every book. Fail-open:
-      // a bible failure must not block the run.
-      const settingBible = await this.ensureSettingBible(
-        universeId,
-        plan,
-        style
+        })
       );
-      const worldNegative = buildWorldNegative(settingBible?.forbiddenElements);
+    }
+    await batchChars.commit();
 
-      const imageProvider = getImageProvider();
-      const qcStatsAll: Record<string, ImageQcStats> = {};
+    const fullCharacterBible = formatCharacterLock(plan.characters);
 
-      // Hero cast portrait first (identity reference when FAL_REF_ENDPOINT is set).
-      // The proven reference is a COLORED flat-cartoon portrait of the exact cast
-      // (public/_phase2ab/_hero.png). ROOT-CAUSE GUARD: a blank OR non-colored hero must
-      // NEVER be used as a Kontext reference — a B&W result means the model drifted to a
-      // degenerate generic sheet (the "two boys" bug) and every page would inherit the
-      // wrong cast. Generate up to SHEET_MAX_ATTEMPTS candidates; if none is plausible,
-      // drop the reference so pages fall back to TEXT-ONLY generation.
-      let characterSheetUrl: string | null = null;
-      const sheetCast = expectedCastFor(plan.characters);
-      for (let attempt = 1; attempt <= SHEET_MAX_ATTEMPTS; attempt++) {
-        try {
-          const sheetStats: ImageQcStats = {};
-          const sheet = await imageProvider.generateImage({
-            prompt: "character model sheet",
-            style,
-            characterBible: fullCharacterBible,
-            worldSetting,
-            isCharacterSheet: true,
-            // Vision cast QC (audit T4): exact count + species vs the brief.
-            expectedCast: sheetCast,
-            qcStats: sheetStats,
-          });
-          qcStatsAll.model_sheet = sheetStats;
-          if (await this.isImplausibleHero(sheet.url)) {
-            console.warn(
-              `hero portrait attempt ${attempt}/${SHEET_MAX_ATTEMPTS} implausible (blank or not colored); retrying with a fresh seed`
-            );
-            continue;
-          }
-          // Persist the hero (audit T7): fal URLs are ephemeral; Kontext also
-          // needs a stable reference for retries weeks later.
-          const persisted = await this.storage.persistImageFromUrl(
-            sheet.url,
-            `universes/${universeId}/model_sheet.png`
-          );
-          characterSheetUrl = persisted.url;
-          console.log(`hero portrait accepted on attempt ${attempt}/${SHEET_MAX_ATTEMPTS}`);
-          break;
-        } catch (sheetErr) {
+    // Setting bible (audit T3): lazy per-universe visual world contract —
+    // generated once, stored on the universe, reused by every book. Fail-open:
+    // a bible failure must not block the run.
+    await this.ensureSettingBible(universeId, plan, style);
+
+    // Persist full plan including pages so later durable phases can resume.
+    await this.books.update(userId, bookId, {
+      title: plan.title,
+      subtitle: plan.subtitle ?? null,
+      character_bible: fullCharacterBible,
+      story_plan: firestoreSafe({
+        concept: plan.concept ?? null,
+        summary: plan.summary,
+        moral: plan.moral ?? null,
+        audience_age: plan.audienceAge,
+        world: plan.world,
+        characters: plan.characters,
+        pages: plan.pages,
+      }),
+    });
+  }
+
+  /**
+   * Model sheet attempts + sheet crops + character image_reference updates.
+   * Reconstructs plan from book.story_plan written by the story phase.
+   */
+  async runSheetPhase(
+    userId: string,
+    bookId: string,
+    generationId: string
+  ): Promise<void> {
+    const book = await this.books.get(userId, bookId);
+    const plan = this.loadStoryPlan(book);
+    const style = book.style || "cute";
+    const universeId = book.universe_id;
+    const fullCharacterBible =
+      book.character_bible || formatCharacterLock(plan.characters);
+    const worldSetting = [plan.world?.setting, plan.world?.mood]
+      .filter(Boolean)
+      .join(" — ");
+
+    const imageProvider = getImageProvider();
+    const charsRef = this.db
+      .collection("universes")
+      .doc(universeId)
+      .collection("characters");
+
+    // Hero cast portrait first (identity reference when FAL_REF_ENDPOINT is set).
+    // The proven reference is a COLORED flat-cartoon portrait of the exact cast
+    // (public/_phase2ab/_hero.png). ROOT-CAUSE GUARD: a blank OR non-colored hero must
+    // NEVER be used as a Kontext reference — a B&W result means the model drifted to a
+    // degenerate generic sheet (the "two boys" bug) and every page would inherit the
+    // wrong cast. Generate up to SHEET_MAX_ATTEMPTS candidates; if none is plausible,
+    // drop the reference so pages fall back to TEXT-ONLY generation.
+    let characterSheetUrl: string | null = null;
+    const sheetCast = expectedCastFor(plan.characters);
+    for (let attempt = 1; attempt <= SHEET_MAX_ATTEMPTS; attempt++) {
+      try {
+        const sheetStats: ImageQcStats = {};
+        const sheet = await imageProvider.generateImage({
+          prompt: "character model sheet",
+          style,
+          characterBible: fullCharacterBible,
+          worldSetting,
+          isCharacterSheet: true,
+          // Vision cast QC (audit T4): exact count + species vs the brief.
+          expectedCast: sheetCast,
+          qcStats: sheetStats,
+        });
+        await this.setQcImage(generationId, "model_sheet", sheetStats);
+        if (await this.isImplausibleHero(sheet.url)) {
           console.warn(
-            `hero portrait attempt ${attempt}/${SHEET_MAX_ATTEMPTS} failed`,
-            sheetErr
+            `hero portrait attempt ${attempt}/${SHEET_MAX_ATTEMPTS} implausible (blank or not colored); retrying with a fresh seed`
           );
+          continue;
         }
-      }
-
-      // Per-character crops (benchmark winner): SOLO pages guided by the FULL
-      // lineup leak the absent character back in — a crop removes the leak.
-      let sheetCrops: Record<string, { url: string; path: string }> = {};
-      if (characterSheetUrl) {
-        sheetCrops = await buildSheetCrops(
-          characterSheetUrl,
-          plan.characters,
-          universeId,
-          this.storage
+        // Persist the hero (audit T7): fal URLs are ephemeral; Kontext also
+        // needs a stable reference for retries weeks later.
+        const persisted = await this.storage.persistImageFromUrl(
+          sheet.url,
+          `universes/${universeId}/model_sheet.png`
         );
-        await this.db.collection("universes").doc(universeId).update({
-          model_sheet_crops: sheetCrops,
-          updated_at: new Date().toISOString(),
-        });
-        const afterChars = await charsRef.get();
-        const sheetBatch = this.db.batch();
-        afterChars.docs.forEach((d) => {
-          sheetBatch.update(d.ref, { image_reference: characterSheetUrl });
-        });
-        await sheetBatch.commit();
-      } else {
+        characterSheetUrl = persisted.url;
+        console.log(
+          `hero portrait accepted on attempt ${attempt}/${SHEET_MAX_ATTEMPTS}`
+        );
+        break;
+      } catch (sheetErr) {
         console.warn(
-          "hero portrait implausible/unavailable after retries; pages will use TEXT-ONLY generation (no Kontext reference)"
+          `hero portrait attempt ${attempt}/${SHEET_MAX_ATTEMPTS} failed`,
+          sheetErr
         );
       }
+    }
 
-      await this.books.update(userId, bookId, {
-        title: plan.title,
-        subtitle: plan.subtitle ?? null,
-        character_bible: fullCharacterBible,
-        character_sheet_url: characterSheetUrl,
-        story_plan: firestoreSafe({
-          concept: plan.concept ?? null,
-          summary: plan.summary,
-          moral: plan.moral ?? null,
-          audience_age: plan.audienceAge,
-          world: plan.world,
-          characters: plan.characters,
-        }),
-      });
-
-      // Reset pages
-      const pagesCol = this.db.collection("books").doc(bookId).collection("pages");
-      const oldPages = await pagesCol.get();
-      const batchPages = this.db.batch();
-      oldPages.docs.forEach((d) => batchPages.delete(d.ref));
-      await batchPages.commit();
-
-      const insertedPages: Array<{
-        id: string;
-        scene: string;
-        ref_scene: string;
-        action?: string;
-        negative_prompt: string;
-        story_text: string;
-        page_number: number;
-        character_ids: string[];
-        comic_beat?: string;
-        shot_type?: string;
-        page_character_lock: string;
-        expected_cast: Array<{ name: string; kind: string }>;
-        setting_elements: string[];
-      }> = [];
-
-      // All page rows land in one batched write (≤ 40 pages, far under the
-      // 500-write batch limit) instead of one round-trip per page.
-      const pageInserts = this.db.batch();
-      for (const p of plan.pages) {
-        const pageId = randomUUID();
-        const pageLock = formatPageCharacterLock(plan, p);
-        // Definitive per-page scene (audit T1): the page's OWN structured
-        // action/poses/camera/setting dominate — never the global synopsis.
-        const scene = buildPageScene(plan, p);
-        const refScene = buildCompactScene(plan, p);
-        const row = {
-          page_number: p.pageNumber,
-          title: p.title,
-          story_text: p.storyText,
-          illustration_prompt: scene,
-          ref_scene: refScene,
-          action: p.action ?? null,
-          camera: p.camera ?? null,
-          page_setting: p.pageSetting ?? null,
-          focal_point: p.focalPoint ?? null,
-          negative_prompt: p.negativePrompt ?? null,
-          illustration_url: null,
-          illustration_path: null,
-          activity_type: null,
-          generation_status: "pending",
-          character_ids: p.characterIds || [],
-          comic_beat: p.comicBeat ?? null,
-          shot_type: p.shotType ?? null,
-          character_lock: pageLock,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-        pageInserts.set(pagesCol.doc(pageId), firestoreSafe(row));
-        insertedPages.push({
-          id: pageId,
-          scene,
-          ref_scene: refScene,
-          action: p.action,
-          negative_prompt: p.negativePrompt ?? "",
-          story_text: p.storyText,
-          page_number: p.pageNumber,
-          character_ids: p.characterIds || [],
-          comic_beat: p.comicBeat,
-          shot_type: p.shotType,
-          page_character_lock: pageLock,
-          expected_cast: expectedCastFor(charactersForPage(plan, p)),
-          setting_elements: settingElementsForScene(
-            settingBible?.elements,
-            `${scene} ${p.storyText}`
-          ),
-        });
-      }
-      await pageInserts.commit();
-
-      await this.updateGeneration(generationId, {
-        current_step: "illustrator",
-        progress: 45,
-      });
-
-      // Cover (audit T6): poster composition — heroes IN ACTION in the world's
-      // signature setting, lettered title in the reserved top band (Ideogram),
-      // spoiler-free cast (characters met later stay off the cover).
-      const coverCast = coverCharacters(plan);
-      const coverAction =
-        plan.pages.find((p) => p.action && p.comicBeat === "action")?.action ||
-        plan.pages.find((p) => p.action)?.action ||
-        plan.summary;
-      const coverStats: ImageQcStats = {};
-      // Benchmark winner: WITH a hero reference → Kontext cover (identity is
-      // reliable, lettering is not) + server-side title overlay. WITHOUT a
-      // reference → Ideogram lettered cover (title reliable; vision cast QC
-      // re-rolls species drift).
-      const useOverlayTitle = Boolean(characterSheetUrl);
-      const cover = await imageProvider.generateImage({
-        prompt: `${plan.title}. ${plan.summary}`,
-        style,
-        characterBible: formatCharacterLock(coverCast),
-        worldSetting,
-        isCover: true,
-        referenceImageUrl: characterSheetUrl || undefined,
-        coverTitle: useOverlayTitle ? undefined : plan.title,
-        action: coverAction,
-        refScene: coverAction,
-        settingElements: settingElementsForScene(
-          settingBible?.elements,
-          `${coverAction} ${plan.summary}`,
-          4
-        ),
-        worldNegative,
-        expectedCast: expectedCastFor(coverCast),
-        qcStats: coverStats,
-      });
-      qcStatsAll.cover = coverStats;
-      const persistedCover = await this.persistCover(
-        cover.url,
-        bookId,
-        useOverlayTitle ? plan.title : null
+    // Per-character crops (benchmark winner): SOLO pages guided by the FULL
+    // lineup leak the absent character back in — a crop removes the leak.
+    if (characterSheetUrl) {
+      const sheetCrops = await buildSheetCrops(
+        characterSheetUrl,
+        plan.characters,
+        universeId,
+        this.storage
       );
-      await this.books.update(userId, bookId, {
-        cover_image: persistedCover.url,
-        cover_image_path: persistedCover.path,
-      });
       await this.db.collection("universes").doc(universeId).update({
-        cover_image: persistedCover.url,
+        model_sheet_crops: sheetCrops,
+        updated_at: new Date().toISOString(),
+      });
+      const afterChars = await charsRef.get();
+      const sheetBatch = this.db.batch();
+      afterChars.docs.forEach((d) => {
+        sheetBatch.update(d.ref, { image_reference: characterSheetUrl });
+      });
+      await sheetBatch.commit();
+    } else {
+      console.warn(
+        "hero portrait implausible/unavailable after retries; pages will use TEXT-ONLY generation (no Kontext reference)"
+      );
+    }
+
+    await this.books.update(userId, bookId, {
+      character_sheet_url: characterSheetUrl,
+    });
+  }
+
+  /**
+   * Cover generation + page document setup. Returns page IDs in page_number order.
+   * Progress 45 during cover work, then 55 once cover is done.
+   */
+  async runCoverAndPagesSetupPhase(
+    userId: string,
+    bookId: string,
+    generationId: string
+  ): Promise<string[]> {
+    await this.updateGeneration(generationId, {
+      current_step: "illustrator",
+      progress: 45,
+    });
+
+    const book = await this.books.get(userId, bookId);
+    const plan = this.loadStoryPlan(book);
+    const style = book.style || "cute";
+    const universeId = book.universe_id;
+    const characterSheetUrl = book.character_sheet_url || null;
+    const worldSetting = [plan.world?.setting, plan.world?.mood]
+      .filter(Boolean)
+      .join(" — ");
+
+    const universeSnap = await this.db
+      .collection("universes")
+      .doc(universeId)
+      .get();
+    const settingBible = (universeSnap.data()?.setting_bible as
+      | SettingBible
+      | undefined) ?? null;
+    const worldNegative = buildWorldNegative(settingBible?.forbiddenElements);
+
+    const imageProvider = getImageProvider();
+
+    // Cover (audit T6): poster composition — heroes IN ACTION in the world's
+    // signature setting, lettered title in the reserved top band (Ideogram),
+    // spoiler-free cast (characters met later stay off the cover).
+    const coverCast = coverCharacters(plan);
+    const coverAction =
+      plan.pages.find((p) => p.action && p.comicBeat === "action")?.action ||
+      plan.pages.find((p) => p.action)?.action ||
+      plan.summary;
+    const coverStats: ImageQcStats = {};
+    // Benchmark winner: WITH a hero reference → Kontext cover (identity is
+    // reliable, lettering is not) + server-side title overlay. WITHOUT a
+    // reference → Ideogram lettered cover (title reliable; vision cast QC
+    // re-rolls species drift).
+    const useOverlayTitle = Boolean(characterSheetUrl);
+    const cover = await imageProvider.generateImage({
+      prompt: `${plan.title}. ${plan.summary}`,
+      style,
+      characterBible: formatCharacterLock(coverCast),
+      worldSetting,
+      isCover: true,
+      referenceImageUrl: characterSheetUrl || undefined,
+      coverTitle: useOverlayTitle ? undefined : plan.title,
+      action: coverAction,
+      refScene: coverAction,
+      settingElements: settingElementsForScene(
+        settingBible?.elements,
+        `${coverAction} ${plan.summary}`,
+        4
+      ),
+      worldNegative,
+      expectedCast: expectedCastFor(coverCast),
+      qcStats: coverStats,
+    });
+    await this.setQcImage(generationId, "cover", coverStats);
+    const persistedCover = await this.persistCover(
+      cover.url,
+      bookId,
+      useOverlayTitle ? plan.title : null
+    );
+    await this.books.update(userId, bookId, {
+      cover_image: persistedCover.url,
+      cover_image_path: persistedCover.path,
+    });
+    await this.db.collection("universes").doc(universeId).update({
+      cover_image: persistedCover.url,
+      updated_at: new Date().toISOString(),
+    });
+
+    // Reset pages
+    const pagesCol = this.db.collection("books").doc(bookId).collection("pages");
+    const oldPages = await pagesCol.get();
+    const batchPages = this.db.batch();
+    oldPages.docs.forEach((d) => batchPages.delete(d.ref));
+    await batchPages.commit();
+
+    // All page rows land in one batched write (≤ 40 pages, far under the
+    // 500-write batch limit) instead of one round-trip per page.
+    const pageInserts = this.db.batch();
+    const pageIdsByNumber: Array<{ page_number: number; id: string }> = [];
+    for (const p of plan.pages) {
+      const pageId = randomUUID();
+      const pageLock = formatPageCharacterLock(plan, p);
+      // Definitive per-page scene (audit T1): the page's OWN structured
+      // action/poses/camera/setting dominate — never the global synopsis.
+      const scene = buildPageScene(plan, p);
+      const refScene = buildCompactScene(plan, p);
+      const row = {
+        page_number: p.pageNumber,
+        title: p.title,
+        story_text: p.storyText,
+        illustration_prompt: scene,
+        ref_scene: refScene,
+        action: p.action ?? null,
+        camera: p.camera ?? null,
+        page_setting: p.pageSetting ?? null,
+        focal_point: p.focalPoint ?? null,
+        negative_prompt: p.negativePrompt ?? null,
+        illustration_url: null,
+        illustration_path: null,
+        activity_type: null,
+        generation_status: "pending",
+        character_ids: p.characterIds || [],
+        comic_beat: p.comicBeat ?? null,
+        shot_type: p.shotType ?? null,
+        character_lock: pageLock,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      pageInserts.set(pagesCol.doc(pageId), firestoreSafe(row));
+      pageIdsByNumber.push({ page_number: p.pageNumber, id: pageId });
+    }
+    await pageInserts.commit();
+
+    await this.updateGeneration(generationId, {
+      current_step: "illustrator",
+      progress: 55,
+    });
+
+    return pageIdsByNumber
+      .sort((a, b) => a.page_number - b.page_number)
+      .map((p) => p.id);
+  }
+
+  /**
+   * Generate illustration for one page. Progress = 55 + completed/total×35 (cap 90).
+   */
+  async runOnePagePhase(
+    userId: string,
+    bookId: string,
+    generationId: string,
+    pageId: string
+  ): Promise<"ok" | "fail"> {
+    const book = await this.books.get(userId, bookId);
+    const plan = this.loadStoryPlan(book);
+    const style = book.style || "cute";
+    const universeId = book.universe_id;
+    const fullCharacterBible =
+      book.character_bible || formatCharacterLock(plan.characters);
+    const characterSheetUrl = book.character_sheet_url || null;
+    const worldSetting = [plan.world?.setting, plan.world?.mood]
+      .filter(Boolean)
+      .join(" — ");
+
+    const universeSnap = await this.db
+      .collection("universes")
+      .doc(universeId)
+      .get();
+    const settingBible = (universeSnap.data()?.setting_bible as
+      | SettingBible
+      | undefined) ?? null;
+    const worldNegative = buildWorldNegative(settingBible?.forbiddenElements);
+    const sheetCrops =
+      (universeSnap.data()?.model_sheet_crops as Record<
+        string,
+        { url: string; path: string }
+      >) || {};
+
+    const pagesCol = this.db.collection("books").doc(bookId).collection("pages");
+    const pageSnap = await pagesCol.doc(pageId).get();
+    if (!pageSnap.exists) {
+      throw new Error(`page ${pageId} not found`);
+    }
+    const page = pageSnap.data()!;
+    const pageNumber = page.page_number as number;
+    const characterIds = (page.character_ids as string[]) || [];
+    const scene = (page.illustration_prompt as string) || "";
+    const storyText = (page.story_text as string) || "";
+    const planPage = plan.pages.find((p) => p.pageNumber === pageNumber);
+
+    const imageProvider = getImageProvider();
+
+    await pagesCol.doc(pageId).update({ generation_status: "generating" });
+    try {
+      const scenePrompt = [
+        scene || storyText || plan.summary,
+        page.shot_type ? `Shot: ${page.shot_type}.` : "",
+        page.comic_beat ? `Beat: ${page.comic_beat}.` : "",
+        "Mandatory rich colorable environment matching the caption. No empty white void. Simplified mitten hands. Max 2 characters. Full figures inside frame with margins.",
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      const pageStats: ImageQcStats = {};
+      // Benchmark winner: solo pages use the character's OWN crop as the
+      // reference (full lineup leaks the absent character back in).
+      const pageReference =
+        characterIds.length === 1 && sheetCrops[characterIds[0]]?.url
+          ? sheetCrops[characterIds[0]].url
+          : characterSheetUrl || undefined;
+      const expectedCast = planPage
+        ? expectedCastFor(charactersForPage(plan, planPage))
+        : expectedCastFor(
+            plan.characters.filter((c) => characterIds.includes(c.id))
+          );
+      const settingElements = settingElementsForScene(
+        settingBible?.elements,
+        `${scene} ${storyText}`
+      );
+      const image = await imageProvider.generateImage({
+        prompt: scenePrompt,
+        style,
+        characterBible:
+          (page.character_lock as string) || fullCharacterBible,
+        negativePrompt: (page.negative_prompt as string) || undefined,
+        worldSetting,
+        isColoringPage: true,
+        referenceImageUrl: pageReference,
+        refScene: (page.ref_scene as string) || undefined,
+        shotType: (page.shot_type as string) || undefined,
+        comicBeat: (page.comic_beat as string) || undefined,
+        action: (page.action as string) || undefined,
+        settingElements,
+        worldNegative,
+        expectedCast,
+        qcStats: pageStats,
+      });
+
+      if (!image?.url) {
+        throw new Error("Image provider returned empty URL");
+      }
+
+      // Persist to Storage (audit T7): never leave an ephemeral fal URL
+      // as the page's source of truth.
+      const persisted = await this.storage.persistImageFromUrl(
+        image.url,
+        `books/${bookId}/pages/${pageNumber}.png`
+      );
+
+      await pagesCol.doc(pageId).update({
+        illustration_url: persisted.url,
+        illustration_path: persisted.path,
+        generation_status: "completed",
+        qc_stats: pageStats,
         updated_at: new Date().toISOString(),
       });
 
-      let completedCount = 0;
-      let failedCount = 0;
+      await this.updatePageProgress(generationId, bookId);
+      return "ok";
+    } catch (err) {
+      console.error(`page ${pageNumber} generation failed`, err);
+      await pagesCol.doc(pageId).update({
+        illustration_url: null,
+        generation_status: "failed",
+        updated_at: new Date().toISOString(),
+      });
+      await this.updatePageProgress(generationId, bookId);
+      return "fail";
+    }
+  }
 
-      const pageOutcomes = await mapWithConcurrency(
-        insertedPages,
-        PAGE_GEN_CONCURRENCY,
-        async (page, index) => {
-          await pagesCol.doc(page.id).update({ generation_status: "generating" });
-          try {
-            const scenePrompt = [
-              page.scene || page.story_text || plan.summary,
-              page.shot_type ? `Shot: ${page.shot_type}.` : "",
-              page.comic_beat ? `Beat: ${page.comic_beat}.` : "",
-              "Mandatory rich colorable environment matching the caption. No empty white void. Simplified mitten hands. Max 2 characters. Full figures inside frame with margins.",
-            ]
-              .filter(Boolean)
-              .join(" ");
+  /**
+   * PDF, refunds, status completed/partial/failed-if-zero-pages, trial consume.
+   */
+  async runFinalizePhase(
+    userId: string,
+    bookId: string,
+    generationId: string,
+    cost: number,
+    isTrial: boolean,
+    started: number
+  ): Promise<void> {
+    await this.updateGeneration(generationId, {
+      current_step: "illustrator",
+      progress: 90,
+    });
 
-            const pageStats: ImageQcStats = {};
-            // Benchmark winner: solo pages use the character's OWN crop as the
-            // reference (full lineup leaks the absent character back in).
-            const pageReference =
-              page.character_ids.length === 1 &&
-              sheetCrops[page.character_ids[0]]?.url
-                ? sheetCrops[page.character_ids[0]].url
-                : characterSheetUrl || undefined;
-            const image = await imageProvider.generateImage({
-              prompt: scenePrompt,
-              style,
-              characterBible: page.page_character_lock || fullCharacterBible,
-              negativePrompt: page.negative_prompt || undefined,
-              worldSetting,
-              isColoringPage: true,
-              referenceImageUrl: pageReference,
-              refScene: page.ref_scene,
-              shotType: page.shot_type,
-              comicBeat: page.comic_beat,
-              action: page.action,
-              settingElements: page.setting_elements,
-              worldNegative,
-              expectedCast: page.expected_cast,
-              qcStats: pageStats,
-            });
-            qcStatsAll[`page_${page.page_number}`] = pageStats;
+    const book = await this.books.get(userId, bookId);
+    const pagesCol = this.db.collection("books").doc(bookId).collection("pages");
+    const pagesSnap = await pagesCol.get();
+    const pageDocs: Array<Record<string, unknown> & { id: string }> =
+      pagesSnap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Record<string, unknown>),
+      }));
+    const completedCount = pageDocs.filter(
+      (p) => p.generation_status === "completed"
+    ).length;
+    const failedCount = pageDocs.filter(
+      (p) => p.generation_status === "failed"
+    ).length;
 
-            if (!image?.url) {
-              throw new Error("Image provider returned empty URL");
-            }
-
-            // Persist to Storage (audit T7): never leave an ephemeral fal URL
-            // as the page's source of truth.
-            const persisted = await this.storage.persistImageFromUrl(
-              image.url,
-              `books/${bookId}/pages/${page.page_number}.png`
-            );
-
-            await pagesCol.doc(page.id).update({
-              illustration_url: persisted.url,
-              illustration_path: persisted.path,
-              generation_status: "completed",
-              updated_at: new Date().toISOString(),
-            });
-            return "ok" as const;
-          } catch (err) {
-            console.error(`page ${page.page_number} generation failed`, err);
-            await pagesCol.doc(page.id).update({
-              illustration_url: null,
-              generation_status: "failed",
-              updated_at: new Date().toISOString(),
-            });
-            return "fail" as const;
-          } finally {
-            const progress =
-              45 + Math.round(((index + 1) / insertedPages.length) * 40);
-            // Approximate progress under concurrency (index may finish out of order)
-            await this.updateGeneration(generationId, {
-              current_step: "illustrator",
-              progress: Math.min(progress, 88),
-            });
-          }
-        }
+    // Never mark a book "completed" with blank pages
+    if (completedCount === 0) {
+      await this.books.update(userId, bookId, {
+        status: "failed",
+        active_generation_id: null,
+      });
+      // Nothing was produced — refund the entire reservation.
+      await this.credits.refund(
+        userId,
+        cost,
+        "Remboursement — génération échouée (aucune page)",
+        `gen:${generationId}:refund`
       );
-
-      completedCount = pageOutcomes.filter((o) => o === "ok").length;
-      failedCount = pageOutcomes.filter((o) => o === "fail").length;
-
       await this.updateGeneration(generationId, {
+        status: "failed",
         current_step: "illustrator",
         progress: 90,
-      });
-
-      // Never mark a book "completed" with blank pages
-      if (completedCount === 0) {
-        await this.books.update(userId, bookId, {
-          status: "failed",
-          active_generation_id: null,
-        });
-        // Nothing was produced — refund the entire reservation.
-        await this.credits.refund(
-          userId,
-          cost,
-          "Remboursement — génération échouée (aucune page)",
-          `gen:${generationId}:refund`
-        );
-        await this.updateGeneration(generationId, {
-          status: "failed",
-          current_step: "illustrator",
-          progress: 90,
-          credits_used: 0,
-          error_message:
-            "Aucune page illustrée n’a pu être générée. Réessayez ou régénérez les pages.",
-          duration_ms: Date.now() - started,
-        });
-        if (isTrial) {
-          await this.releaseFreeTrialSlot(userId, generationId);
-        }
-        return;
-      }
-
-      await this.updateGeneration(generationId, {
-        current_step: "editor",
-        progress: 92,
-      });
-
-      const full = await this.books.getWithPages(userId, bookId);
-      const pdfBytes = await this.pdf.buildBookPdf({
-        title: full.title,
-        subtitle: full.subtitle,
-        coverUrl: full.cover_image,
-        pages: full.pages.map((p) => ({
-          pageNumber: p.page_number,
-          title: p.title,
-          storyText: p.story_text,
-          illustrationUrl: p.illustration_url,
-        })),
-      });
-
-      let pdfUrl: string | null = null;
-      try {
-        pdfUrl = await this.storage.uploadBytes(
-          `exports/${userId}/${bookId}.pdf`,
-          pdfBytes,
-          "application/pdf"
-        );
-      } catch (uploadErr) {
-        console.error("PDF storage upload failed; trying inline data URL", uploadErr);
-        const dataUrl = `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`;
-        const firestoreSafeLimit = 800_000;
-        if (dataUrl.length <= firestoreSafeLimit) {
-          pdfUrl = dataUrl;
-        } else {
-          console.warn(
-            "PDF data URL exceeds Firestore-safe size; pdf_url left null — use /api/pdf/export"
-          );
-        }
-      }
-
-      const bookStatus = failedCount > 0 ? "partial" : "completed";
-      const genStatus = failedCount > 0 ? "partial" : "completed";
-
-      await this.books.update(userId, bookId, {
-        status: bookStatus,
-        pdf_url: pdfUrl,
-        active_generation_id: null,
-      });
-
-      // Credits were reserved up-front for `book.page_count` pages in
-      // generation/start. Refund every page the customer paid for but did not
-      // receive — this covers both pages that failed to render AND pages the AI
-      // plan never produced (plan shorter than requested). The customer pays
-      // only for delivered pages (+ cover + PDF). Idempotent per generation.
-      const plannedPages = (book.page_count as number) || insertedPages.length;
-      const notDelivered = Math.max(0, plannedPages - completedCount);
-      // Clamped to the reservation: a refund can never exceed what was actually
-      // reserved (trials reserve 0 → refund 0 → no way to mint free credits).
-      const refund = Math.min(
-        refundForFailedPages(plannedPages, completedCount, book.type as string),
-        cost
-      );
-      if (refund > 0) {
-        await this.credits.refund(
-          userId,
-          refund,
-          `Remboursement ${notDelivered} page(s) non livrée(s) — ${String(full.title)}`,
-          `gen:${generationId}:refund`
-        );
-      }
-      const creditsUsed = Math.max(0, cost - refund);
-
-      // QC telemetry (audit T5): re-roll rate = real internal fal cost. Logged
-      // per image on the generation doc so the rate is trackable over time.
-      const qcSummary = summarizeQcStats(qcStatsAll);
-      console.log(
-        `[gen ${generationId}] QC re-rolls — pixel: ${qcSummary.pixel_rerolls}, vision: ${qcSummary.vision_rerolls}, images: ${qcSummary.images}`
-      );
-
-      await this.updateGeneration(generationId, {
-        status: genStatus,
-        current_step: "editor",
-        progress: 100,
-        qc_stats: qcSummary,
-        credits_used: creditsUsed,
-        provider:
-          process.env.MOCK_AI === "true"
-            ? "mock"
-            : process.env.GROQ_API_KEY
-              ? "groq+fal"
-              : "openai+fal",
-        duration_ms: Date.now() - started,
+        credits_used: 0,
         error_message:
-          failedCount > 0
-            ? `${failedCount} page(s) sans illustration — utilisez « Régénérer cette page ».`
-            : null,
+          "Aucune page illustrée n’a pu être générée. Réessayez ou régénérez les pages.",
+        duration_ms: Date.now() - started,
       });
+      return;
+    }
 
-      // A delivered trial book consumes one free trial. Idempotent: the
-      // `trial_counted` flag on the generation doc guards the increment even if
-      // this path re-runs (retry after crash, replayed job).
-      if (isTrial) {
-        if (completedCount > 0) {
-          await this.consumeFreeTrial(userId, generationId);
-        } else {
-          await this.releaseFreeTrialSlot(userId, generationId);
-        }
-      }
-    } catch (err) {
-      console.error("generation failed", err);
-      await this.books.update(userId, bookId, {
-        status: "failed",
-        active_generation_id: null,
-      });
-      // Refund the up-front reservation — the run crashed before delivering.
-      // Idempotent: if a partial refund already landed this is a no-op.
-      try {
-        await this.credits.refund(
-          userId,
-          cost,
-          "Remboursement — génération interrompue",
-          `gen:${generationId}:refund`
+    await this.updateGeneration(generationId, {
+      current_step: "editor",
+      progress: 92,
+    });
+
+    const full = await this.books.getWithPages(userId, bookId);
+    const pdfBytes = await this.pdf.buildBookPdf({
+      title: full.title,
+      subtitle: full.subtitle,
+      coverUrl: full.cover_image,
+      pages: full.pages.map((p) => ({
+        pageNumber: p.page_number,
+        title: p.title,
+        storyText: p.story_text,
+        illustrationUrl: p.illustration_url,
+      })),
+    });
+
+    let pdfUrl: string | null = null;
+    try {
+      pdfUrl = await this.storage.uploadBytes(
+        `exports/${userId}/${bookId}.pdf`,
+        pdfBytes,
+        "application/pdf"
+      );
+    } catch (uploadErr) {
+      console.error("PDF storage upload failed; trying inline data URL", uploadErr);
+      const dataUrl = `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`;
+      const firestoreSafeLimit = 800_000;
+      if (dataUrl.length <= firestoreSafeLimit) {
+        pdfUrl = dataUrl;
+      } else {
+        console.warn(
+          "PDF data URL exceeds Firestore-safe size; pdf_url left null — use /api/pdf/export"
         );
-      } catch (refundErr) {
-        console.error("refund after generation failure failed", refundErr);
       }
-      if (isTrial) {
+    }
+
+    const bookStatus = failedCount > 0 ? "partial" : "completed";
+    const genStatus = failedCount > 0 ? "partial" : "completed";
+
+    await this.books.update(userId, bookId, {
+      status: bookStatus,
+      pdf_url: pdfUrl,
+      active_generation_id: null,
+    });
+
+    // Credits were reserved up-front for `book.page_count` pages in
+    // generation/start. Refund every page the customer paid for but did not
+    // receive — this covers both pages that failed to render AND pages the AI
+    // plan never produced (plan shorter than requested). The customer pays
+    // only for delivered pages (+ cover + PDF). Idempotent per generation.
+    const plannedPages = book.page_count || pageDocs.length;
+    const notDelivered = Math.max(0, plannedPages - completedCount);
+    // Clamped to the reservation: a refund can never exceed what was actually
+    // reserved (trials reserve 0 → refund 0 → no way to mint free credits).
+    const refund = Math.min(
+      refundForFailedPages(plannedPages, completedCount, book.type),
+      cost
+    );
+    if (refund > 0) {
+      await this.credits.refund(
+        userId,
+        refund,
+        `Remboursement ${notDelivered} page(s) non livrée(s) — ${String(full.title)}`,
+        `gen:${generationId}:refund`
+      );
+    }
+    const creditsUsed = Math.max(0, cost - refund);
+
+    // QC telemetry (audit T5): re-roll rate = real internal fal cost. Logged
+    // per image on the generation doc so the rate is trackable over time.
+    const qcStatsAll = await this.collectQcStats(generationId, pageDocs);
+    const qcSummary = summarizeQcStats(qcStatsAll);
+    console.log(
+      `[gen ${generationId}] QC re-rolls — pixel: ${qcSummary.pixel_rerolls}, vision: ${qcSummary.vision_rerolls}, images: ${qcSummary.images}`
+    );
+
+    await this.updateGeneration(generationId, {
+      status: genStatus,
+      current_step: "editor",
+      progress: 100,
+      qc_stats: qcSummary,
+      credits_used: creditsUsed,
+      provider:
+        process.env.MOCK_AI === "true"
+          ? "mock"
+          : process.env.GROQ_API_KEY
+            ? "groq+fal"
+            : "openai+fal",
+      duration_ms: Date.now() - started,
+      error_message:
+        failedCount > 0
+          ? `${failedCount} page(s) sans illustration — utilisez « Régénérer cette page ».`
+          : null,
+    });
+
+    // A delivered trial book consumes one free trial. Idempotent: the
+    // `trial_counted` flag on the generation doc guards the increment even if
+    // this path re-runs (retry after crash, replayed job).
+    if (isTrial) {
+      if (completedCount > 0) {
+        await this.consumeFreeTrial(userId, generationId);
+      } else {
         await this.releaseFreeTrialSlot(userId, generationId);
       }
-      await this.updateGeneration(generationId, {
-        status: "failed",
-        credits_used: 0,
-        error_message: err instanceof Error ? err.message : "Erreur inconnue",
-        duration_ms: Date.now() - started,
-      });
     }
+  }
+
+  /** Current catch-block logic for a hard run failure. */
+  async failRun(
+    userId: string,
+    bookId: string,
+    generationId: string,
+    cost: number,
+    started: number,
+    err: unknown,
+    isTrial = false
+  ): Promise<void> {
+    console.error("generation failed", err);
+    await this.books.update(userId, bookId, {
+      status: "failed",
+      active_generation_id: null,
+    });
+    // Refund the up-front reservation — the run crashed before delivering.
+    // Idempotent: if a partial refund already landed this is a no-op.
+    try {
+      await this.credits.refund(
+        userId,
+        cost,
+        "Remboursement — génération interrompue",
+        `gen:${generationId}:refund`
+      );
+    } catch (refundErr) {
+      console.error("refund after generation failure failed", refundErr);
+    }
+    if (isTrial) {
+      await this.releaseFreeTrialSlot(userId, generationId);
+    }
+    await this.updateGeneration(generationId, {
+      status: "failed",
+      credits_used: 0,
+      error_message: err instanceof Error ? err.message : "Erreur inconnue",
+      duration_ms: Date.now() - started,
+    });
+  }
+
+  /**
+   * Rebuild a StoryPlan from the book document's story_plan field
+   * (must include pages — written by runStoryPhase).
+   */
+  private loadStoryPlan(book: Book): StoryPlan {
+    const sp = book.story_plan;
+    if (!sp || typeof sp.summary !== "string" || !Array.isArray(sp.pages)) {
+      throw new Error(
+        "story_plan missing or incomplete (pages required) — run story phase first"
+      );
+    }
+    return {
+      title: book.title || "",
+      subtitle: book.subtitle || undefined,
+      concept: (sp.concept as string) ?? undefined,
+      summary: sp.summary,
+      moral: (sp.moral as string) ?? undefined,
+      audienceAge: (sp.audience_age as string) || "",
+      world: sp.world as StoryPlan["world"],
+      characters: (sp.characters as StoryPlan["characters"]) || [],
+      pages: sp.pages as StoryPlan["pages"],
+    };
+  }
+
+  /** Progress during page gen: 55 + completed/total×35, capped at 90. */
+  private async updatePageProgress(generationId: string, bookId: string) {
+    const pagesCol = this.db.collection("books").doc(bookId).collection("pages");
+    const snap = await pagesCol.get();
+    const totalPages = snap.size || 1;
+    const completedPages = snap.docs.filter(
+      (d) => d.data().generation_status === "completed"
+    ).length;
+    const progress = Math.min(
+      90,
+      55 + Math.round((completedPages / totalPages) * 35)
+    );
+    await this.updateGeneration(generationId, {
+      current_step: "illustrator",
+      progress,
+    });
+  }
+
+  /** Merge one image's QC stats onto the generation doc (sheet/cover). */
+  private async setQcImage(
+    generationId: string,
+    key: string,
+    stats: ImageQcStats
+  ) {
+    try {
+      const ref = this.db.collection("generations").doc(generationId);
+      const snap = await ref.get();
+      const existing =
+        (snap.data()?.qc_images as Record<string, ImageQcStats>) || {};
+      await this.updateGeneration(generationId, {
+        qc_images: { ...existing, [key]: stats },
+      });
+    } catch (err) {
+      console.error(`[gen ${generationId}] setQcImage failed (ignored)`, err);
+    }
+  }
+
+  /** Aggregate sheet/cover QC from generation + per-page qc_stats. */
+  private async collectQcStats(
+    generationId: string,
+    pageDocs: Array<Record<string, unknown>>
+  ): Promise<Record<string, ImageQcStats>> {
+    const all: Record<string, ImageQcStats> = {};
+    try {
+      const snap = await this.db.collection("generations").doc(generationId).get();
+      const images =
+        (snap.data()?.qc_images as Record<string, ImageQcStats>) || {};
+      Object.assign(all, images);
+    } catch (err) {
+      console.warn("collectQcStats: could not load generation qc_images", err);
+    }
+    for (const p of pageDocs) {
+      if (p.qc_stats && typeof p.page_number === "number") {
+        all[`page_${p.page_number}`] = p.qc_stats as ImageQcStats;
+      }
+    }
+    return all;
   }
 
   /**
    * Marks one free trial as consumed for a delivered trial book. Runs in a
    * transaction keyed on the generation's `trial_counted` flag so the same
-   * generation can never consume more than one trial. Also releases the
-   * in-progress slot reserved at generation/start.
+   * generation can never consume more than one trial.
    */
   private async consumeFreeTrial(userId: string, generationId: string) {
     const genRef = this.db.collection("generations").doc(generationId);
@@ -680,7 +903,7 @@ export class GenerationOrchestrator {
 
   /**
    * Releases a reserved free-trial slot when a trial run fails with no
-   * delivery. Idempotent via `trial_counted` / metadata.trial_released.
+   * delivery. Idempotent via trial_counted / metadata.trial_released.
    */
   private async releaseFreeTrialSlot(userId: string, generationId: string) {
     const genRef = this.db.collection("generations").doc(generationId);

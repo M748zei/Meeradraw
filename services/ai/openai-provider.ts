@@ -21,23 +21,81 @@ import type {
   TextAIProvider,
 } from "@/services/ai/types";
 
-function createTextClient(): OpenAI {
-  const groqKey = process.env.GROQ_API_KEY;
+function createTextClient(prefer: "groq" | "openai" = "groq"): OpenAI {
+  const groqKey = process.env.GROQ_API_KEY?.trim();
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
+
+  if (prefer === "openai" && openaiKey) {
+    return new OpenAI({ apiKey: openaiKey });
+  }
+  if (prefer === "groq" && groqKey) {
+    return new OpenAI({
+      apiKey: groqKey,
+      baseURL: "https://api.groq.com/openai/v1",
+    });
+  }
+  if (openaiKey) {
+    return new OpenAI({ apiKey: openaiKey });
+  }
   if (groqKey) {
     return new OpenAI({
       apiKey: groqKey,
       baseURL: "https://api.groq.com/openai/v1",
     });
   }
-
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
-function resolveTextModel(): string {
-  if (process.env.GROQ_API_KEY) {
+function resolveTextModel(prefer: "groq" | "openai" = "groq"): string {
+  const usingGroq =
+    prefer === "groq"
+      ? Boolean(process.env.GROQ_API_KEY?.trim())
+      : !process.env.OPENAI_API_KEY?.trim() && Boolean(process.env.GROQ_API_KEY?.trim());
+  if (prefer === "openai" && process.env.OPENAI_API_KEY?.trim()) {
+    return process.env.OPENAI_MODEL || "gpt-4o-mini";
+  }
+  if (usingGroq) {
     return process.env.GROQ_MODEL || process.env.OPENAI_MODEL || "llama-3.3-70b-versatile";
   }
   return process.env.OPENAI_MODEL || "gpt-4o-mini";
+}
+
+function hasOpenAIFailover(): boolean {
+  return Boolean(process.env.GROQ_API_KEY?.trim() && process.env.OPENAI_API_KEY?.trim());
+}
+
+/** Run a chat completion; on Groq JSON/400 failures, retry once on OpenAI. */
+async function chatJsonCompletion(
+  primary: OpenAI,
+  primaryModel: string,
+  params: Omit<Parameters<OpenAI["chat"]["completions"]["create"]>[0], "model"> & {
+    model?: string;
+  }
+): Promise<string> {
+  try {
+    const response = await primary.chat.completions.create({
+      ...params,
+      model: params.model || primaryModel,
+    } as Parameters<OpenAI["chat"]["completions"]["create"]>[0]);
+    // Non-streaming create returns ChatCompletion
+    const content =
+      "choices" in response ? response.choices[0]?.message?.content : null;
+    if (!content) throw new Error("Empty text provider response");
+    return content;
+  } catch (err) {
+    if (!hasOpenAIFailover()) throw err;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[text] primary failed (${msg.slice(0, 120)}); failover → OpenAI`);
+    const fallback = createTextClient("openai");
+    const response = await fallback.chat.completions.create({
+      ...params,
+      model: resolveTextModel("openai"),
+    } as Parameters<OpenAI["chat"]["completions"]["create"]>[0]);
+    const content =
+      "choices" in response ? response.choices[0]?.message?.content : null;
+    if (!content) throw new Error("Empty text provider response (OpenAI failover)");
+    return content;
+  }
 }
 
 function parseJson<T>(content: string, label: string): T {
@@ -150,13 +208,19 @@ export class OpenAITextProvider implements TextAIProvider {
     this.client = createTextClient();
   }
 
+  /** Chat completion with Groq→OpenAI failover on provider errors. */
+  private async completeJson(
+    params: Omit<Parameters<OpenAI["chat"]["completions"]["create"]>[0], "model">
+  ): Promise<string> {
+    return chatJsonCompletion(this.client, resolveTextModel(), params);
+  }
+
   async enrichIdea(rawIdea: string): Promise<EnrichedIdea> {
     const idea = rawIdea.trim();
     if (idea.length < 3) return fallbackEnrichedIdea(idea);
 
     try {
-      const response = await this.client.chat.completions.create({
-        model: resolveTextModel(),
+      const content = await this.completeJson({
         temperature: 0.7,
         response_format: { type: "json_object" },
         messages: [
@@ -164,9 +228,6 @@ export class OpenAITextProvider implements TextAIProvider {
           { role: "user", content: buildEnrichIdeaUserPrompt(idea) },
         ],
       });
-
-      const content = response.choices[0]?.message?.content;
-      if (!content) return fallbackEnrichedIdea(idea);
       const parsed = parseJson<Partial<EnrichedIdea>>(content, "enrich idea");
       return normalizeEnrichedIdea(parsed, idea);
     } catch {
@@ -176,23 +237,22 @@ export class OpenAITextProvider implements TextAIProvider {
 
   async buildResearchBrief(idea: string): Promise<ResearchBrief> {
     const web = await gatherWebResearch(idea);
-    const response = await this.client.chat.completions.create({
-      model: resolveTextModel(),
-      temperature: 0.35,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: buildResearchSystemPrompt() },
-        {
-          role: "user",
-          content: buildResearchUserPrompt(idea, web.context),
-        },
-      ],
-    });
-
-    const content = response.choices[0]?.message?.content;
-    if (!content) {
+    let content: string;
+    try {
+      content = await this.completeJson({
+        temperature: 0.35,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: buildResearchSystemPrompt() },
+          {
+            role: "user",
+            content: buildResearchUserPrompt(idea, web.context),
+          },
+        ],
+      });
+    } catch {
       const fallback = emptyResearchFallback(idea);
-      fallback.sourcesNote = `Web: ${web.source}; LLM vide — fallback`;
+      fallback.sourcesNote = `Web: ${web.source}; LLM fail — fallback`;
       return fallback;
     }
 
@@ -223,8 +283,7 @@ export class OpenAITextProvider implements TextAIProvider {
       return this.generateLongStoryPlan(idea, pageCount, style, brief, audience);
     }
 
-    const response = await this.client.chat.completions.create({
-      model: resolveTextModel(),
+    const content = await this.completeJson({
       temperature: 0.75,
       // NOTE: do NOT set max_completion_tokens here — Groq's free-tier TPM
       // pre-check counts it against the 8000-token/min budget and rejects the
@@ -249,11 +308,6 @@ export class OpenAITextProvider implements TextAIProvider {
       ],
     });
 
-    const content = response.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error("Empty text provider response");
-    }
-
     const plan = parseJson<StoryPlan>(content, "story plan");
     if (!Array.isArray(plan.pages) || plan.pages.length === 0) {
       throw new Error("Story plan missing pages");
@@ -261,7 +315,7 @@ export class OpenAITextProvider implements TextAIProvider {
     return normalizeStoryPlan(plan, pageCount);
   }
 
-  /** Two-phase plan for long books (couvre les livres jusqu'à 24-40 pages). */
+  /** Two-phase plan for long books (couvre les livres jusqu'à 25-40 pages). */
   private async generateLongStoryPlan(
     idea: string,
     pageCount: number,
@@ -274,8 +328,7 @@ export class OpenAITextProvider implements TextAIProvider {
     // returns the frame + pages 1..12, follow-up calls continue the arc.
     const OUTLINE_SLICE = 12;
     const firstEnd = Math.min(OUTLINE_SLICE, pageCount);
-    const outlineRes = await this.client.chat.completions.create({
-      model: resolveTextModel(),
+    const outlineContent = await this.completeJson({
       temperature: 0.75,
       response_format: { type: "json_object" },
       messages: [
@@ -292,8 +345,6 @@ export class OpenAITextProvider implements TextAIProvider {
         },
       ],
     });
-    const outlineContent = outlineRes.choices[0]?.message?.content;
-    if (!outlineContent) throw new Error("Empty outline response");
     const outline = parseJson<StoryPlan>(outlineContent, "story outline");
     if (!Array.isArray(outline.pages) || outline.pages.length === 0) {
       throw new Error("Story outline missing pages");
@@ -310,8 +361,7 @@ export class OpenAITextProvider implements TextAIProvider {
         storyText: p.storyText,
         action: p.action,
       }));
-      const contRes = await this.client.chat.completions.create({
-        model: resolveTextModel(),
+      const contContent = await this.completeJson({
         temperature: 0.75,
         response_format: { type: "json_object" },
         messages: [
@@ -322,8 +372,6 @@ export class OpenAITextProvider implements TextAIProvider {
           },
         ],
       });
-      const contContent = contRes.choices[0]?.message?.content;
-      if (!contContent) throw new Error("Empty outline continuation");
       const cont = parseJson<{ pages?: StoryPlan["pages"] }>(contContent, "outline continuation");
       const contPages = (Array.isArray(cont.pages) ? cont.pages : []).slice(0, to - from + 1);
       if (!contPages.length) throw new Error("Outline continuation missing pages");
@@ -348,8 +396,7 @@ export class OpenAITextProvider implements TextAIProvider {
     for (let i = 0; i < outline.pages.length; i += BATCH) {
       const batch = outline.pages.slice(i, i + BATCH);
       try {
-        const res = await this.client.chat.completions.create({
-          model: resolveTextModel(),
+        const content = await this.completeJson({
           temperature: 0.7,
           response_format: { type: "json_object" },
           messages: [
@@ -360,11 +407,8 @@ export class OpenAITextProvider implements TextAIProvider {
             },
           ],
         });
-        const content = res.choices[0]?.message?.content;
-        const parsed = content
-          ? parseJson<{ pages?: StoryPlan["pages"] }>(content, "page expansion")
-          : null;
-        const got = Array.isArray(parsed?.pages) ? parsed!.pages! : [];
+        const parsed = parseJson<{ pages?: StoryPlan["pages"] }>(content, "page expansion");
+        const got = Array.isArray(parsed?.pages) ? parsed.pages : [];
         // Match by pageNumber; any page the expansion lost falls back to its outline
         // (normalizeStoryPlan still produces a usable prompt from action/storyText).
         for (const o of batch) {
@@ -389,8 +433,7 @@ export class OpenAITextProvider implements TextAIProvider {
     worldSetting?: string;
     style?: string;
   }): Promise<SettingBible> {
-    const response = await this.client.chat.completions.create({
-      model: resolveTextModel(),
+    const content = await this.completeJson({
       temperature: 0.5,
       response_format: { type: "json_object" },
       messages: [
@@ -398,9 +441,6 @@ export class OpenAITextProvider implements TextAIProvider {
         { role: "user", content: buildSettingBibleUserPrompt(params) },
       ],
     });
-
-    const content = response.choices[0]?.message?.content;
-    if (!content) throw new Error("Empty setting bible response");
     const raw = parseJson<Partial<SettingBible>>(content, "setting bible");
     const elements = (Array.isArray(raw.elements) ? raw.elements : [])
       .map((e) => String(e).trim())

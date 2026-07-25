@@ -107,7 +107,7 @@ export default function AccessPage() {
           </p>
           <p className="mt-1 text-sm text-ink-muted">
             Tes {trials?.max} essais gratuits sont utilisés. Débloque ton accès
-            Meeradraw pour créer des livres complets (jusqu&apos;à 24 pages) et
+            Meeradraw pour créer des livres complets (jusqu&apos;à 25 pages) et
             recharger des crédits quand tu veux.
           </p>
           {STORE_URL ? (

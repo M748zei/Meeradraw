@@ -3,21 +3,47 @@
  * (lib/image-quality.ts) cannot do: cast count/species, lineup syndrome,
  * action visibility, cover-title legibility.
  *
- * Provider: Groq multimodal (qwen3.6-27b — the only vision-capable model on
- * this account; Scout/Maverick are not offered). It is a "thinking" model, so
- * answers are parsed after stripping the <think> block.
+ * Provider: OpenAI gpt-4o-mini (vision) preferred — Groq free TPM saturates
+ * mid-book and the old 9–20s 429 waits killed the Vercel 300s budget.
+ * Falls back to Groq vision only when OPENAI_API_KEY is unset.
  *
- * FAIL-OPEN BY DESIGN: any provider error, timeout, or unparsable answer
+ * FAIL-OPEN BY DESIGN: any provider error, timeout, 429, or unparsable answer
  * returns null ("cannot judge") and the caller MUST accept the image. Vision QC
  * is a safety net — it must never break or block a generation.
  */
 
-const VISION_MODEL = process.env.GROQ_VISION_MODEL || "qwen/qwen3.6-27b";
+const OPENAI_VISION_MODEL = process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
+const GROQ_VISION_MODEL = process.env.GROQ_VISION_MODEL || "qwen/qwen3.6-27b";
 const VISION_TIMEOUT_MS = Number(process.env.VISION_QC_TIMEOUT_MS || 25_000);
 
-function visionEnabled(): boolean {
-  if (process.env.VISION_QC === "false") return false;
-  return Boolean(process.env.GROQ_API_KEY);
+type VisionBackend = {
+  url: string;
+  key: string;
+  model: string;
+  /** Groq thinking models need reasoning_effort: none */
+  groqThinking?: boolean;
+};
+
+function resolveVisionBackend(): VisionBackend | null {
+  if (process.env.VISION_QC === "false") return null;
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
+  if (openaiKey) {
+    return {
+      url: "https://api.openai.com/v1/chat/completions",
+      key: openaiKey,
+      model: OPENAI_VISION_MODEL,
+    };
+  }
+  const groqKey = process.env.GROQ_API_KEY?.trim();
+  if (groqKey) {
+    return {
+      url: "https://api.groq.com/openai/v1/chat/completions",
+      key: groqKey,
+      model: GROQ_VISION_MODEL,
+      groqThinking: true,
+    };
+  }
+  return null;
 }
 
 export interface CastCheck {
@@ -45,8 +71,7 @@ export interface CoverCheck {
 
 /**
  * Downscale the image to ~512px and inline it as a data URL. Full-size images
- * cost ~6-7k vision tokens each and blow Groq's 8000 TPM in minutes (verified:
- * a 2-book run rate-limited half the checks into fail-open). 512px keeps the
+ * cost ~6-7k vision tokens each and blow free TPM quotas. 512px keeps the
  * lineup/cast signals intact at ~4x fewer tokens.
  */
 async function toSmallDataUrl(imageUrl: string): Promise<string | null> {
@@ -67,76 +92,71 @@ async function toSmallDataUrl(imageUrl: string): Promise<string | null> {
 
 /** Ask one JSON question about an image. Returns null on ANY failure (fail-open). */
 async function askVision<T>(imageUrl: string, question: string): Promise<T | null> {
-  if (!visionEnabled()) return null;
+  const backend = resolveVisionBackend();
+  if (!backend) return null;
   const inlined = (await toSmallDataUrl(imageUrl)) || imageUrl;
 
-  // One retry on 429: Groq TPM windows are per-minute, a short backoff often
-  // lands in the next window. More than one retry would stall the pipeline.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), VISION_TIMEOUT_MS);
-    try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: VISION_MODEL,
-          temperature: 0,
-          // Thinking model: without this the <think> block eats the token budget
-          // before the JSON answer (verified on Groq qwen3.6-27b).
-          reasoning_effort: "none",
-          max_tokens: 400,
-          messages: [
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), VISION_TIMEOUT_MS);
+  try {
+    const body: Record<string, unknown> = {
+      model: backend.model,
+      temperature: 0,
+      max_tokens: 400,
+      messages: [
+        {
+          role: "user",
+          content: [
             {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: `${question}\n\nAnswer with ONLY a single JSON object, no markdown, no extra prose after the JSON.`,
-                },
-                { type: "image_url", image_url: { url: inlined } },
-              ],
+              type: "text",
+              text: `${question}\n\nAnswer with ONLY a single JSON object, no markdown, no extra prose after the JSON.`,
             },
+            { type: "image_url", image_url: { url: inlined } },
           ],
-        }),
-        signal: controller.signal,
-      });
-      if (res.status === 429 && attempt === 0) {
-        const retryAfter = Number(res.headers.get("retry-after"));
-        const waitMs = Math.min(
-          Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 12_000,
-          20_000
-        );
-        console.warn(`[vision-qc] 429 rate limit; retry in ${waitMs}ms`);
-        await new Promise((r) => setTimeout(r, waitMs));
-        continue;
-      }
-      if (!res.ok) {
-        console.warn(`[vision-qc] provider ${res.status}: ${(await res.text()).slice(0, 200)}`);
-        return null;
-      }
-      const data = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const raw = data.choices?.[0]?.message?.content || "";
-      // Thinking model: drop the <think> block, then take the first JSON object.
-      const afterThink = raw.includes("</think>")
-        ? raw.slice(raw.lastIndexOf("</think>") + "</think>".length)
-        : raw;
-      const match = afterThink.match(/\{[\s\S]*\}/);
-      if (!match) return null;
-      return JSON.parse(match[0]) as T;
-    } catch (err) {
-      console.warn("[vision-qc] unavailable (fail-open)", err instanceof Error ? err.message : err);
-      return null;
-    } finally {
-      clearTimeout(timer);
+        },
+      ],
+    };
+    if (backend.groqThinking) {
+      // Thinking model: without this the <think> block eats the token budget.
+      body.reasoning_effort = "none";
     }
+
+    const res = await fetch(backend.url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${backend.key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    // Fail-open immediately on 429 — never sleep 9–20s mid-pipeline (that
+    // stack of waits was a root cause of the Vercel 300s kill).
+    if (res.status === 429) {
+      console.warn("[vision-qc] 429 rate limit; fail-open (no wait)");
+      return null;
+    }
+    if (!res.ok) {
+      console.warn(`[vision-qc] provider ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return null;
+    }
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const raw = data.choices?.[0]?.message?.content || "";
+    const afterThink = raw.includes("</think>")
+      ? raw.slice(raw.lastIndexOf("</think>") + "</think>".length)
+      : raw;
+    const match = afterThink.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    return JSON.parse(match[0]) as T;
+  } catch (err) {
+    console.warn("[vision-qc] unavailable (fail-open)", err instanceof Error ? err.message : err);
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
-  return null;
 }
 
 /**

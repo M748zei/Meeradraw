@@ -596,7 +596,7 @@ function NewBookForm() {
                 Il te reste {trialsRemaining ?? 0} essai{(trialsRemaining ?? 0) > 1 ? "s" : ""} gratuit
                 {(trialsRemaining ?? 0) > 1 ? "s" : ""}
               </span>{" "}
-              (6 pages max). Débloque ton accès pour créer des livres jusqu&apos;à 24 pages.
+              (6 pages max). Débloque ton accès pour créer des livres jusqu&apos;à 25 pages.
             </div>
           ) : null}
           <div className="flex flex-wrap gap-2">

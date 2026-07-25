@@ -47,7 +47,7 @@ const DEFAULT_GUIDANCE_SCALE = Number(process.env.FAL_GUIDANCE_SCALE || 4.5);
  * blank/near-blank OR as a subject floating on an empty background. Capped: after the
  * cap we KEEP THE BEST attempt (never fail the page — an empty page beats a failed one).
  */
-const FAL_QUALITY_REROLLS = Number(process.env.FAL_QUALITY_REROLLS ?? 4);
+const FAL_QUALITY_REROLLS = Number(process.env.FAL_QUALITY_REROLLS ?? 2);
 /**
  * Extra re-rolls triggered by the VISION QC (lineup detected, action missing,
  * wrong cast, illegible cover title). Separate cap from the pixel re-rolls:
@@ -55,7 +55,7 @@ const FAL_QUALITY_REROLLS = Number(process.env.FAL_QUALITY_REROLLS ?? 4);
  * ACCEPTED (fail-open — a static page beats a failed page). Each re-roll is an
  * internal fal cost, never billed to the customer.
  */
-const VISION_QC_REROLLS = Number(process.env.VISION_QC_REROLLS ?? 2);
+const VISION_QC_REROLLS = Number(process.env.VISION_QC_REROLLS ?? 1);
 const ANTI_LINEUP_BOOST =
   "CRITICAL: the characters must be IN MOTION doing the described action with distinct dynamic poses and a non-frontal camera angle — ABSOLUTELY NOT standing in a row, NOT front-facing side by side, NOT a static group photo, NOT a model sheet.";
 const CAST_FIX_BOOST =

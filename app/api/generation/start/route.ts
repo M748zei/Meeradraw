@@ -5,13 +5,13 @@ import { estimateBookCost, FREE_TRIALS_MAX, FREE_TRIAL_MAX_PAGES } from "@/confi
 import { BookService } from "@/services/book-service";
 import { CreditService } from "@/services/credit-service";
 import { LicenseService } from "@/services/license-service";
-import { GenerationOrchestrator } from "@/services/generation-orchestrator";
-import { after } from "next/server";
+import { generateBookWorkflow } from "@/services/workflows/generate-book";
+import { start } from "workflow/api";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 
-/** Long-running generation (story + images + PDF) via `after()`. */
-export const maxDuration = 300;
+/** Start is thin — durable work runs in Workflow steps (not after()). */
+export const maxDuration = 60;
 
 const schema = z.object({ book_id: z.string().uuid() });
 
@@ -44,6 +44,7 @@ export async function POST(request: Request) {
     const cost = isTrial ? 0 : estimateBookCost(book.page_count as number, book.type as string);
     const generationId = randomUUID();
     const now = new Date().toISOString();
+    const startedAt = Date.now();
     const bookRef = db.collection("books").doc(body.book_id);
     const genRef = db.collection("generations").doc(generationId);
     const userRef = db.collection("users").doc(user.id);
@@ -162,16 +163,24 @@ export async function POST(request: Request) {
       }
     }
 
-    const orchestrator = new GenerationOrchestrator(db);
-    after(async () => {
-      await orchestrator.run(user.id, body.book_id, generationId, cost, { isTrial });
-    });
+    // Durable pipeline — survives >300s (12–25 page books).
+    const run = await start(generateBookWorkflow, [
+      {
+        userId: user.id,
+        bookId: body.book_id,
+        generationId,
+        cost,
+        isTrial,
+        startedAt,
+      },
+    ]);
 
     return apiSuccess(
       {
         generation_id: generationId,
         id: generationId,
         is_trial: isTrial,
+        workflow_run_id: run.runId,
         user_id: user.id,
         book_id: body.book_id,
         generation_type: "full_book",

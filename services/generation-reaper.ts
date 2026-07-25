@@ -19,7 +19,7 @@ import type { Firestore } from "firebase-admin/firestore";
  * - GET /api/cron/reap-generations — daily sweep for generations nobody polls.
  */
 
-const STALE_AFTER_MS = 15 * 60 * 1000;
+const STALE_AFTER_MS = 8 * 60 * 1000;
 
 function isStale(data: Record<string, unknown> | undefined): boolean {
   if (!data) return false;
