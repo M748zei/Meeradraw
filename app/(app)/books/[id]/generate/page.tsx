@@ -110,7 +110,10 @@ function GenerateInner() {
   const parentFacingError = (() => {
     const raw = error || progress?.error_message || "";
     if (!raw) return null;
-    if (/qualité\s*\d|\/100|alignement|lineup/i.test(raw)) {
+    // Never sugarcoat a hard failure as "still finishing" (also: fal dumps often
+    // contain the word "lineup" in prompts and used to trigger this soft lie).
+    if (failed) return raw;
+    if (/qualité\s*\d+\s*\/\s*100|score\s*[:=]?\s*\d+/i.test(raw) && raw.length < 220) {
       return "On termine encore quelques pages pour vous offrir un cahier complet.";
     }
     return raw;

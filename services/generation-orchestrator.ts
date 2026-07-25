@@ -36,6 +36,27 @@ function envInt(value: string | undefined, fallback: number) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
+/** Short parent-facing failure copy — never dump fal/provider JSON into the UI. */
+function userFacingGenerationError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err ?? "Erreur inconnue");
+  if (/cannot be 'DESIGN'|style_preset|feature_not_supported/i.test(msg)) {
+    return "L'illustration a échoué (réglage technique). Vos crédits ont été remboursés — réessayez.";
+  }
+  if (/Exhausted balance|User is locked/i.test(msg)) {
+    return "Le service d'illustration est temporairement indisponible. Vos crédits ont été remboursés.";
+  }
+  if (/timeout|délai dépassé/i.test(msg)) {
+    return "Génération interrompue (délai dépassé). Vos crédits ont été remboursés — réessayez.";
+  }
+  if (
+    /fal\.ai error|Failed to validate JSON|FatalError|json_validate_failed/i.test(msg) ||
+    msg.length > 280
+  ) {
+    return "La création n'a pas abouti. Vos crédits ont été remboursés — réessayez.";
+  }
+  return msg;
+}
+
 /** Aggregate per-image QC stats into a Firestore-friendly summary. */
 function summarizeQcStats(all: Record<string, ImageQcStats>) {
   let pixel = 0;
@@ -977,7 +998,7 @@ export class GenerationOrchestrator {
     await this.updateGeneration(generationId, {
       status: "failed",
       credits_used: 0,
-      error_message: err instanceof Error ? err.message : "Erreur inconnue",
+      error_message: userFacingGenerationError(err),
       duration_ms: Date.now() - started,
     });
   }

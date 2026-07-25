@@ -35,9 +35,10 @@ function endpointSupportsNegative(endpoint: string): boolean {
 }
 
 /**
- * Interior PAGES and the COVER default to Ideogram V3 (style DESIGN + expand_prompt:false +
- * negative_prompt): the A/B test scored it 0 blank / 0 colored / 0 poor-environment for clean
- * flat B&W line art. Override with FAL_PAGE_ENDPOINT (or legacy FAL_IMAGE_ENDPOINT).
+ * Interior PAGES and the COVER default to Ideogram V3 (COLORING_BOOK preset + style AUTO +
+ * expand_prompt:false + negative_prompt). fal rejects style=DESIGN when style_preset is set.
+ * Character sheets stay DESIGN without a coloring preset (colored cast portrait).
+ * Override with FAL_PAGE_ENDPOINT (or legacy FAL_IMAGE_ENDPOINT).
  * When FAL_REF_ENDPOINT (Kontext) is set AND a validated hero portrait exists, pages+cover
  * are redrawn reference-guided from the hero for character consistency (phase-2 pipeline);
  * Ideogram remains the hero generator and the text-only fallback.
@@ -563,22 +564,25 @@ function buildFalBody(params: {
     ? CHARACTER_SHEET_NEGATIVE_PROMPT
     : buildNegativePrompt(negativePrompt, worldNegative, heroGender);
 
-  // Ideogram V3: DESIGN style + expand_prompt:false (disables MagicPrompt so OUR exact
-  // prompt is used) + a real negative_prompt. NO steps/guidance/output_format in schema.
+  // Ideogram V3: expand_prompt:false (disables MagicPrompt so OUR exact prompt is used)
+  // + a real negative_prompt. NO steps/guidance/output_format in schema.
+  // Pages/covers: COLORING_BOOK preset requires style AUTO|GENERAL (DESIGN is rejected).
+  // Character sheets stay colored DESIGN without a coloring preset.
   if (isIdeogram) {
+    const preset = !isCharacterSheet
+      ? stylePreset || DEFAULT_PAGE_STYLE_PRESET
+      : undefined;
     const ideoBody: Record<string, unknown> = {
       prompt,
       image_size: "square_hd",
       num_images: 1,
       rendering_speed: "QUALITY",
-      style: "DESIGN",
+      style: preset ? "AUTO" : "DESIGN",
       expand_prompt: false,
       negative_prompt: pageNegative,
     };
-    // Pages/covers: lock COLORING_BOOK preset so every page shares one aesthetic.
-    // Character sheets stay colored DESIGN (no coloring preset).
-    if (!isCharacterSheet) {
-      ideoBody.style_preset = stylePreset || DEFAULT_PAGE_STYLE_PRESET;
+    if (preset) {
+      ideoBody.style_preset = preset;
     }
     if (typeof seed === "number" && Number.isFinite(seed)) {
       ideoBody.seed = seed % 2147483647;
