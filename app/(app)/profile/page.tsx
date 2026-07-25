@@ -34,13 +34,31 @@ export default async function ProfilePage() {
     <div className="mx-auto max-w-lg space-y-6">
       <h1 className="font-display text-3xl">Profil</h1>
       <Card className="space-y-3">
-        <div><p className="text-sm text-ink-muted">Nom</p><p className="font-semibold">{(profile?.fullname as string) || (session.name as string) || "—"}</p></div>
-        <div><p className="text-sm text-ink-muted">Email</p><p className="font-semibold">{(profile?.email as string) || (session.email as string)}</p></div>
-        <div><p className="text-sm text-ink-muted">Plan</p><p className="font-semibold capitalize">{(profile?.subscription_plan as string) || "free"}</p></div>
-        <div><p className="text-sm text-ink-muted">Crédits</p><p className="font-semibold">{formatCredits((profile?.credits as number) ?? 0)}</p></div>
+        <div>
+          <p className="text-sm text-ink-muted">Nom</p>
+          <p className="font-semibold">
+            {(profile?.fullname as string) || (session.name as string) || "—"}
+          </p>
+        </div>
+        <div>
+          <p className="text-sm text-ink-muted">Email</p>
+          <p className="font-semibold">{(profile?.email as string) || (session.email as string)}</p>
+        </div>
+        <div>
+          <p className="text-sm text-ink-muted">Plan</p>
+          <p className="font-semibold capitalize">
+            {(profile?.subscription_plan as string) || "free"}
+          </p>
+        </div>
+        <div>
+          <p className="text-sm text-ink-muted">Crédits</p>
+          <p className="font-semibold">{formatCredits((profile?.credits as number) ?? 0)}</p>
+        </div>
       </Card>
       <form action={signOut}>
-        <Button type="submit" variant="secondary" className="w-full">Se déconnecter</Button>
+        <Button type="submit" variant="secondary" className="w-full">
+          Se déconnecter
+        </Button>
       </form>
     </div>
   );

@@ -10,7 +10,6 @@ import {
   styleContractSystemBlock,
   styleImageCraftLine,
   styleKontextCue,
-  westAfricanVisualContract,
 } from "@/services/ai/style-contracts";
 
 export {

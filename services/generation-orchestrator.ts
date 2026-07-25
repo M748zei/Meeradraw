@@ -80,7 +80,19 @@ const PAGE_GEN_CONCURRENCY = envInt(process.env.PAGE_GEN_CONCURRENCY, 3);
 const PARENT_PAGE_WAVE = envInt(process.env.PARENT_PAGE_GEN_CONCURRENCY, 5);
 /** How many times to (re)generate the character model sheet if it comes back blank/poor. */
 const SHEET_MAX_ATTEMPTS = envInt(process.env.SHEET_MAX_ATTEMPTS, 3);
-const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 2);
+/** Parent + photo: single sheet attempt (no fal storm). Without photo: sheet skipped. */
+const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 1);
+
+/**
+ * Parent fal budget — real $ on FAL_KEY. Target ≈ cover + N pages (1 shot each).
+ * No vision QC re-rolls, at most one blank rescue, one provider attempt, no recovery storm.
+ */
+const PARENT_FAL_LEAN = {
+  maxVisionRerolls: 0,
+  maxQualityRerolls: 1,
+  maxProviderAttempts: 1,
+  skipRecovery: true,
+} as const;
 
 function isParentBook(book: Book): boolean {
   return book.source === "parent_create";
@@ -324,6 +336,13 @@ export class GenerationOrchestrator {
     pass: number
   ): Promise<void> {
     const book = await this.books.get(userId, bookId);
+    // Parent: never re-spend fal on heal/lineup storms. Incomplete → fail + refund.
+    if (isParentBook(book)) {
+      console.log(
+        `[parent] skip heal pass=${pass} gen=${generationId} (fal spend guard)`
+      );
+      return;
+    }
     const pagesCol = this.db.collection("books").doc(bookId).collection("pages");
     const snap = await pagesCol.orderBy("page_number", "asc").get();
     const toRetry: string[] = [];
@@ -332,17 +351,6 @@ export class GenerationOrchestrator {
       const status = data.generation_status as string;
       if (status === "failed" || status === "pending") {
         toRetry.push(d.id);
-        continue;
-      }
-      // Parent pass 2: also re-roll pages that vision flagged as lineup.
-      if (pass >= 2 && isParentBook(book) && status === "completed") {
-        const qc = data.qc_stats as ImageQcStats | undefined;
-        const lineup =
-          qc?.lineupDetected ||
-          (qc?.visionVerdicts || []).some((v) =>
-            String(v).toLowerCase().startsWith("lineup")
-          );
-        if (lineup) toRetry.push(d.id);
       }
     }
     if (!toRetry.length) return;
@@ -388,8 +396,18 @@ export class GenerationOrchestrator {
       .doc(universeId)
       .collection("characters");
 
+    // Parent pages are text-only Ideogram — a model sheet is pure fal waste unless
+    // we have a child photo (identity). Skip sheet = save 1–N billed fal images.
+    if (parentMode && !photoUrl) {
+      console.log(
+        `[parent] skip model sheet gen=${generationId} (text-only path, 0 fal sheet $)`
+      );
+      await this.books.update(userId, bookId, { character_sheet_url: null });
+      return;
+    }
+
     // Hero cast portrait first (identity reference when FAL_REF_ENDPOINT is set).
-    // Parent + photo: Kontext/img2img from the child's photo for likeness.
+    // Parent + photo: single attempt, lean fal budget.
     let characterSheetUrl: string | null = null;
     const sheetCast = expectedCastFor(plan.characters);
     const sheetAttempts = parentMode ? PARENT_SHEET_MAX_ATTEMPTS : SHEET_MAX_ATTEMPTS;
@@ -408,7 +426,9 @@ export class GenerationOrchestrator {
           identityFromPhoto: Boolean(photoUrl),
           expectedCast: sheetCast,
           qcStats: sheetStats,
-          maxVisionRerolls: parentMode ? 1 : undefined,
+          ...(parentMode
+            ? PARENT_FAL_LEAN
+            : { maxVisionRerolls: undefined }),
         });
         await this.setQcImage(generationId, "model_sheet", sheetStats);
         if (await this.isImplausibleHero(sheet.url)) {
@@ -431,6 +451,8 @@ export class GenerationOrchestrator {
           `hero portrait attempt ${attempt}/${sheetAttempts} failed`,
           sheetErr
         );
+        // Parent lean: do not burn a second fal call after a hard provider error.
+        if (parentMode) break;
       }
     }
 
@@ -536,11 +558,15 @@ export class GenerationOrchestrator {
       worldNegative,
       expectedCast: expectedCastFor(coverHero),
       qcStats: coverStats,
-      maxVisionRerolls: parentMode ? 1 : undefined,
-      seed: parentMode ? pageStyleSeed(bookId, 0) : undefined,
-      stylePreset: parentMode ? "COLORING_BOOK_I" : undefined,
-      heroGender: coverGender,
-      consistencyMode: parentMode,
+      ...(parentMode
+        ? {
+            ...PARENT_FAL_LEAN,
+            seed: pageStyleSeed(bookId, 0),
+            stylePreset: "COLORING_BOOK_I",
+            heroGender: coverGender,
+            consistencyMode: true,
+          }
+        : {}),
     });
     await this.setQcImage(generationId, "cover", coverStats);
     const persistedCover = await this.persistCover(
@@ -623,7 +649,6 @@ export class GenerationOrchestrator {
     const universeId = book.universe_id;
     const fullCharacterBible =
       book.character_bible || formatCharacterLock(plan.characters);
-    const characterSheetUrl = book.character_sheet_url || null;
     const worldSetting = [plan.world?.setting, plan.world?.mood]
       .filter(Boolean)
       .join(" — ");
@@ -722,11 +747,15 @@ export class GenerationOrchestrator {
         worldNegative,
         expectedCast,
         qcStats: pageStats,
-        maxVisionRerolls: parentMode ? 1 : undefined,
-        seed: parentMode ? pageStyleSeed(bookId, pageNumber) : undefined,
-        stylePreset: parentMode ? "COLORING_BOOK_I" : undefined,
-        heroGender: childGender,
-        consistencyMode: parentMode,
+        ...(parentMode
+          ? {
+              ...PARENT_FAL_LEAN,
+              seed: pageStyleSeed(bookId, pageNumber),
+              stylePreset: "COLORING_BOOK_I",
+              heroGender: childGender,
+              consistencyMode: true,
+            }
+          : {}),
       });
 
       if (!image?.url) {

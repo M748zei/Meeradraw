@@ -44,7 +44,11 @@ export function PdfDownloadButton({ bookId, pdfUrl, label = "Télécharger le PD
       <Button size="lg" onClick={download} disabled={loading}>
         {loading ? "Préparation du PDF…" : label}
       </Button>
-      {error ? <p className="text-sm text-rose-700">{error}</p> : null}
+      {error ? (
+        <p className="text-sm text-rose-700" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

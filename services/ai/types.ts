@@ -157,6 +157,15 @@ export interface ImageGenerationInput {
   /** Override default VISION_QC_REROLLS for this call. */
   maxVisionRerolls?: number;
   /**
+   * Cap pixel/quality re-rolls (blank/colored/poor-env). Parent lean path uses 0–1
+   * so a single book cannot storm fal.ai billing.
+   */
+  maxQualityRerolls?: number;
+  /** Cap network/provider withRetry attempts for this call (default FAL_RETRY_ATTEMPTS). */
+  maxProviderAttempts?: number;
+  /** Skip short-prompt blank rescue (extra fal calls). */
+  skipRecovery?: boolean;
+  /**
    * Stable seed for Ideogram/Flux — same book seed family keeps line weight /
    * cartoon hand coherent across pages (parent books especially).
    */

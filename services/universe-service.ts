@@ -1,5 +1,6 @@
 import { AppError } from "@/lib/errors";
 import { docData, docsData } from "@/lib/firebase/docs";
+import { deleteDocumentsInBatches } from "@/services/firestore-delete";
 import type { Universe } from "@/types/database";
 import type { Firestore } from "firebase-admin/firestore";
 import { randomUUID } from "crypto";
@@ -60,10 +61,46 @@ export class UniverseService {
 
   async remove(userId: string, id: string) {
     await this.get(userId, id);
+    const universeRef = this.db.collection("universes").doc(id);
     const books = await this.db.collection("books").where("universe_id", "==", id).get();
-    const batch = this.db.batch();
-    books.docs.forEach((d) => batch.delete(d.ref));
-    batch.delete(this.db.collection("universes").doc(id));
-    await batch.commit();
+    const ownedBooks = books.docs.filter((d) => d.data()?.user_id === userId);
+    const active = ownedBooks.find((d) => d.data()?.status === "generating");
+    if (active) {
+      throw new AppError(
+        "CONFLICT",
+        "Un livre de cet univers est en cours de génération. Attendez la fin avant de supprimer l’univers.",
+        409
+      );
+    }
+
+    const bookIds = ownedBooks.map((d) => d.id);
+    const [characters, pageSnaps, generationSnaps, retrySnaps] = await Promise.all([
+      universeRef.collection("characters").get(),
+      Promise.all(ownedBooks.map((d) => d.ref.collection("pages").get())),
+      Promise.all(
+        bookIds.map((bookId) =>
+          this.db.collection("generations").where("book_id", "==", bookId).get()
+        )
+      ),
+      Promise.all(
+        bookIds.map((bookId) =>
+          this.db.collection("generation_retries").where("book_id", "==", bookId).get()
+        )
+      ),
+    ]);
+
+    const refs = [
+      ...characters.docs.map((d) => d.ref),
+      ...pageSnaps.flatMap((snap) => snap.docs.map((d) => d.ref)),
+      ...generationSnaps.flatMap((snap) =>
+        snap.docs.filter((d) => d.data()?.user_id === userId).map((d) => d.ref)
+      ),
+      ...retrySnaps.flatMap((snap) =>
+        snap.docs.filter((d) => d.data()?.user_id === userId).map((d) => d.ref)
+      ),
+      ...ownedBooks.map((d) => d.ref),
+      universeRef,
+    ];
+    await deleteDocumentsInBatches(this.db, refs);
   }
 }

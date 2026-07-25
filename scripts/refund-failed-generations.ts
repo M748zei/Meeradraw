@@ -162,7 +162,7 @@ async function main() {
       (status === "failed" ||
         status === "partial" ||
         // Stuck running with zero delivery — reaper may have missed it
-        (status === "running" && costHint > 0));
+        ((status === "running" || status === "queued") && costHint > 0));
 
     console.log(
       `  gen=${g.id} status=${status} reserve≈${amount} refunded=${already} action=${needs ? "REFUND" : "skip"}`

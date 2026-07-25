@@ -5,6 +5,7 @@ const STATUS_MAP: Record<string, { label: string; className: string }> = {
   generating: { label: "En création…", className: "bg-sky-100 text-sky-700" },
   completed: { label: "Terminé", className: "bg-mint-100 text-mint-800" },
   partial: { label: "Partiel", className: "bg-yellow-100 text-yellow-700" },
+  archived: { label: "Archivé", className: "bg-cream-100 text-ink-muted" },
   failed: { label: "Échec", className: "bg-rose-100 text-rose-700" },
 };
 

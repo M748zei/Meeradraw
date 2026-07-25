@@ -46,7 +46,8 @@ async function runLogicTests() {
   const { estimateBookCost, refundForFailedPages, packForChariowProduct, FREE_TRIALS_MAX, FREE_TRIAL_MAX_PAGES } =
     await import("../config/credits");
   const { safeInternalPath } = await import("../lib/safe-redirect");
-  const { assertSafeImageUrl, isAllowedImageHost } = await import("../lib/safe-image-url");
+  const { assertSafeImageUrl, fetchSafeImageBytes, isAllowedImageHost } =
+    await import("../lib/safe-image-url");
   const { toPublicProfile } = await import("../lib/public-profile");
   const { rateLimit, clientIp } = await import("../lib/rate-limit");
   const { AppError, apiError, apiSuccess } = await import("../lib/errors");
@@ -95,8 +96,16 @@ async function runLogicTests() {
     assert(isAllowedImageHost("v3.fal.media"), "fal subdomain");
     assert(!isAllowedImageHost("evil.com"), "evil");
     assertSafeImageUrl("https://placehold.co/100.png");
+    assertSafeImageUrl("http://placehold.co/100.png");
     assertSafeImageUrl("https://storage.googleapis.com/bucket/x.png");
     let blocked = false;
+    try {
+      assertSafeImageUrl("http://storage.googleapis.com/bucket/x.png");
+    } catch {
+      blocked = true;
+    }
+    assert(blocked, "non-mock http blocked");
+    blocked = false;
     try {
       assertSafeImageUrl("https://169.254.169.254/latest/meta-data/");
     } catch {
@@ -110,6 +119,24 @@ async function runLogicTests() {
       blocked = true;
     }
     assert(blocked, "credentials blocked");
+  });
+
+  await test("fetchSafeImageBytes validates redirect targets", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: "http://storage.googleapis.com/bucket/x.png" },
+      })) as typeof fetch;
+    let blocked = false;
+    try {
+      await fetchSafeImageBytes("https://placehold.co/redirect.png", { timeoutMs: 10 });
+    } catch {
+      blocked = true;
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    assert(blocked, "unsafe redirect target blocked");
   });
 
   await test("toPublicProfile masks license key", () => {
@@ -389,6 +416,143 @@ async function runFirestoreIntegration() {
       blocked = e instanceof Error && /introuvable|Univers/i.test(e.message);
     }
     assert(blocked, "cross-tenant book create must fail");
+  });
+
+  await test("BookService remove blocks active generation and cascades child docs", async () => {
+    const activeBook = await books.create(userA, {
+      universe_id: universeAId,
+      idea: "Livre actif à ne pas supprimer",
+      page_count: 2,
+      title: "Active Delete Guard",
+    });
+    await books.update(userA, activeBook.id, {
+      status: "generating",
+      active_generation_id: randomUUID(),
+    });
+    let blocked = false;
+    try {
+      await books.remove(userA, activeBook.id);
+    } catch (e) {
+      blocked = e instanceof Error && /génération/i.test(e.message);
+    }
+    assert(blocked, "active generation delete blocked");
+
+    const removable = await books.create(userA, {
+      universe_id: universeAId,
+      idea: "Livre à supprimer avec ses enfants",
+      page_count: 2,
+      title: "Cascade Delete Book",
+    });
+    const pageId = randomUUID();
+    const genId = randomUUID();
+    const retryId = randomUUID();
+    await db
+      .collection("books")
+      .doc(removable.id)
+      .collection("pages")
+      .doc(pageId)
+      .set({
+        book_id: removable.id,
+        page_number: 1,
+        title: "Page à supprimer",
+        story_text: "Texte",
+        illustration_prompt: null,
+        illustration_url: null,
+        activity_type: null,
+        generation_status: "completed",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    await db.collection("generations").doc(genId).set({
+      user_id: userA,
+      book_id: removable.id,
+      status: "completed",
+      generation_type: "full_book",
+      progress: 100,
+      credits_used: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await db.collection("generation_retries").doc(retryId).set({
+      user_id: userA,
+      book_id: removable.id,
+      status: "completed",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    await books.remove(userA, removable.id);
+    assert(!(await db.collection("books").doc(removable.id).get()).exists, "book deleted");
+    assert(
+      (
+        await db
+          .collection("books")
+          .doc(removable.id)
+          .collection("pages")
+          .doc(pageId)
+          .get()
+      ).exists === false,
+      "page deleted"
+    );
+    assert(!(await db.collection("generations").doc(genId).get()).exists, "gen deleted");
+    assert(!(await db.collection("generation_retries").doc(retryId).get()).exists, "retry deleted");
+  });
+
+  await test("UniverseService remove cascades books, pages and characters", async () => {
+    const uni = await universes.create(userA, {
+      title: "Univers cascade",
+      description: "Suppression complète",
+    });
+    const book = await books.create(userA, {
+      universe_id: uni.id,
+      idea: "Livre enfant de l'univers cascade",
+      page_count: 2,
+      title: "Livre cascade",
+    });
+    const pageId = randomUUID();
+    const characterId = randomUUID();
+    const genId = randomUUID();
+    await db.collection("universes").doc(uni.id).collection("characters").doc(characterId).set({
+      universe_id: uni.id,
+      name: "Kai",
+      created_at: new Date().toISOString(),
+    });
+    await db.collection("books").doc(book.id).collection("pages").doc(pageId).set({
+      book_id: book.id,
+      page_number: 1,
+      title: "Page cascade",
+      story_text: "Texte",
+      illustration_prompt: null,
+      illustration_url: null,
+      activity_type: null,
+      generation_status: "completed",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await db.collection("generations").doc(genId).set({
+      user_id: userA,
+      book_id: book.id,
+      status: "completed",
+      generation_type: "full_book",
+      progress: 100,
+      credits_used: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    await universes.remove(userA, uni.id);
+    assert(!(await db.collection("universes").doc(uni.id).get()).exists, "universe deleted");
+    assert(
+      !(await db.collection("universes").doc(uni.id).collection("characters").doc(characterId).get())
+        .exists,
+      "character deleted"
+    );
+    assert(!(await db.collection("books").doc(book.id).get()).exists, "child book deleted");
+    assert(
+      !(await db.collection("books").doc(book.id).collection("pages").doc(pageId).get()).exists,
+      "child page deleted"
+    );
+    assert(!(await db.collection("generations").doc(genId).get()).exists, "child gen deleted");
   });
 
   await test("applyChariowSale credits + reverse clawback", async () => {

@@ -233,12 +233,15 @@ export default function CreateForChildPage() {
 
       <form onSubmit={onSubmit} className="space-y-6">
         <Card className="space-y-4 p-5">
-          <label className="block text-sm font-semibold text-ink">Âge de l’enfant</label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="block text-sm font-semibold text-ink" id="child-age-label">
+            Âge de l’enfant
+          </div>
+          <div className="grid grid-cols-3 gap-2" role="group" aria-labelledby="child-age-label">
             {AGE_BANDS.map((a) => (
               <button
                 key={a.id}
                 type="button"
+                aria-pressed={ageId === a.id}
                 onClick={() => {
                   setAgeId(a.id);
                   setPageCount(a.defaultPages);
@@ -257,20 +260,30 @@ export default function CreateForChildPage() {
         </Card>
 
         <Card className="space-y-4 p-5">
-          <label className="block text-sm font-semibold text-ink">Prénom</label>
+          <label htmlFor="child-name" className="block text-sm font-semibold text-ink">
+            Prénom
+          </label>
           <Input
+            id="child-name"
             value={childName}
             onChange={(e) => setChildName(e.target.value)}
             placeholder="Ex. Kai"
             maxLength={40}
             autoComplete="off"
           />
-          <label className="block text-sm font-semibold text-ink">Genre</label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="block text-sm font-semibold text-ink" id="child-gender-label">
+            Genre
+          </div>
+          <div
+            className="grid grid-cols-3 gap-2"
+            role="group"
+            aria-labelledby="child-gender-label"
+          >
             {CHILD_GENDERS.map((g) => (
               <button
                 key={g.id}
                 type="button"
+                aria-pressed={gender === g.id}
                 onClick={() => setGender(g.id)}
                 className={cn(
                   "rounded-2xl border px-3 py-3 text-sm font-medium transition",
@@ -286,18 +299,22 @@ export default function CreateForChildPage() {
         </Card>
 
         <Card className="space-y-4 p-5">
-          <label className="block text-sm font-semibold text-ink">
+          <label htmlFor="parent-story" className="block text-sm font-semibold text-ink">
             Votre histoire (en quelques phrases)
           </label>
           <textarea
+            id="parent-story"
             value={parentStory}
             onChange={(e) => setParentStory(e.target.value)}
             placeholder="Ex. Kai découvre qu’il peut faire briller les étoiles pour aider sa grand-mère au marché…"
             rows={4}
             maxLength={500}
+            aria-describedby="parent-story-count"
             className="w-full rounded-2xl border border-cream-200 bg-white px-4 py-3 text-sm text-ink outline-none ring-sky-400 focus:ring-2"
           />
-          <p className="text-xs text-ink-muted">{parentStory.trim().length}/500</p>
+          <p id="parent-story-count" className="text-xs text-ink-muted">
+            {parentStory.trim().length}/500
+          </p>
         </Card>
 
         <Card className="space-y-4 p-5">
@@ -329,12 +346,15 @@ export default function CreateForChildPage() {
         </Card>
 
         <Card className="space-y-4 p-5">
-          <label className="block text-sm font-semibold text-ink">Thème (ambiance)</label>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div className="block text-sm font-semibold text-ink" id="theme-label">
+            Thème (ambiance)
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="group" aria-labelledby="theme-label">
             {PARENT_THEMES.map((t) => (
               <button
                 key={t.id}
                 type="button"
+                aria-pressed={themeId === t.id}
                 onClick={() => setThemeId(t.id)}
                 className={cn(
                   "rounded-2xl border px-3 py-3 text-left text-sm font-medium transition",
@@ -350,12 +370,15 @@ export default function CreateForChildPage() {
         </Card>
 
         <Card className="space-y-4 p-5">
-          <label className="block text-sm font-semibold text-ink">Nombre de pages</label>
-          <div className="flex flex-wrap gap-2">
+          <div className="block text-sm font-semibold text-ink" id="page-count-label">
+            Nombre de pages
+          </div>
+          <div className="flex flex-wrap gap-2" role="group" aria-labelledby="page-count-label">
             {PARENT_PAGE_OPTIONS.map((n) => (
               <button
                 key={n}
                 type="button"
+                aria-pressed={pageCount === n}
                 onClick={() => setPageCount(n)}
                 className={cn(
                   "rounded-full border px-4 py-2 text-sm font-semibold",
@@ -394,14 +417,18 @@ export default function CreateForChildPage() {
           </ul>
         </Card>
 
-        {error ? <p className="text-sm text-rose-700">{error}</p> : null}
+        {error ? (
+          <p className="text-sm text-rose-700" role="alert">
+            {error}
+          </p>
+        ) : null}
 
         <Button type="submit" size="lg" className="w-full" disabled={loading}>
           {loading ? "Création en cours…" : "Générer le cahier"}
         </Button>
 
         <p className="text-center text-sm text-ink-muted">
-          Preferez le studio avancé ?{" "}
+          Préférez le studio avancé ?{" "}
           <Link href="/universes/new" className="font-medium text-sky-700 underline">
             Créer un univers
           </Link>

@@ -1,5 +1,6 @@
 import { AppError } from "@/lib/errors";
 import { docData, docsData } from "@/lib/firebase/docs";
+import { deleteDocumentsInBatches } from "@/services/firestore-delete";
 import type { Book, Page } from "@/types/database";
 import type { Firestore } from "firebase-admin/firestore";
 import { randomUUID } from "crypto";
@@ -121,11 +122,27 @@ export class BookService {
   }
 
   async remove(userId: string, id: string) {
-    await this.get(userId, id);
-    const pages = await this.db.collection("books").doc(id).collection("pages").get();
-    const batch = this.db.batch();
-    pages.docs.forEach((d) => batch.delete(d.ref));
-    batch.delete(this.db.collection("books").doc(id));
-    await batch.commit();
+    const book = await this.get(userId, id);
+    if (book.status === "generating") {
+      throw new AppError(
+        "CONFLICT",
+        "Ce livre est en cours de génération. Attendez la fin avant de le supprimer.",
+        409
+      );
+    }
+
+    const bookRef = this.db.collection("books").doc(id);
+    const [pages, generations, retries] = await Promise.all([
+      bookRef.collection("pages").get(),
+      this.db.collection("generations").where("book_id", "==", id).get(),
+      this.db.collection("generation_retries").where("book_id", "==", id).get(),
+    ]);
+    const refs = [
+      ...pages.docs.map((d) => d.ref),
+      ...generations.docs.filter((d) => d.data()?.user_id === userId).map((d) => d.ref),
+      ...retries.docs.filter((d) => d.data()?.user_id === userId).map((d) => d.ref),
+      bookRef,
+    ];
+    await deleteDocumentsInBatches(this.db, refs);
   }
 }

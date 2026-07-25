@@ -23,6 +23,15 @@ export async function POST(request: Request) {
     const books = new BookService(db);
     const credits = new CreditService(db);
     const book = await books.get(user.id, body.book_id);
+    if (book.status === "completed" || book.status === "partial" || book.status === "archived") {
+      throw new AppError(
+        "CONFLICT",
+        book.status === "partial"
+          ? "Ce livre est déjà partiellement créé. Régénère les pages manquantes depuis le livre."
+          : "Ce livre a déjà été créé.",
+        409
+      );
+    }
 
     // Access gate with free-trial fallback: accounts without an active access
     // can generate up to FREE_TRIALS_MAX small books (≤ FREE_TRIAL_MAX_PAGES

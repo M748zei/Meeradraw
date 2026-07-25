@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { PdfDownloadButton } from "@/components/books/pdf-download-button";
 import { RegeneratePageButton } from "@/components/books/regenerate-page-button";
+import { StatusBadge } from "@/components/books/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebase/admin";
@@ -78,7 +79,7 @@ export default async function BookPage({ params }: Props) {
             {book.cover_image ? (
               <Image
                 src={book.cover_image}
-                alt=""
+                alt={`Couverture de ${book.title}`}
                 width={384}
                 height={512}
                 className="h-full w-full object-cover"
@@ -90,8 +91,9 @@ export default async function BookPage({ params }: Props) {
           <p className="text-sm font-semibold uppercase tracking-wider text-sky-600">Livre de coloriage</p>
           <h1 className="font-display text-3xl md:text-4xl">{book.title}</h1>
           {book.subtitle ? <p className="mt-2 text-lg text-ink-muted">{book.subtitle}</p> : null}
-          <p className="mt-4 text-sm text-ink-muted">
-            {book.page_count} pages · {book.status}
+          <p className="mt-4 flex flex-wrap items-center gap-2 text-sm text-ink-muted">
+            <span>{book.page_count} pages</span>
+            <StatusBadge status={book.status} />
             {book.child_name ? ` · pour ${book.child_name}` : ""}
           </p>
           {book.status === "generating" ? (
@@ -143,7 +145,7 @@ export default async function BookPage({ params }: Props) {
                   {page.illustration_url ? (
                     <Image
                       src={page.illustration_url}
-                      alt=""
+                      alt={`Page ${page.page_number}${page.title ? ` — ${page.title}` : ""}`}
                       width={512}
                       height={512}
                       className="h-full w-full object-contain"

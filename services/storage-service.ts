@@ -40,13 +40,12 @@ export class StorageService {
 
     try {
       // Already ours (signed Storage URL) → keep as is, recover object path.
-      if (
-        parsed.hostname === "storage.googleapis.com" ||
-        parsed.hostname === "firebasestorage.googleapis.com"
-      ) {
-        const segments = parsed.pathname.split("/").filter(Boolean);
-        const existingPath = decodeURIComponent(segments.slice(1).join("/"));
-        return { url, path: existingPath || null };
+      const ownStoragePath = objectPathFromOwnStorageUrl(
+        parsed,
+        getAdminStorage().bucket().name
+      );
+      if (ownStoragePath) {
+        return { url, path: ownStoragePath };
       }
 
       const raw = await fetchSafeImageBytes(url);
@@ -94,4 +93,22 @@ export class StorageService {
       throw new AppError("INTERNAL_ERROR", "Upload impossible", 500);
     }
   }
+}
+
+function objectPathFromOwnStorageUrl(parsed: URL, bucketName: string): string | null {
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  if (parsed.hostname === "storage.googleapis.com") {
+    const [bucket, ...objectParts] = segments;
+    if (bucket !== bucketName) return null;
+    return decodeURIComponent(objectParts.join("/")) || null;
+  }
+  if (parsed.hostname === "firebasestorage.googleapis.com") {
+    const bucketIndex = segments.indexOf("b");
+    const objectIndex = segments.indexOf("o");
+    const bucket = bucketIndex >= 0 ? segments[bucketIndex + 1] : null;
+    const object = objectIndex >= 0 ? segments[objectIndex + 1] : null;
+    if (bucket !== bucketName || !object) return null;
+    return decodeURIComponent(object) || null;
+  }
+  return null;
 }

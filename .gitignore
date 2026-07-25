@@ -50,6 +50,10 @@ next-env.d.ts
 /public/_phase2ab/*.jpg
 /public/_phase2ab/*.jpeg
 /public/_phase2ab/*.webp
+/public/_phase2ab/**/*.png
+/public/_phase2ab/**/*.jpg
+/public/_phase2ab/**/*.jpeg
+/public/_phase2ab/**/*.webp
 
 # Full-resolution generation test dump (~8MB). The landing uses optimized copies.
 /public/_gentest7/*.png

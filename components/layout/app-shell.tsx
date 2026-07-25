@@ -38,13 +38,13 @@ export function AppShell({
             ))}
           </nav>
           <div className="flex items-center gap-3">
-          <Link
-            href="/credits"
-            className="rounded-full bg-white px-3 py-1.5 text-sm font-semibold text-sky-700 shadow-soft transition hover:bg-sky-50 hover:shadow-lift"
-            title="Voir et recharger vos crédits"
-          >
-            {formatCredits(credits ?? 0)} crédits
-          </Link>
+            <Link
+              href="/credits"
+              className="rounded-full bg-white px-3 py-1.5 text-sm font-semibold text-sky-700 shadow-soft transition hover:bg-sky-50 hover:shadow-lift"
+              title="Voir et recharger vos crédits"
+            >
+              {formatCredits(credits ?? 0)} crédits
+            </Link>
             <div className="hidden text-sm text-ink-muted sm:block">
               {name ? `Bonjour ${name.split(" ")[0]}` : "Bonjour"}
             </div>

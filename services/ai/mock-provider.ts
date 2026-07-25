@@ -10,10 +10,7 @@ import type {
 } from "@/services/ai/types";
 
 export class MockTextProvider implements TextAIProvider {
-  async enrichIdea(
-    rawIdea: string,
-    _opts?: import("@/services/ai/types").EnrichIdeaOptions
-  ): Promise<EnrichedIdea> {
+  async enrichIdea(rawIdea: string): Promise<EnrichedIdea> {
     const idea = rawIdea.trim() || "Une aventure magique";
     const africanHint =
       /afrique|baobab|dakar|abidjan|lagos|kirikou|anansi|accra|savane|niger|pagne/i.test(

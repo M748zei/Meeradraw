@@ -61,9 +61,27 @@ const FAL_QUALITY_REROLLS = Number(process.env.FAL_QUALITY_REROLLS ?? 2);
  * wrong cast, illegible cover title). Separate cap from the pixel re-rolls:
  * vision only runs on pixel-clean images, and after the cap the image is
  * ACCEPTED (fail-open — a static page beats a failed page). Each re-roll is an
- * internal fal cost, never billed to the customer.
+ * internal fal cost — real $ on the fal key, not Meeradraw credits.
  */
 const VISION_QC_REROLLS = Number(process.env.VISION_QC_REROLLS ?? 2);
+
+/** Permanent fal failures — never retry (wastes wall-clock; some may still bill). */
+export class NonRetryableFalError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NonRetryableFalError";
+  }
+}
+
+export function isNonRetryableFalError(err: unknown): boolean {
+  if (err instanceof NonRetryableFalError) return true;
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return (
+    /feature_not_supported|cannot be 'DESIGN'|style_preset|Exhausted balance|User is locked|invalid_request|422/i.test(
+      msg
+    ) || /fal\.ai error:.*"type"\s*:\s*"feature_not_supported"/i.test(msg)
+  );
+}
 const ANTI_LINEUP_BOOST =
   "CRITICAL: the characters must be IN MOTION doing the described action with distinct dynamic poses and a non-frontal camera angle — ABSOLUTELY NOT standing in a row, NOT front-facing side by side, NOT a static group photo, NOT a model sheet.";
 const CAST_FIX_BOOST =
@@ -114,9 +132,18 @@ export class FalImageProvider implements ImageAIProvider {
       typeof input.maxVisionRerolls === "number" && input.maxVisionRerolls >= 0
         ? input.maxVisionRerolls
         : VISION_QC_REROLLS;
+    const qualityCap =
+      typeof input.maxQualityRerolls === "number" && input.maxQualityRerolls >= 0
+        ? input.maxQualityRerolls
+        : FAL_QUALITY_REROLLS;
+    const providerAttempts =
+      typeof input.maxProviderAttempts === "number" &&
+      input.maxProviderAttempts >= 1
+        ? Math.floor(input.maxProviderAttempts)
+        : FAL_RETRY_ATTEMPTS;
     // Short, high-adherence fallback used ONLY to rescue a persistently blank story page.
     const recoveryPrompt =
-      !input.isCharacterSheet && !input.isCover
+      !input.skipRecovery && !input.isCharacterSheet && !input.isCover
         ? buildRecoveryPrompt(input)
         : undefined;
 
@@ -159,6 +186,8 @@ export class FalImageProvider implements ImageAIProvider {
         label: useReference ? "fal-ref" : "fal",
         input,
         maxVisionRerolls: visionCap,
+        maxQualityRerolls: qualityCap,
+        maxProviderAttempts: providerAttempts,
         consistencyMode: Boolean(input.consistencyMode),
         baseSeed: typeof input.seed === "number" ? input.seed : undefined,
       });
@@ -206,6 +235,8 @@ export class FalImageProvider implements ImageAIProvider {
           label: "fal-fallback",
           input,
           maxVisionRerolls: visionCap,
+          maxQualityRerolls: qualityCap,
+          maxProviderAttempts: providerAttempts,
           consistencyMode: true,
           baseSeed: typeof input.seed === "number" ? input.seed : undefined,
         });
@@ -238,6 +269,8 @@ export class FalImageProvider implements ImageAIProvider {
     /** Original input — drives the vision QC (action / expected cast / cover title). */
     input?: ImageGenerationInput;
     maxVisionRerolls?: number;
+    maxQualityRerolls?: number;
+    maxProviderAttempts?: number;
     /** Parent books: keep seed family + style lock on rerolls. */
     consistencyMode?: boolean;
     baseSeed?: number;
@@ -255,6 +288,8 @@ export class FalImageProvider implements ImageAIProvider {
       label,
       input,
       maxVisionRerolls = VISION_QC_REROLLS,
+      maxQualityRerolls = FAL_QUALITY_REROLLS,
+      maxProviderAttempts = FAL_RETRY_ATTEMPTS,
       consistencyMode = false,
       baseSeed,
     } = params;
@@ -263,7 +298,7 @@ export class FalImageProvider implements ImageAIProvider {
       validateNonBlank || validateEnvironment || validateLineArt || Boolean(requireColored);
     // Vision re-rolls extend the loop but keep their own (smaller) cap.
     const maxRerolls = wantsQualityCheck
-      ? FAL_QUALITY_REROLLS + maxVisionRerolls
+      ? maxQualityRerolls + maxVisionRerolls
       : 0;
     let visionRerollsUsed = 0;
     let pixelRerollsUsed = 0;
@@ -321,14 +356,16 @@ export class FalImageProvider implements ImageAIProvider {
       };
       try {
         current = await withRetry(() => callFal(endpoint, key, body, wantsQualityCheck), {
-          attempts: FAL_RETRY_ATTEMPTS,
+          attempts: maxProviderAttempts,
           delayMs: 1200,
           label,
+          shouldRetry: (err) => !isNonRetryableFalError(err),
         });
       } catch (err) {
         // Real provider/network failure for this attempt. If we already have any image,
         // stop and keep it; otherwise try another re-roll before giving up.
         lastError = err;
+        if (isNonRetryableFalError(err)) break;
         if (best) break;
         continue;
       }
@@ -432,7 +469,7 @@ export class FalImageProvider implements ImageAIProvider {
 
       // Budget the next re-roll against the right cap.
       if (score > 0) {
-        if (pixelRerollsUsed >= FAL_QUALITY_REROLLS) break;
+        if (pixelRerollsUsed >= maxQualityRerolls) break;
         pixelRerollsUsed++;
         qcStats.pixelRerolls = pixelRerollsUsed;
       } else {
@@ -442,7 +479,7 @@ export class FalImageProvider implements ImageAIProvider {
       }
       if (attempt < maxRerolls) {
         console.warn(
-          `[${label}] quality re-roll (blank=${blank}, colored=${colored}, notColored=${notColored}, poorEnv=${poorEnv}, vision=${prevVisionNudges.length > 0}); pixel ${pixelRerollsUsed}/${FAL_QUALITY_REROLLS}, vision ${visionRerollsUsed}/${maxVisionRerolls}`
+          `[${label}] quality re-roll (blank=${blank}, colored=${colored}, notColored=${notColored}, poorEnv=${poorEnv}, vision=${prevVisionNudges.length > 0}); pixel ${pixelRerollsUsed}/${maxQualityRerolls}, vision ${visionRerollsUsed}/${maxVisionRerolls}`
         );
       }
     }
@@ -756,7 +793,17 @@ async function callFal(
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`fal.ai error: ${text}`);
+    const msg = `fal.ai error: ${text}`;
+    if (
+      res.status === 422 ||
+      res.status === 402 ||
+      /feature_not_supported|cannot be 'DESIGN'|Exhausted balance|User is locked/i.test(
+        text
+      )
+    ) {
+      throw new NonRetryableFalError(msg);
+    }
+    throw new Error(msg);
   }
 
   const data = (await res.json()) as {

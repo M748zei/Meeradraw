@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { StatusBadge } from "@/components/books/status-badge";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebase/admin";
@@ -44,7 +45,7 @@ export default async function LibraryPage() {
                   {book.cover_image ? (
                     <Image
                       src={book.cover_image}
-                      alt=""
+                      alt={`Couverture de ${book.title}`}
                       width={360}
                       height={480}
                       className="h-full w-full object-cover"
@@ -52,9 +53,10 @@ export default async function LibraryPage() {
                   ) : null}
                 </div>
                 <h3 className="font-display text-lg">{book.title}</h3>
-                <p className="text-sm text-ink-muted">
-                  {book.page_count} pages · {book.type}
-                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-ink-muted">
+                  <span>{book.page_count} pages</span>
+                  <StatusBadge status={book.status} />
+                </div>
               </Card>
             </Link>
           ))}

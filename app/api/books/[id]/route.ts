@@ -20,7 +20,9 @@ const patchSchema = z.object({
   subtitle: z.string().max(200).optional(),
   // cover_image intentionally omitted — only the generation pipeline may set it
   // (arbitrary URLs would enable SSRF through PDF export).
-  status: z.enum(["draft", "generating", "completed", "partial", "archived", "failed"]).optional(),
+  // Runtime states are owned by the generation pipeline. The public update API
+  // may only move a book out of the active library.
+  status: z.enum(["archived"]).optional(),
 });
 
 export async function PATCH(request: Request, { params }: Params) {

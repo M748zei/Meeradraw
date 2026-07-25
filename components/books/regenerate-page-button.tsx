@@ -56,7 +56,11 @@ export function RegeneratePageButton({
         <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
         {loading ? "Régénération…" : "Régénérer cette page"}
       </Button>
-      {error ? <p className="text-xs text-rose-700">{error}</p> : null}
+      {error ? (
+        <p className="text-xs text-rose-700" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

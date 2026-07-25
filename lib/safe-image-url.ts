@@ -11,9 +11,17 @@ export function isAllowedImageHost(hostname: string): boolean {
   );
 }
 
+function isAllowedHttpMock(parsed: URL): boolean {
+  return (
+    parsed.protocol === "http:" &&
+    parsed.hostname === "placehold.co" &&
+    process.env.NODE_ENV !== "production"
+  );
+}
+
 /**
  * Parse and validate an image URL before the server fetches it.
- * Requires https (or http for placehold.co in local mocks) and an allowlisted host.
+ * Requires HTTPS, except plain HTTP placehold.co in non-production mocks.
  */
 export function assertSafeImageUrl(url: string): URL {
   let parsed: URL;
@@ -22,7 +30,7 @@ export function assertSafeImageUrl(url: string): URL {
   } catch {
     throw new Error("invalid image URL");
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+  if (parsed.protocol !== "https:" && !isAllowedHttpMock(parsed)) {
     throw new Error(`unsupported scheme: ${parsed.protocol}`);
   }
   // Disallow credentials in URL (userinfo SSRF / log injection).
@@ -42,10 +50,21 @@ export async function fetchSafeImageBytes(
   url: string,
   opts?: { timeoutMs?: number; maxBytes?: number }
 ): Promise<Uint8Array> {
-  const parsed = assertSafeImageUrl(url);
-  const res = await fetchWithTimeout(parsed.toString(), {
-    timeoutMs: opts?.timeoutMs ?? 25_000,
-  });
+  let parsed = assertSafeImageUrl(url);
+  let res: Response | null = null;
+  for (let redirects = 0; redirects <= 3; redirects++) {
+    res = await fetchWithTimeout(parsed.toString(), {
+      timeoutMs: opts?.timeoutMs ?? 25_000,
+      redirect: "manual",
+    });
+    if (res.status < 300 || res.status > 399) break;
+    const location = res.headers.get("location");
+    if (!location) throw new Error(`redirect without location (${res.status})`);
+    parsed = assertSafeImageUrl(new URL(location, parsed).toString());
+  }
+  if (!res || (res.status >= 300 && res.status <= 399)) {
+    throw new Error("too many redirects");
+  }
   if (!res.ok) throw new Error(`fetch ${res.status}`);
   const maxBytes = opts?.maxBytes ?? MAX_IMAGE_BYTES;
   const len = Number(res.headers.get("content-length") || 0);

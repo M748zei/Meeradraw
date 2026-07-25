@@ -23,7 +23,13 @@ export async function mapWithConcurrency<T, R>(
 /** Retry an async fn with linear backoff. */
 export async function withRetry<T>(
   fn: () => Promise<T>,
-  opts?: { attempts?: number; delayMs?: number; label?: string }
+  opts?: {
+    attempts?: number;
+    delayMs?: number;
+    label?: string;
+    /** Return false to abort immediately (no further attempts / no spend). */
+    shouldRetry?: (err: unknown) => boolean;
+  }
 ): Promise<T> {
   const attempts = opts?.attempts ?? 3;
   const delayMs = opts?.delayMs ?? 800;
@@ -37,6 +43,9 @@ export async function withRetry<T>(
       console.warn(
         `[retry ${i + 1}/${attempts}]${opts?.label ? ` ${opts.label}` : ""}: ${msg}`
       );
+      if (opts?.shouldRetry && !opts.shouldRetry(err)) {
+        break;
+      }
       if (i < attempts - 1) {
         await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
       }

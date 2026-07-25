@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { BOOK_TYPES, IDEA_EXAMPLES, PAGE_OPTIONS, STYLE_OPTIONS } from "@/config/book-types";
 import { estimateBookCost } from "@/config/credits";
 import { Button } from "@/components/ui/button";
@@ -162,7 +162,7 @@ function NewBookForm() {
     };
   }, []);
 
-  async function runEnrich(idea: string, opts?: { silent?: boolean }) {
+  const runEnrich = useCallback(async (idea: string, opts?: { silent?: boolean }) => {
     const raw = idea.trim();
     if (raw.length < 3) {
       setEnrichStatus("idle");
@@ -200,7 +200,7 @@ function NewBookForm() {
         );
       }
     }
-  }
+  }, [style]);
 
   useEffect(() => {
     if (prefillIdea.length < 3) return;
@@ -208,8 +208,7 @@ function NewBookForm() {
     // (runEnrich flips enrichStatus to "loading" on entry).
     const t = setTimeout(() => void runEnrich(prefillIdea), 0);
     return () => clearTimeout(t);
-     
-  }, [prefillIdea]);
+  }, [prefillIdea, runEnrich]);
 
   function applyManualIdea(value: string) {
     setOriginalIdea(value);

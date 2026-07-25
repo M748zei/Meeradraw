@@ -25,7 +25,13 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "**.fal.media" },
     ],
   },
-  serverExternalPackages: ["firebase-admin"],
+  serverExternalPackages: [
+    "firebase-admin",
+    "@vercel/queue",
+    "@vercel/oidc",
+    "@vercel/cli-config",
+    "xdg-app-paths",
+  ],
   async headers() {
     return [
       {
