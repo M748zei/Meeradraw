@@ -116,6 +116,7 @@ export class GenerationOrchestrator {
       );
       await this.runHealFailedPagesPhase(userId, bookId, generationId, 1);
       await this.runHealFailedPagesPhase(userId, bookId, generationId, 2);
+      await this.runHealFailedPagesPhase(userId, bookId, generationId, 3);
       await this.runFinalizePhase(
         userId,
         bookId,
@@ -177,7 +178,7 @@ export class GenerationOrchestrator {
       style,
       research,
       audience,
-      { originalIdea, childName, childGender }
+      { originalIdea, childName, childGender, parentMode }
     );
 
     // firestoreSafe: LLM output may contain nested arrays / undefined that
@@ -456,33 +457,38 @@ export class GenerationOrchestrator {
 
     const imageProvider = getImageProvider();
 
-    const coverCast = coverCharacters(plan);
+    const coverHero = parentMode
+      ? (() => {
+          const hero =
+            plan.characters.find((c) => c.id === "char_1") || plan.characters[0];
+          return hero ? [hero] : coverCharacters(plan).slice(0, 1);
+        })()
+      : coverCharacters(plan);
     const coverAction =
       plan.pages.find((p) => p.action && p.comicBeat === "action")?.action ||
       plan.pages.find((p) => p.action)?.action ||
       plan.summary;
     const coverStats: ImageQcStats = {};
-    // Parent: Ideogram text-only cover (faster, soft faces, lettered title).
-    // Studio: Kontext + overlay title when sheet exists.
-    const useOverlayTitle = !parentMode && Boolean(characterSheetUrl);
+    // Prefer sheet identity (photo→cartoon) + server title overlay — never a random crowd.
+    const useOverlayTitle = Boolean(characterSheetUrl);
     const cover = await imageProvider.generateImage({
       prompt: `${plan.title}. ${plan.summary}`,
       style,
-      characterBible: formatCharacterLock(coverCast),
+      characterBible: formatCharacterLock(coverHero),
       worldSetting,
       isCover: true,
-      referenceImageUrl: parentMode ? undefined : characterSheetUrl || undefined,
-      forceTextOnly: parentMode,
+      referenceImageUrl: characterSheetUrl || undefined,
+      forceTextOnly: !characterSheetUrl,
       coverTitle: useOverlayTitle ? undefined : plan.title,
       action: coverAction,
-      refScene: coverAction,
+      refScene: `${coverAction}. Draw ONLY the one hero child in action — no crowd of extra children.`,
       settingElements: settingElementsForScene(
         settingBible?.elements,
         `${coverAction} ${plan.summary}`,
         4
       ),
       worldNegative,
-      expectedCast: expectedCastFor(coverCast),
+      expectedCast: expectedCastFor(coverHero),
       qcStats: coverStats,
       maxVisionRerolls: parentMode ? 1 : undefined,
     });
@@ -612,10 +618,15 @@ export class GenerationOrchestrator {
         .join(" ");
 
       const pageStats: ImageQcStats = {};
-      // Solo: character crop. Duo+: NO full lineup sheet (lineup pose bleed) —
-      // prefer text-only Ideogram with visualLock text, or skip reference.
-      const pageReference =
-        characterIds.length === 1 && sheetCrops[characterIds[0]]?.url
+      // Parent: always prefer the hero crop (char_1) for likeness; never full lineup.
+      // Studio: solo crop only; duo+ text-only.
+      const heroCrop = sheetCrops["char_1"]?.url;
+      const pageReference = isParentBook(book)
+        ? heroCrop ||
+          (characterIds.length === 1
+            ? sheetCrops[characterIds[0]]?.url
+            : undefined)
+        : characterIds.length === 1 && sheetCrops[characterIds[0]]?.url
           ? sheetCrops[characterIds[0]].url
           : undefined;
       const expectedCast = planPage

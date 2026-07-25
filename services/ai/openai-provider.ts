@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { normalizeStoryPlan } from "@/services/ai/character-bible";
+import { enforceParentChildHero, normalizeStoryPlan } from "@/services/ai/character-bible";
 import {
   buildEnrichIdeaSystemPrompt,
   buildEnrichIdeaUserPrompt,
@@ -21,7 +21,7 @@ import type {
   StoryPlan,
   TextAIProvider,
 } from "@/services/ai/types";
-import { assertPlanFidelity, assertPoseDiversity } from "@/lib/plan-fidelity";
+import { assertHeroIsChild, assertPlanFidelity, assertPoseDiversity } from "@/lib/plan-fidelity";
 import { AppError } from "@/lib/errors";
 
 function createTextClient(prefer: "groq" | "openai" = "groq"): OpenAI {
@@ -275,14 +275,34 @@ export class OpenAITextProvider implements TextAIProvider {
     style: string,
     research?: ResearchBrief,
     audience?: string,
-    opts?: { originalIdea?: string; childName?: string; childGender?: string }
+    opts?: {
+      originalIdea?: string;
+      childName?: string;
+      childGender?: string;
+      parentMode?: boolean;
+    }
   ): Promise<StoryPlan> {
     const brief = research ?? (await this.buildResearchBrief(idea));
     const originalIdea = opts?.originalIdea || idea;
 
+    const finalize = (raw: StoryPlan): StoryPlan => {
+      let plan = normalizeStoryPlan(raw, pageCount);
+      if (opts?.parentMode && opts.childName) {
+        plan = enforceParentChildHero(plan, {
+          childName: opts.childName,
+          childGender: opts.childGender,
+          audience,
+        });
+        plan = normalizeStoryPlan(plan, pageCount);
+      }
+      return plan;
+    };
+
     const buildOnce = async (): Promise<StoryPlan> => {
       if (pageCount > 8) {
-        return this.generateLongStoryPlan(idea, pageCount, style, brief, audience, opts);
+        return finalize(
+          await this.generateLongStoryPlan(idea, pageCount, style, brief, audience, opts)
+        );
       }
 
       const content = await this.completeJson({
@@ -304,6 +324,7 @@ export class OpenAITextProvider implements TextAIProvider {
               originalIdea,
               childName: opts?.childName,
               childGender: opts?.childGender,
+              parentMode: opts?.parentMode,
             }),
           },
         ],
@@ -313,26 +334,44 @@ export class OpenAITextProvider implements TextAIProvider {
       if (!Array.isArray(plan.pages) || plan.pages.length === 0) {
         throw new Error("Story plan missing pages");
       }
-      return normalizeStoryPlan(plan, pageCount);
+      return finalize(plan);
     };
 
     let plan = await buildOnce();
     let fidelity = assertPlanFidelity(originalIdea, plan);
     let diversity = assertPoseDiversity(plan);
-    if (!fidelity.ok || !diversity.ok) {
-      console.warn("story plan fidelity/diversity failed; retrying once", {
+    let childOk = opts?.parentMode
+      ? assertHeroIsChild(plan, opts.childName)
+      : ({ ok: true } as const);
+    if (!fidelity.ok || !diversity.ok || !childOk.ok) {
+      console.warn("story plan fidelity/diversity/child failed; retrying once", {
         fidelity,
         diversity,
+        childOk,
       });
       plan = await buildOnce();
       fidelity = assertPlanFidelity(originalIdea, plan);
       diversity = assertPoseDiversity(plan);
+      childOk = opts?.parentMode
+        ? assertHeroIsChild(plan, opts.childName)
+        : ({ ok: true } as const);
       if (!fidelity.ok) {
         throw new AppError(
           "GENERATION_FAILED",
           `Plan hors sujet par rapport à l'idée : ${(fidelity.reasons || []).join(" ")}`,
           422
         );
+      }
+      if (!childOk.ok) {
+        // Last resort: force child lock even if LLM drifted
+        if (opts?.childName) {
+          plan = enforceParentChildHero(plan, {
+            childName: opts.childName,
+            childGender: opts.childGender,
+            audience,
+          });
+          plan = normalizeStoryPlan(plan, pageCount);
+        }
       }
       if (!diversity.ok) {
         console.warn("pose diversity still weak after retry; continuing", diversity);
@@ -348,7 +387,12 @@ export class OpenAITextProvider implements TextAIProvider {
     style: string,
     brief: ResearchBrief,
     audience?: string,
-    opts?: { originalIdea?: string; childName?: string; childGender?: string }
+    opts?: {
+      originalIdea?: string;
+      childName?: string;
+      childGender?: string;
+      parentMode?: boolean;
+    }
   ): Promise<StoryPlan> {
     // Phase 1 — master outline. The free-tier output cut (~3k tokens) also
     // limits the OUTLINE, so pages are outlined in slices of 12: first call
@@ -371,6 +415,7 @@ export class OpenAITextProvider implements TextAIProvider {
             originalIdea: opts?.originalIdea || idea,
             childName: opts?.childName,
             childGender: opts?.childGender,
+            parentMode: opts?.parentMode,
           })}\n\nTRANCHE DEMANDÉE : cadre complet (title/concept/characters/world) + pages ${1} à ${firstEnd} UNIQUEMENT (le livre continuera jusqu'à la page ${pageCount} ensuite${pageCount > firstEnd ? " — ne conclus PAS l'histoire dans cette tranche" : ""}).`,
         },
       ],
@@ -454,6 +499,8 @@ export class OpenAITextProvider implements TextAIProvider {
       }
     }
 
+    // Long books already normalize inside generateLongStoryPlan caller via finalize —
+    // return raw outline expansion for finalize() to process.
     return normalizeStoryPlan({ ...outline, pages: expandedPages }, pageCount);
   }
 

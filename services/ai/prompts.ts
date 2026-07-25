@@ -339,25 +339,35 @@ export function buildStoryUserPrompt(params: {
   originalIdea?: string;
   childName?: string;
   childGender?: string;
+  /** Parent create: narrative comes ONLY from the parent's story. */
+  parentMode?: boolean;
 }): string {
   const fidelityBlock = params.originalIdea
-    ? `IDÉE ORIGINALE UTILISATEUR (PRIORITÉ ABSOLUE — ne pas remplacer) :
+    ? `IDÉE / HISTOIRE DU PARENT (PRIORITÉ ABSOLUE — NE PAS REMPLACER NI DÉTOURNER) :
 ---
 ${params.originalIdea}
 ---
-Le brief créatif ci-dessous peut clarifier, mais le héros / thème / pouvoir de l'idée originale PRIMENT.`
+Si le parent dit « princesse du village aimée de tous », l'histoire DOIT être celle d'une PETITE princesse enfant aimée — PAS une journée générique au marché, PAS une marchande adulte, SAUF si le parent l'a explicitement demandé.`
     : "";
   const nameBlock = params.childName
     ? `Prénom du héros enfant (obligatoire dans titres, storyText, cast) : ${params.childName}.`
     : "";
   const genderBlock =
     params.childGender === "girl"
-      ? "Genre du héros : FILLE — visualLock et storyText doivent refléter une fille (she/elle)."
+      ? "Genre du héros : FILLE ENFANT — visualLock = young girl child (NOT adult woman)."
       : params.childGender === "boy"
-        ? "Genre du héros : GARÇON — visualLock et storyText doivent refléter un garçon (he/il)."
+        ? "Genre du héros : GARÇON ENFANT — visualLock = young boy child (NOT adult man)."
         : params.childGender === "unspecified"
-          ? "Genre du héros : non précisé — reste neutre / adaptable."
+          ? "Genre du héros : enfant — visualLock = young child (NOT adult)."
           : "";
+  const parentBlock = params.parentMode
+    ? `MODE PARENT (STRICT) :
+- L'intrigue suit UNIQUEMENT l'histoire du parent ci-dessus.
+- Le style graphique (${params.style}) influence décors / tenues / ambiance — JAMAIS l'intrigue.
+- Cast max 2 : le héros enfant nommé + éventuellement UN ami enfant. AUCUN adulte nommé (mère, marchand…) sauf figurant silhouette.
+- visualLock du héros : âge enfant explicite ("about 4/7/10 years old"), proportions enfant, yeux avec pupilles — INTERDIT adult woman/man.
+- Chaque page : le héros enfant EST visible et central ; storyText mentionne son prénom.`
+    : "";
 
   return `${fidelityBlock}
 
@@ -367,13 +377,14 @@ Thème / style : ${params.style}
 Public : ${params.audience || DEFAULT_AUDIENCE}
 ${nameBlock}
 ${genderBlock}
+${parentBlock}
 
 BRIEF DE RECHERCHE (à respecter, sans écraser l'idée originale) :
 ${params.researchJson}
 
 Produis maintenant le plan JSON complet du livre de coloriage niveau librairie/KDP :
 titre, concept, bible visuelle LOCK (avec introducedOnPage), storyboard page par page avec action CONCRÈTE, characterPoses, camera, pageSetting, focalPoint, illustrationDescription ET negativePrompt.
-Rappel : FIDÉLITÉ idée originale d'abord ; cast EXACTEMENT fidèle au brief (nombre et espèces), visualLock anglais identique partout (mêmes visages/coiffures/tenues), characterIds seulement depuis la bible et jamais avant introducedOnPage, au moins 2 pages solo/duo, variété d'angles et de poses (JAMAIS de personnages alignés de face sans action ; jamais ≥3 pages même pose/camera), CHAQUE page avec environnement riche colorable (pas de vide blanc), max 2 personnages par scène complexe, mains simplifiées, style cohérent sur tout le livre.`;
+Rappel : FIDÉLITÉ idée originale d'abord ; héros = ENFANT ; cast serré ; visualLock anglais identique partout ; characterIds seulement depuis la bible ; variété d'angles et de poses ; CHAQUE page avec environnement riche colorable ; max 2 personnages par scène.`;
 }
 
 /**
@@ -550,13 +561,14 @@ export function buildCharacterSheetPrompt(params: {
     : "";
   if (params.identityFromPhoto) {
     return [
-      "Transform the reference PHOTO into a friendly children's picture-book CHARACTER PORTRAIT (colored flat cartoon), FULL BODY head-to-toe on a plain white background.",
-      "Keep the child's likeness: similar face shape, hair, skin tone, and age — but as a soft cartoon, NOT photorealistic.",
+      "Transform the reference PHOTO into ONE friendly children's picture-book CHARACTER PORTRAIT of THIS SAME CHILD (colored flat cartoon), FULL BODY head-to-toe on a plain white background.",
+      "CRITICAL LIKENESS: keep the child's face shape, skin tone, hairstyle, age and expression recognizable — soft cartoon, NOT photorealistic, NOT a different child, NOT an adult.",
       CHILD_SAFE_FACE_POSITIVE,
       `CHARACTER LOCK to honor: ${params.characters}.`,
+      "EXACTLY ONE figure — the hero child only. No siblings, no crowd, no adults.",
       countClause,
       styleImageCraftLine(params.style),
-      "Soft flat COLORS, clean bold cartoon outlines, warm and joyful. NO text, no letters, no watermark, no scary eyes.",
+      "Soft flat COLORS, clean bold cartoon outlines, warm and joyful. NO text, no letters, no watermark, no scary eyes, no adult proportions.",
     ]
       .filter(Boolean)
       .join(" ");

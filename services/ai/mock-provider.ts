@@ -76,7 +76,12 @@ export class MockTextProvider implements TextAIProvider {
     style: string,
     _research?: ResearchBrief,
     audience?: string,
-    opts?: { originalIdea?: string; childName?: string; childGender?: string }
+    opts?: {
+      originalIdea?: string;
+      childName?: string;
+      childGender?: string;
+      parentMode?: boolean;
+    }
   ): Promise<StoryPlan> {
     const source = opts?.originalIdea || idea;
     const hero =

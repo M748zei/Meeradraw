@@ -36,9 +36,10 @@ export async function generateBookWorkflow(args: GenerateBookArgs) {
       await Promise.all(wave.map((pageId) => stepOnePage(args, pageId)));
     }
 
-    // Heal failed pages before finalize (1–2 passes) so we don't ship 1/N.
+    // Heal failed pages before finalize (up to 3 passes) so we don't ship 1/N.
     await stepHealFailedPages(args, 1);
     await stepHealFailedPages(args, 2);
+    await stepHealFailedPages(args, 3);
 
     await stepFinalize(args);
     console.log(`[workflow] generateBook done gen=${args.generationId}`);

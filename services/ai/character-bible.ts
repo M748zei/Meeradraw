@@ -7,6 +7,154 @@ export function maxCastForPageCount(pageCount: number): number {
   return 5;
 }
 
+/** Parent books: tiny cast — hero child (+ optional one friend). */
+export function maxCastForParentBook(): number {
+  return 2;
+}
+
+function stripAdultWording(lock: string): string {
+  return lock
+    .replace(/\b(adult|woman|man|mother|father|lady|gentleman|mature)\b/gi, "child")
+    .replace(/\b(tall slender adult|grown[- ]?up)\b/gi, "small child");
+}
+
+/**
+ * Force the named child as sole hero with an explicit CHILD visual lock.
+ * Prevents "adult market woman" drift on parent books.
+ */
+export function enforceParentChildHero(
+  plan: StoryPlan,
+  opts: {
+    childName: string;
+    childGender?: string | null;
+    audience?: string | null;
+  }
+): StoryPlan {
+  const name = opts.childName.trim();
+  if (!name) return plan;
+
+  const ageYears = /3\s*[–-]\s*5|3-5/.test(opts.audience || "")
+    ? "about 4 years old"
+    : /9\s*[–-]\s*12|9-12/.test(opts.audience || "")
+      ? "about 10 years old"
+      : "about 7 years old";
+  const genderEn =
+    opts.childGender === "girl"
+      ? "young girl"
+      : opts.childGender === "boy"
+        ? "young boy"
+        : "young child";
+  const genderFr =
+    opts.childGender === "girl"
+      ? "petite fille"
+      : opts.childGender === "boy"
+        ? "petit garçon"
+        : "enfant";
+
+  const norm = (s: string) =>
+    s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+
+  let characters = [...(plan.characters || [])];
+  let heroIdx = characters.findIndex((c) => norm(c.name) === norm(name));
+  if (heroIdx < 0) heroIdx = 0;
+  if (characters.length === 0) {
+    characters = [
+      {
+        id: "char_1",
+        name,
+        description: `${genderFr} héros de l'histoire`,
+        appearance: `${genderFr} ${ageYears}`,
+        visualLock: "",
+        personality: "gentil, joyeux, aimé",
+      },
+    ];
+    heroIdx = 0;
+  }
+
+  const prev = characters[heroIdx];
+  const baseLock = stripAdultWording(
+    prev.visualLock || prev.appearance || "friendly child, consistent outfit"
+  );
+  const childLock = [
+    `${genderEn} ${ageYears}`,
+    "REAL CHILD proportions (large head, short limbs) — NEVER an adult woman or man",
+    "friendly eyes WITH clear dark pupils and catchlights, soft rounded cheeks, gentle smile",
+    baseLock,
+    "identical face hair outfit every page",
+  ].join(", ");
+
+  const hero: StoryCharacter = {
+    ...prev,
+    id: "char_1",
+    name,
+    description: prev.description || `${genderFr}, héros principal, enfant`,
+    appearance: `${genderFr} ${ageYears}, ${prev.appearance || ""}`.trim(),
+    visualLock: childLock,
+    ageBand: `child ${ageYears}`,
+    personality: prev.personality || "gentil, courageux, aimé de tous",
+    proportions: "large head, short limbs, small child body",
+    face:
+      prev.face ||
+      "round child face, big friendly eyes with pupils, soft smile",
+    body: "small child body, not adult",
+    introducedOnPage: 1,
+  };
+
+  // Keep at most one other character — and force them child-like too (no adults).
+  const others = characters
+    .filter((_, i) => i !== heroIdx)
+    .slice(0, 1)
+    .map((c, i) => {
+      const lock = stripAdultWording(c.visualLock || c.appearance || "");
+      const isAdultish = /adult|woman|man|mother|father|elderly|grand/i.test(
+        `${c.visualLock} ${c.ageBand} ${c.description}`
+      );
+      if (isAdultish) {
+        return {
+          ...c,
+          id: `char_${i + 2}`,
+          ageBand: "child friend ~same age",
+          visualLock: `${lock}, child friend same age as hero, NOT an adult`,
+          body: "small child",
+          proportions: "child proportions",
+        };
+      }
+      return { ...c, id: `char_${i + 2}` };
+    });
+
+  const nextChars = [hero, ...others].slice(0, maxCastForParentBook());
+  const idMap = new Map<string, string>();
+  characters.forEach((c, i) => {
+    if (i === heroIdx) idMap.set(c.id, "char_1");
+  });
+  others.forEach((c, i) => {
+    const old = characters.filter((_, idx) => idx !== heroIdx)[i];
+    if (old) idMap.set(old.id, c.id);
+  });
+
+  const pages = (plan.pages || []).map((p) => {
+    let ids = (p.characterIds || [])
+      .map((id) => idMap.get(id) || id)
+      .filter((id) => nextChars.some((c) => c.id === id));
+    if (!ids.includes("char_1")) ids = ["char_1", ...ids];
+    ids = [...new Set(ids)].slice(0, 2);
+    // Rewrite poses keys
+    const poses: Record<string, string> = {};
+    if (p.characterPoses) {
+      for (const [k, v] of Object.entries(p.characterPoses)) {
+        const nk = idMap.get(k) || k;
+        if (ids.includes(nk)) poses[nk] = v;
+      }
+    }
+    return { ...p, characterIds: ids, characterPoses: poses };
+  });
+
+  return { ...plan, characters: nextChars, pages };
+}
+
 /** Stable English lock string injected identically into every image prompt. */
 export function formatCharacterLock(characters: StoryCharacter[]): string {
   return characters
@@ -199,11 +347,37 @@ export function normalizeStoryPlan(plan: StoryPlan, pageCount: number): StoryPla
     };
   });
 
+  // Pad to exact pageCount so parent books never ship short of the paid page count.
+  const heroId = characters[0]?.id || "char_1";
+  while (pages.length < pageCount) {
+    const n = pages.length + 1;
+    const prev = pages[pages.length - 1];
+    pages.push({
+      pageNumber: n,
+      title: prev?.title ? `${prev.title} (suite)` : `Page ${n}`,
+      storyText:
+        prev?.storyText ||
+        `${characters[0]?.name || "Le héros"} poursuit l'aventure avec courage.`,
+      action:
+        prev?.action ||
+        `${characters[0]?.name || "hero"} continues the adventure mid-motion`,
+      characterIds: [heroId],
+      characterPoses: { [heroId]: "dynamic full-body pose mid-action" },
+      comicBeat: n >= pageCount ? "resolution" : "action",
+      shotType: n % 2 === 0 ? "mid_shot" : "full_body",
+      camera: n % 2 === 0 ? "side view child eye level" : "three-quarter view",
+      pageSetting: prev?.pageSetting || plan.world?.setting || "story world",
+      focalPoint: characters[0]?.name || "hero",
+      illustrationDescription: `${characters[0]?.name || "Hero"} in a new dynamic pose in the story setting. Full body, rich environment.`,
+      negativePrompt: DEFAULT_PAGE_NEGATIVE,
+    });
+  }
+
   return {
     ...plan,
     concept: (plan.concept || plan.summary || "").trim() || undefined,
     characters,
-    pages,
+    pages: pages.slice(0, pageCount),
   };
 }
 

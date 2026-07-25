@@ -112,7 +112,46 @@ const THEME_MARKERS: Array<{ re: RegExp; labels: string[] }> = [
     re: /foot|football|soccer|ballon/i,
     labels: ["foot", "football", "ballon", "soccer"],
   },
+  {
+    re: /princesse|princess|prince\b/i,
+    labels: ["princesse", "princess", "prince"],
+  },
+  {
+    re: /aimé|aimee|aimée|loved|adoré|adoree|adorée/i,
+    labels: ["aime", "aimee", "loved", "adore"],
+  },
 ];
+
+/**
+ * Parent books: hero visualLock must describe a CHILD, never an adult.
+ */
+export function assertHeroIsChild(
+  plan: StoryPlan,
+  childName?: string
+): FidelityResult {
+  const hero =
+    (childName &&
+      plan.characters.find(
+        (c) => normalize(c.name) === normalize(childName)
+      )) ||
+    plan.characters[0];
+  if (!hero) return { ok: false, reasons: ["Aucun héros dans le plan."] };
+
+  const lock = normalize(
+    `${hero.visualLock || ""} ${hero.ageBand || ""} ${hero.appearance || ""} ${hero.body || ""}`
+  );
+  const reasons: string[] = [];
+  if (
+    /\b(adult|woman|man|mother|father|lady|grown ?up|mature woman)\b/.test(lock) &&
+    !/\b(child|girl|boy|kid|years? old|enfant)\b/.test(lock)
+  ) {
+    reasons.push(`« ${hero.name} » est décrit comme un adulte — doit être un enfant.`);
+  }
+  if (!/\b(child|girl|boy|kid|years?|enfant|petite|petit)\b/.test(lock)) {
+    reasons.push(`visualLock de « ${hero.name} » ne précise pas que c'est un enfant.`);
+  }
+  return reasons.length ? { ok: false, reasons } : { ok: true };
+}
 
 function normalize(s: string): string {
   return s

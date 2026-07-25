@@ -192,7 +192,12 @@ export interface TextAIProvider {
     style: string,
     research?: ResearchBrief,
     audience?: string,
-    opts?: { originalIdea?: string; childName?: string; childGender?: string }
+    opts?: {
+      originalIdea?: string;
+      childName?: string;
+      childGender?: string;
+      parentMode?: boolean;
+    }
   ): Promise<StoryPlan>;
   /** Visual world bible for a universe (lazy, cached on the universe doc). */
   generateSettingBible(params: {

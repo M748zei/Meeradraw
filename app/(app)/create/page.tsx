@@ -44,12 +44,18 @@ export default function CreateForChildPage() {
   const composedIdea = useMemo(() => {
     const name = childName.trim() || "Léo";
     const story = parentStory.trim();
-    const themeHint = theme.ideaTemplate(name);
     if (story.length >= 20) {
-      return `${name} : ${story} (ambiance / thème : ${theme.label}).`;
+      const genderBit =
+        gender === "girl"
+          ? `${name} est une petite fille.`
+          : gender === "boy"
+            ? `${name} est un petit garçon.`
+            : `${name} est un enfant.`;
+      // Theme is visual ambiance only — NEVER rewrite the parent's plot.
+      return `${genderBit} ${story}`;
     }
-    return themeHint;
-  }, [theme, childName, parentStory]);
+    return theme.ideaTemplate(name);
+  }, [theme, childName, parentStory, gender]);
 
   async function onPhotoChange(file: File | null) {
     setPhotoPreview(null);
@@ -138,12 +144,13 @@ export default function CreateForChildPage() {
         gender === "girl" ? "fille" : gender === "boy" ? "garçon" : "enfant";
       const creativeBrief = [
         `Titre : L'aventure de ${name}`,
-        `Synopsis : ${idea}`,
-        `Personnages : ${name}, ${genderLabel}, héros principal`,
+        `Histoire du parent (SOURCE NARRATIVE) : ${story}`,
+        `Personnages : ${name}, ${genderLabel} ENFANT, héros unique`,
         `Idée originale : ${idea}`,
-        `Histoire du parent : ${story}`,
+        `Style graphique seulement (ne change PAS l'intrigue) : ${theme.label} / ${style}`,
         `Public : ${age.audience}`,
         age.promptHint,
+        `RÈGLE : ${name} est un ENFANT, jamais un adulte. L'histoire suit le texte du parent.`,
       ].join("\n");
 
       const bookRes = await fetchWithTimeout("/api/books", {
