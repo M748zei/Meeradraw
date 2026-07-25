@@ -72,7 +72,12 @@ export class CreditService {
     return this.applyDelta(userId, -amount, "debit", reason, referenceId, admin);
   }
 
-  /** Refund credits previously reserved (e.g. pages that failed to generate). */
+  /**
+   * Refund credits previously reserved (e.g. pages that failed to generate).
+   * Use distinct referenceIds for partial vs full:
+   *   `gen:<id>:refund:partial` / `gen:<id>:refund:full`
+   * so a partial refund never blocks a later full failure refund.
+   */
   async refund(userId: string, amount: number, reason: string, referenceId?: string) {
     if (amount <= 0) return this.getBalance(userId);
     return this.applyDelta(userId, amount, "credit", reason, referenceId, false);

@@ -25,6 +25,10 @@ import { StorageService } from "@/services/storage-service";
 import { isBlankOrTooFaint, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
 import { buildBookQualitySummary } from "@/lib/quality-score";
+import {
+  assertGenerationActive,
+  GenerationCancelledError,
+} from "@/lib/generation-lifecycle";
 import { refundForFailedPages } from "@/config/credits";
 import type { Book } from "@/types/database";
 import type { Firestore } from "firebase-admin/firestore";
@@ -82,6 +86,8 @@ const PARENT_PAGE_WAVE = envInt(process.env.PARENT_PAGE_GEN_CONCURRENCY, 5);
 const SHEET_MAX_ATTEMPTS = envInt(process.env.SHEET_MAX_ATTEMPTS, 3);
 /** Parent + photo: single sheet attempt (no fal storm). Without photo: sheet skipped. */
 const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 1);
+/** Studio heal passes (failed-page re-gen). Capped to avoid fal retry storms. */
+const STUDIO_HEAL_PASSES = envInt(process.env.STUDIO_HEAL_PASSES, 2);
 
 /**
  * Parent fal budget — real $ on FAL_KEY. Target ≈ cover + N pages (1 shot each).
@@ -92,6 +98,17 @@ const PARENT_FAL_LEAN = {
   maxQualityRerolls: 1,
   maxProviderAttempts: 1,
   skipRecovery: true,
+} as const;
+
+/**
+ * Studio fal budget — env-overridable caps so heal/vision/quality cannot storm.
+ * Defaults are leaner than the historical fal-provider globals (2/2/3).
+ */
+const STUDIO_FAL_CAPS = {
+  maxVisionRerolls: envInt(process.env.STUDIO_VISION_QC_REROLLS, 1),
+  maxQualityRerolls: envInt(process.env.STUDIO_FAL_QUALITY_REROLLS, 1),
+  maxProviderAttempts: envInt(process.env.STUDIO_FAL_RETRY_ATTEMPTS, 2),
+  skipRecovery: process.env.STUDIO_SKIP_RECOVERY === "true",
 } as const;
 
 function isParentBook(book: Book): boolean {
@@ -149,9 +166,9 @@ export class GenerationOrchestrator {
       await mapWithConcurrency(pageIds, PAGE_GEN_CONCURRENCY, (pageId) =>
         this.runOnePagePhase(userId, bookId, generationId, pageId)
       );
-      await this.runHealFailedPagesPhase(userId, bookId, generationId, 1);
-      await this.runHealFailedPagesPhase(userId, bookId, generationId, 2);
-      await this.runHealFailedPagesPhase(userId, bookId, generationId, 3);
+      for (let pass = 1; pass <= STUDIO_HEAL_PASSES; pass++) {
+        await this.runHealFailedPagesPhase(userId, bookId, generationId, pass);
+      }
       await this.runFinalizePhase(
         userId,
         bookId,
@@ -161,8 +178,24 @@ export class GenerationOrchestrator {
         started
       );
     } catch (err) {
+      if (err instanceof GenerationCancelledError) {
+        // Reaper (or a concurrent fail) already refunded — do not spend more
+        // and do not double-apply fail side effects beyond an idempotent refund.
+        console.warn(`[gen ${generationId}] aborted: ${err.message}`);
+        await this.failRun(userId, bookId, generationId, cost, started, err, isTrial);
+        return;
+      }
       await this.failRun(userId, bookId, generationId, cost, started, err, isTrial);
     }
+  }
+
+  /** Throw if reaper/cancel/refund already won the race. */
+  private async ensureActive(
+    userId: string,
+    bookId: string,
+    generationId: string
+  ) {
+    await assertGenerationActive(this.db, { userId, bookId, generationId });
   }
 
   /**
@@ -174,6 +207,7 @@ export class GenerationOrchestrator {
     bookId: string,
     generationId: string
   ): Promise<void> {
+    await this.ensureActive(userId, bookId, generationId);
     await this.updateGeneration(generationId, {
       status: "running",
       current_step: "researcher",
@@ -335,11 +369,18 @@ export class GenerationOrchestrator {
     generationId: string,
     pass: number
   ): Promise<void> {
+    await this.ensureActive(userId, bookId, generationId);
     const book = await this.books.get(userId, bookId);
     // Parent: never re-spend fal on heal/lineup storms. Incomplete → fail + refund.
     if (isParentBook(book)) {
       console.log(
         `[parent] skip heal pass=${pass} gen=${generationId} (fal spend guard)`
+      );
+      return;
+    }
+    if (pass > STUDIO_HEAL_PASSES) {
+      console.log(
+        `[studio] skip heal pass=${pass} gen=${generationId} (cap=${STUDIO_HEAL_PASSES})`
       );
       return;
     }
@@ -361,7 +402,7 @@ export class GenerationOrchestrator {
       error_message: null,
     });
 
-    const wave = isParentBook(book) ? PARENT_PAGE_WAVE : PAGE_GEN_CONCURRENCY;
+    const wave = PAGE_GEN_CONCURRENCY;
     await mapWithConcurrency(toRetry, wave, (pageId) =>
       this.runOnePagePhase(userId, bookId, generationId, pageId)
     );
@@ -376,6 +417,7 @@ export class GenerationOrchestrator {
     bookId: string,
     generationId: string
   ): Promise<void> {
+    await this.ensureActive(userId, bookId, generationId);
     const book = await this.books.get(userId, bookId);
     const plan = this.loadStoryPlan(book);
     const style = book.style || "cute";
@@ -426,9 +468,7 @@ export class GenerationOrchestrator {
           identityFromPhoto: Boolean(photoUrl),
           expectedCast: sheetCast,
           qcStats: sheetStats,
-          ...(parentMode
-            ? PARENT_FAL_LEAN
-            : { maxVisionRerolls: undefined }),
+          ...(parentMode ? PARENT_FAL_LEAN : STUDIO_FAL_CAPS),
         });
         await this.setQcImage(generationId, "model_sheet", sheetStats);
         if (await this.isImplausibleHero(sheet.url)) {
@@ -495,6 +535,7 @@ export class GenerationOrchestrator {
     bookId: string,
     generationId: string
   ): Promise<string[]> {
+    await this.ensureActive(userId, bookId, generationId);
     const book = await this.books.get(userId, bookId);
     await this.updateGeneration(generationId, {
       current_step: "illustrator",
@@ -566,7 +607,7 @@ export class GenerationOrchestrator {
             heroGender: coverGender,
             consistencyMode: true,
           }
-        : {}),
+        : STUDIO_FAL_CAPS),
     });
     await this.setQcImage(generationId, "cover", coverStats);
     const persistedCover = await this.persistCover(
@@ -643,6 +684,9 @@ export class GenerationOrchestrator {
     generationId: string,
     pageId: string
   ): Promise<"ok" | "fail"> {
+    await this.ensureActive(userId, bookId, generationId);
+    // Heartbeat before long fal wait so the reaper won't kill a live page gen.
+    await this.touchHeartbeat(generationId);
     const book = await this.books.get(userId, bookId);
     const plan = this.loadStoryPlan(book);
     const style = book.style || "cute";
@@ -755,7 +799,7 @@ export class GenerationOrchestrator {
               heroGender: childGender,
               consistencyMode: true,
             }
-          : {}),
+          : STUDIO_FAL_CAPS),
       });
 
       if (!image?.url) {
@@ -802,6 +846,7 @@ export class GenerationOrchestrator {
     isTrial: boolean,
     started: number
   ): Promise<void> {
+    await this.ensureActive(userId, bookId, generationId);
     await this.updateGeneration(generationId, {
       current_step: "illustrator",
       progress: 90,
@@ -832,13 +877,14 @@ export class GenerationOrchestrator {
         userId,
         cost,
         "Remboursement — génération échouée (aucune page)",
-        `gen:${generationId}:refund`
+        `gen:${generationId}:refund:full`
       );
       if (isTrial) {
         await this.releaseFreeTrialSlot(userId, generationId);
       }
       await this.updateGeneration(generationId, {
         status: "failed",
+        cancelled: true,
         current_step: "illustrator",
         progress: 90,
         credits_used: 0,
@@ -861,13 +907,14 @@ export class GenerationOrchestrator {
         userId,
         cost,
         "Remboursement — cahier incomplet",
-        `gen:${generationId}:refund`
+        `gen:${generationId}:refund:full`
       );
       if (isTrial) {
         await this.releaseFreeTrialSlot(userId, generationId);
       }
       await this.updateGeneration(generationId, {
         status: "failed",
+        cancelled: true,
         current_step: "illustrator",
         progress: 90,
         credits_used: 0,
@@ -916,23 +963,25 @@ export class GenerationOrchestrator {
       }
     }
 
-    // Internal QC telemetry only — never shown as a parent-facing score.
+    // QC telemetry: studio only (parent path never writes/displays a quality score).
     const qcStatsAll = await this.collectQcStats(generationId, pageDocs);
     const qcSummary = summarizeQcStats(qcStatsAll);
     const pageQc = pageDocs
       .filter((p) => typeof p.page_number === "number")
       .sort((a, b) => Number(a.page_number) - Number(b.page_number))
       .map((p) => (p.qc_stats as ImageQcStats | undefined) || null);
-    const quality = buildBookQualitySummary({
-      pagesTotal: Math.max(plannedPages, pageDocs.length),
-      pagesOk: completedCount,
-      pageQc,
-      pixelRerolls: qcSummary.pixel_rerolls,
-      visionRerolls: qcSummary.vision_rerolls,
-    });
+    const quality = parentMode
+      ? null
+      : buildBookQualitySummary({
+          pagesTotal: Math.max(plannedPages, pageDocs.length),
+          pagesOk: completedCount,
+          pageQc,
+          pixelRerolls: qcSummary.pixel_rerolls,
+          visionRerolls: qcSummary.vision_rerolls,
+        });
 
-    // Parent: all pages OK → completed (ignore lineup gate for status).
-    // Studio: keep partial when pages missing; lineup gate does not block if all rendered.
+    // Parent: all pages OK → completed (no lineup soft-fail).
+    // Studio: partial when pages missing; lineup score is telemetry only (no soft-fail gate).
     const bookStatus =
       failedCount > 0 ? (parentMode ? "failed" : "partial") : "completed";
     const genStatus =
@@ -942,7 +991,11 @@ export class GenerationOrchestrator {
       status: bookStatus === "failed" ? "failed" : bookStatus,
       pdf_url: bookStatus === "failed" ? null : pdfUrl,
       active_generation_id: null,
-      quality_summary: quality,
+      ...(parentMode
+        ? { quality_summary: null }
+        : quality
+          ? { quality_summary: quality }
+          : {}),
     });
 
     const notDelivered = Math.max(0, plannedPages - completedCount);
@@ -951,24 +1004,30 @@ export class GenerationOrchestrator {
       cost
     );
     if (refund > 0) {
+      // Partial key must not block a later full refund (or vice versa).
+      const refundKind =
+        refund >= cost || completedCount === 0 ? "full" : "partial";
       await this.credits.refund(
         userId,
         refund,
         `Remboursement ${notDelivered} page(s) non livrée(s) — ${String(full.title)}`,
-        `gen:${generationId}:refund`
+        `gen:${generationId}:refund:${refundKind}`
       );
     }
     const creditsUsed = Math.max(0, cost - refund);
 
     console.log(
-      `[gen ${generationId}] QC re-rolls — pixel: ${qcSummary.pixel_rerolls}, vision: ${qcSummary.vision_rerolls}, images: ${qcSummary.images}; quality score ${quality.score} (lineup ${quality.lineup_pct}%) [internal]`
+      `[gen ${generationId}] QC re-rolls — pixel: ${qcSummary.pixel_rerolls}, vision: ${qcSummary.vision_rerolls}, images: ${qcSummary.images}` +
+        (quality
+          ? `; studio quality score ${quality.score} (lineup ${quality.lineup_pct}%)`
+          : " [parent: no quality score]")
     );
 
     await this.updateGeneration(generationId, {
       status: genStatus,
       current_step: "editor",
       progress: 100,
-      qc_stats: { ...qcSummary, quality },
+      qc_stats: quality ? { ...qcSummary, quality } : qcSummary,
       credits_used: creditsUsed,
       provider:
         process.env.MOCK_AI === "true"
@@ -1005,18 +1064,31 @@ export class GenerationOrchestrator {
     isTrial = false
   ): Promise<void> {
     console.error("generation failed", err);
-    await this.books.update(userId, bookId, {
-      status: "failed",
-      active_generation_id: null,
-    });
-    // Refund the up-front reservation — the run crashed before delivering.
-    // Idempotent: if a partial refund already landed this is a no-op.
+    // Only clear the book lock if it still points at this generation.
+    try {
+      const bookRef = this.db.collection("books").doc(bookId);
+      await this.db.runTransaction(async (tx) => {
+        const snap = await tx.get(bookRef);
+        if (!snap.exists) return;
+        const active = snap.data()?.active_generation_id;
+        if (active != null && active !== generationId) return;
+        tx.update(bookRef, {
+          status: "failed",
+          active_generation_id: null,
+          updated_at: new Date().toISOString(),
+        });
+      });
+    } catch (lockErr) {
+      console.error("failRun book lock clear failed", lockErr);
+    }
+    // Full refund — separate key from partial so a prior partial cannot block.
+    // Idempotent with the reaper (`gen:<id>:refund:full`).
     try {
       await this.credits.refund(
         userId,
         cost,
         "Remboursement — génération interrompue",
-        `gen:${generationId}:refund`
+        `gen:${generationId}:refund:full`
       );
     } catch (refundErr) {
       console.error("refund after generation failure failed", refundErr);
@@ -1026,6 +1098,7 @@ export class GenerationOrchestrator {
     }
     await this.updateGeneration(generationId, {
       status: "failed",
+      cancelled: true,
       credits_used: 0,
       error_message: userFacingGenerationError(err),
       duration_ms: Date.now() - started,
@@ -1259,15 +1332,29 @@ export class GenerationOrchestrator {
 
   private async updateGeneration(id: string, patch: Record<string, unknown>) {
     // A transient Firestore error on a progress write must never kill the run
-    // (the images/PDF work would be lost for a cosmetic update). Stale docs are
-    // caught by the generation reaper.
+    // (the images/PDF work would be lost for a cosmetic update). Heartbeat keeps
+    // the reaper from killing live jobs during long fal waits.
     try {
+      const now = new Date().toISOString();
       await this.db
         .collection("generations")
         .doc(id)
-        .update({ ...patch, updated_at: new Date().toISOString() });
+        .update({ ...patch, updated_at: now, heartbeat_at: now });
     } catch (err) {
       console.error(`[gen ${id}] updateGeneration failed (ignored)`, err);
+    }
+  }
+
+  /** Lightweight heartbeat during long fal waits (no progress rewrite). */
+  private async touchHeartbeat(id: string) {
+    try {
+      const now = new Date().toISOString();
+      await this.db
+        .collection("generations")
+        .doc(id)
+        .update({ heartbeat_at: now, updated_at: now });
+    } catch (err) {
+      console.error(`[gen ${id}] heartbeat failed (ignored)`, err);
     }
   }
 

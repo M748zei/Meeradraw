@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
-import { rateLimit } from "@/lib/rate-limit";
+import { rateLimit } from "@/lib/rate-limit-store";
 import { BookService } from "@/services/book-service";
 import { PDFService } from "@/services/pdf-service";
 import { StorageService } from "@/services/storage-service";

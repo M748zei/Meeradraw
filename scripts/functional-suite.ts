@@ -49,7 +49,7 @@ async function runLogicTests() {
   const { assertSafeImageUrl, fetchSafeImageBytes, isAllowedImageHost } =
     await import("../lib/safe-image-url");
   const { toPublicProfile } = await import("../lib/public-profile");
-  const { rateLimit, clientIp } = await import("../lib/rate-limit");
+  const { rateLimit, clientIp } = await import("../lib/rate-limit-store");
   const { AppError, apiError, apiSuccess } = await import("../lib/errors");
   const { extractSale } = await import("../services/chariow-sale");
 
@@ -370,10 +370,15 @@ async function runFirestoreIntegration() {
     // idempotent replay
     await credits.reserve(userA, 30, "test reserve", "gen:t1:reserve");
     assert((await credits.getBalance(userA)) === mid, "reserve idempotent");
-    await credits.refund(userA, 10, "partial refund", "gen:t1:refund");
+    await credits.refund(userA, 10, "partial refund", "gen:t1:refund:partial");
     assert((await credits.getBalance(userA)) === mid + 10, "refund");
-    await credits.refund(userA, 10, "partial refund", "gen:t1:refund");
+    await credits.refund(userA, 10, "partial refund", "gen:t1:refund:partial");
     assert((await credits.getBalance(userA)) === mid + 10, "refund idempotent");
+    // Partial must not block a later full refund for the same generation.
+    await credits.refund(userA, 20, "full refund", "gen:t1:refund:full");
+    assert((await credits.getBalance(userA)) === mid + 30, "full after partial");
+    await credits.refund(userA, 20, "full refund", "gen:t1:refund:full");
+    assert((await credits.getBalance(userA)) === mid + 30, "full idempotent");
   });
 
   await test("CreditService blocks overspend", async () => {
@@ -600,6 +605,7 @@ async function runFirestoreIntegration() {
       metadata: {},
       created_at: stale,
       updated_at: stale,
+      heartbeat_at: stale,
     });
     await books.update(userA, book.id, {
       status: "generating",
@@ -611,10 +617,39 @@ async function runFirestoreIntegration() {
     assert(reaped === true, "should reap");
     const afterGen = await db.collection("generations").doc(genId).get();
     assert(afterGen.data()?.status === "failed", "gen failed");
+    assert(afterGen.data()?.cancelled === true, "cancelled flag");
     const afterBook = await books.get(userA, book.id);
     assert(afterBook.status === "failed", "book failed");
     assert(afterBook.active_generation_id == null, "lock cleared");
     assert((await credits.getBalance(userA)) === before + 20, "refunded");
+
+    // Live heartbeat must NOT be reaped.
+    const liveId = randomUUID();
+    const liveBook = await books.create(userA, {
+      universe_id: universeAId,
+      idea: "Livre avec heartbeat vivant pour le reaper",
+      page_count: 4,
+      title: "Live Heartbeat Book",
+    });
+    const fresh = new Date().toISOString();
+    await db.collection("generations").doc(liveId).set({
+      user_id: userA,
+      book_id: liveBook.id,
+      status: "running",
+      credits_used: 0,
+      progress: 10,
+      current_step: "illustrator",
+      generation_type: "full_book",
+      metadata: {},
+      created_at: fresh,
+      updated_at: fresh,
+      heartbeat_at: fresh,
+    });
+    const liveSnap = await db.collection("generations").doc(liveId).get();
+    assert(
+      (await reapIfStale(db, liveId, liveSnap.data())) === false,
+      "live heartbeat must not reap"
+    );
   });
 
   await test("GenerationOrchestrator full mock pipeline (trial)", async () => {
@@ -858,8 +893,8 @@ async function main() {
   if (!httpOnly) {
     await runLogicTests();
     await runMockAiTests();
-    await runPdfTests();
     if (!logicOnly) {
+      await runPdfTests();
       await runFirestoreIntegration();
     }
   }

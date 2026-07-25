@@ -1,5 +1,9 @@
 import { FatalError } from "workflow";
 import { getAdminDb } from "@/lib/firebase/admin";
+import {
+  assertGenerationActive,
+  GenerationCancelledError,
+} from "@/lib/generation-lifecycle";
 import { GenerationOrchestrator } from "@/services/generation-orchestrator";
 
 export type GenerateBookArgs = {
@@ -15,6 +19,9 @@ export type GenerateBookArgs = {
  * Durable book generation — one step per phase / page wave so a 12–25 page
  * book survives Vercel function timeouts (the old after()+orchestrator.run
  * monolith was killed at 300s).
+ *
+ * Each step aborts if the generation was reaped/cancelled or the book lock
+ * moved — so a living workflow never keeps spending fal $ after a refund.
  */
 export async function generateBookWorkflow(args: GenerateBookArgs) {
   "use workflow";
@@ -36,31 +43,45 @@ export async function generateBookWorkflow(args: GenerateBookArgs) {
       await Promise.all(wave.map((pageId) => stepOnePage(args, pageId)));
     }
 
-    // Heal failed pages before finalize (up to 3 passes) so we don't ship 1/N.
+    // Studio heal (capped in orchestrator). Parent skips.
     await stepHealFailedPages(args, 1);
     await stepHealFailedPages(args, 2);
-    await stepHealFailedPages(args, 3);
 
     await stepFinalize(args);
     console.log(`[workflow] generateBook done gen=${args.generationId}`);
     return { ok: true as const, generationId: args.generationId };
   } catch (err) {
     console.error(`[workflow] generateBook failed gen=${args.generationId}`, err);
-    await stepFail(args, err);
+    if (!(err instanceof GenerationCancelledError)) {
+      await stepFail(args, err);
+    } else {
+      // Already failed+refunded by reaper — still run idempotent failRun.
+      await stepFail(args, err);
+    }
     throw new FatalError(
       err instanceof Error ? err.message : "Génération interrompue"
     );
   }
 }
 
+async function assertNotCancelled(args: GenerateBookArgs) {
+  await assertGenerationActive(getAdminDb(), {
+    userId: args.userId,
+    bookId: args.bookId,
+    generationId: args.generationId,
+  });
+}
+
 async function stepResolveWaveSize(args: GenerateBookArgs): Promise<number> {
   "use step";
+  await assertNotCancelled(args);
   const orch = new GenerationOrchestrator(getAdminDb());
   return orch.resolvePageWaveSize(args.userId, args.bookId);
 }
 
 async function stepHealFailedPages(args: GenerateBookArgs, pass: number) {
   "use step";
+  await assertNotCancelled(args);
   console.log(
     `[workflow] step heal pass=${pass} gen=${args.generationId}`
   );
@@ -75,6 +96,7 @@ async function stepHealFailedPages(args: GenerateBookArgs, pass: number) {
 
 async function stepStory(args: GenerateBookArgs) {
   "use step";
+  await assertNotCancelled(args);
   console.log(`[workflow] step story gen=${args.generationId}`);
   const orch = new GenerationOrchestrator(getAdminDb());
   await orch.runStoryPhase(args.userId, args.bookId, args.generationId);
@@ -82,6 +104,7 @@ async function stepStory(args: GenerateBookArgs) {
 
 async function stepSheet(args: GenerateBookArgs) {
   "use step";
+  await assertNotCancelled(args);
   console.log(`[workflow] step sheet gen=${args.generationId}`);
   const orch = new GenerationOrchestrator(getAdminDb());
   await orch.runSheetPhase(args.userId, args.bookId, args.generationId);
@@ -89,6 +112,7 @@ async function stepSheet(args: GenerateBookArgs) {
 
 async function stepCoverAndSetup(args: GenerateBookArgs): Promise<string[]> {
   "use step";
+  await assertNotCancelled(args);
   console.log(`[workflow] step cover gen=${args.generationId}`);
   const orch = new GenerationOrchestrator(getAdminDb());
   return orch.runCoverAndPagesSetupPhase(
@@ -100,6 +124,7 @@ async function stepCoverAndSetup(args: GenerateBookArgs): Promise<string[]> {
 
 async function stepOnePage(args: GenerateBookArgs, pageId: string) {
   "use step";
+  await assertNotCancelled(args);
   console.log(`[workflow] step page ${pageId} gen=${args.generationId}`);
   const orch = new GenerationOrchestrator(getAdminDb());
   await orch.runOnePagePhase(
@@ -112,6 +137,7 @@ async function stepOnePage(args: GenerateBookArgs, pageId: string) {
 
 async function stepFinalize(args: GenerateBookArgs) {
   "use step";
+  await assertNotCancelled(args);
   console.log(`[workflow] step finalize gen=${args.generationId}`);
   const orch = new GenerationOrchestrator(getAdminDb());
   await orch.runFinalizePhase(

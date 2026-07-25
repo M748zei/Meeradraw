@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack",
-    "build": "next build --webpack",
+    "dev": "next dev",
+    "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:functional": "tsx scripts/functional-suite.ts",
-    "test:functional:logic": "tsx scripts/functional-suite.ts --logic-only",
-    "test:functional:http": "tsx scripts/functional-suite.ts --http-only",
-    "test:bench-kai": "tsx scripts/bench-kai-fidelity.ts"
+    "typecheck": "tsc --noEmit --pretty false",
+    "test:functional": "node --import tsx scripts/functional-suite.ts",
+    "test:functional:logic": "node --import tsx scripts/functional-suite.ts --logic-only",
+    "test:functional:http": "node --import tsx scripts/functional-suite.ts --http-only",
+    "test:bench-kai": "node --import tsx scripts/bench-kai-fidelity.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
@@ -22,6 +23,7 @@
     "firebase-admin": "^14.2.0",
     "framer-motion": "^12.12.1",
     "gsap": "^3.15.0",
+    "jose": "4.15.9",
     "lucide-react": "^0.511.0",
     "next": "^16.2.11",
     "openai": "^4.103.0",
@@ -46,8 +48,6 @@
     "typescript": "^5"
   },
   "overrides": {
-    "next": {
-      "postcss": "8.5.23"
-    }
+    "jose": "4.15.9"
   }
 }

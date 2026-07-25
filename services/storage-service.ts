@@ -7,6 +7,18 @@ import {
   isAllowedImageHost,
 } from "@/lib/safe-image-url";
 
+/** Signed URL lifetimes — child photos are short-lived; book art longer. */
+export const SIGNED_URL_TTL = {
+  /** Child identity photos — re-sign on read. */
+  sensitive: 1000 * 60 * 60, // 1 hour
+  /** Book covers / pages — still re-sign on read via stored path. */
+  bookAsset: 1000 * 60 * 60 * 24 * 7, // 7 days
+  /** PDFs / exports. */
+  export: 1000 * 60 * 60 * 24, // 1 day
+} as const;
+
+export type SignedUrlKind = keyof typeof SIGNED_URL_TTL;
+
 export class StorageService {
   /**
    * Persist a (possibly ephemeral) image URL into Firebase Storage under a
@@ -20,7 +32,8 @@ export class StorageService {
    */
   async persistImageFromUrl(
     url: string,
-    path: string
+    path: string,
+    kind: SignedUrlKind = "bookAsset"
   ): Promise<{ url: string; path: string | null }> {
     // gs:// bucket paths are already ours.
     if (url.startsWith("gs://")) {
@@ -51,7 +64,7 @@ export class StorageService {
       const raw = await fetchSafeImageBytes(url);
       const png =
         detectImageFormat(raw) === "png" ? Buffer.from(raw) : await toPngBuffer(raw);
-      const signedUrl = await this.uploadBytes(path, png, "image/png");
+      const signedUrl = await this.uploadBytes(path, png, "image/png", kind);
       return { url: signedUrl, path };
     } catch (err) {
       // Only keep the source URL when it is still an allowlisted provider
@@ -68,29 +81,61 @@ export class StorageService {
   async uploadBytes(
     path: string,
     bytes: Uint8Array | Buffer,
-    contentType: string
+    contentType: string,
+    kind: SignedUrlKind = "bookAsset"
   ): Promise<string> {
     try {
       const bucket = getAdminStorage().bucket();
       const file = bucket.file(path);
+      const ttl = SIGNED_URL_TTL[kind];
       await file.save(Buffer.from(bytes), {
         contentType,
         resumable: false,
         metadata: {
-          cacheControl: "private, max-age=3600",
-          metadata: { ownerPath: path },
+          cacheControl:
+            kind === "sensitive"
+              ? "private, max-age=300"
+              : "private, max-age=3600",
+          metadata: { ownerPath: path, urlKind: kind },
         },
       });
 
-      // Owner-only Storage rules: signed URL instead of makePublic()
+      // Owner-only Storage rules: short-lived signed URL (re-sign on read).
       const [url] = await file.getSignedUrl({
         action: "read",
-        expires: Date.now() + 1000 * 60 * 60 * 24 * 365, // 1 year
+        expires: Date.now() + ttl,
       });
       return url;
     } catch (err) {
       console.error("storage upload failed", err);
       throw new AppError("INTERNAL_ERROR", "Upload impossible", 500);
+    }
+  }
+
+  /** Re-sign a stored object path for display (short TTL for sensitive paths). */
+  async signPath(
+    path: string | null | undefined,
+    kind?: SignedUrlKind
+  ): Promise<string | null> {
+    if (!path) return null;
+    const resolvedKind =
+      kind ??
+      (path.includes("/child-refs/") || path.includes("/child-photos/")
+        ? "sensitive"
+        : path.endsWith(".pdf")
+          ? "export"
+          : "bookAsset");
+    try {
+      const bucket = getAdminStorage().bucket();
+      const file = bucket.file(path);
+      const [url] = await file.getSignedUrl({
+        action: "read",
+        expires: Date.now() + SIGNED_URL_TTL[resolvedKind],
+      });
+      return url;
+    } catch (err) {
+      console.warn(`signPath failed for ${path}`, err);
+      return null;
     }
   }
 }

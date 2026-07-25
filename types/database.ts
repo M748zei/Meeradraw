@@ -88,13 +88,15 @@ export interface Book {
   parent_story?: string | null;
   /** Optional child photo URL used as identity reference for the model sheet. */
   child_photo_url?: string | null;
+  /** Storage path for child photo — re-sign short-lived URLs on read. */
+  child_photo_path?: string | null;
   /** "parent_create" enables the fast reliable parent pipeline. */
   source?: string | null;
   /** Locked character descriptors injected into every image prompt. */
   character_bible?: string | null;
   character_sheet_url?: string | null;
   story_plan?: Record<string, unknown> | null;
-  /** Post-run quality score (blank/lineup %) for parent display + partial gate. */
+  /** Studio-only quality telemetry (not written/shown for parent books). */
   quality_summary?: {
     score: number;
     pages_ok: number;

@@ -1,10 +1,12 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
-import { rateLimit } from "@/lib/rate-limit";
+import { rateLimitAsync } from "@/lib/rate-limit-store";
+import { isGenerationAlive } from "@/lib/generation-lifecycle";
 import { estimateBookCost, FREE_TRIALS_MAX, FREE_TRIAL_MAX_PAGES } from "@/config/credits";
 import { BookService } from "@/services/book-service";
 import { CreditService } from "@/services/credit-service";
 import { LicenseService } from "@/services/license-service";
+import { reapDeadGeneration } from "@/services/generation-reaper";
 import { generateBookWorkflow } from "@/services/workflows/generate-book";
 import { start } from "workflow/api";
 import { randomUUID } from "crypto";
@@ -18,7 +20,11 @@ const schema = z.object({ book_id: z.string().uuid() });
 export async function POST(request: Request) {
   try {
     const { db, user, profile } = await requireUser();
-    rateLimit(`genstart:${user.id}`, { limit: 10, windowMs: 60_000 });
+    await rateLimitAsync(`genstart:${user.id}`, {
+      limit: 10,
+      windowMs: 60_000,
+      durable: true,
+    });
     const body = schema.parse(await request.json());
     const books = new BookService(db);
     const credits = new CreditService(db);
@@ -58,11 +64,58 @@ export async function POST(request: Request) {
     const genRef = db.collection("generations").doc(generationId);
     const userRef = db.collection("users").doc(user.id);
 
+    // Dead-resume: if book is "generating" but the active gen's heartbeat is
+    // stale (workflow dead), fail+refund that gen BEFORE claiming a new one.
+    // Never return reused:true for a corpse — that left the UI spinning until reaper.
+    {
+      const bookSnap = await bookRef.get();
+      const bookData = bookSnap.data();
+      const status = bookData?.status as string | undefined;
+      const activeGen =
+        typeof bookData?.active_generation_id === "string"
+          ? bookData.active_generation_id
+          : null;
+      if (status === "generating" && activeGen) {
+        const activeSnap = await db.collection("generations").doc(activeGen).get();
+        const activeData = activeSnap.data() as Record<string, unknown> | undefined;
+        if (activeData && isGenerationAlive(activeData)) {
+          return apiSuccess({
+            generation_id: activeGen,
+            id: activeGen,
+            is_trial: Boolean(
+              (activeData.metadata as Record<string, unknown> | null)?.is_trial
+            ),
+            status: activeData.status ?? "queued",
+            reused: true,
+          });
+        }
+        // Dead or terminal — clear so we can start fresh.
+        if (
+          activeData &&
+          (activeData.status === "queued" || activeData.status === "running")
+        ) {
+          await reapDeadGeneration(db, activeGen, {
+            ...activeData,
+            user_id: activeData.user_id ?? user.id,
+            book_id: activeData.book_id ?? body.book_id,
+          });
+        } else {
+          await bookRef.set(
+            {
+              status: "draft",
+              active_generation_id: null,
+              updated_at: now,
+            },
+            { merge: true }
+          );
+        }
+      }
+    }
+
     // Atomic claim: create the generation doc + lock the book BEFORE reserving
-    // credits. Double-clicks reuse the in-flight generation (idempotent).
-    // Crash after this commit still leaves a durable doc for the reaper.
+    // credits. Double-clicks with a LIVE workflow still reuse (checked above).
     type ClaimResult =
-      | { kind: "existing"; generationId: string }
+      | { kind: "existing"; generationId: string; isTrial: boolean; status: string }
       | { kind: "created" };
 
     const claim = await db.runTransaction(async (tx): Promise<ClaimResult> => {
@@ -77,8 +130,26 @@ export async function POST(request: Request) {
           ? bookData.active_generation_id
           : null;
 
+      // Race: another request may have claimed between the dead-check and now.
       if (status === "generating" && activeGen) {
-        return { kind: "existing", generationId: activeGen };
+        const activeSnap = await tx.get(db.collection("generations").doc(activeGen));
+        const activeData = activeSnap.data();
+        if (activeData && isGenerationAlive(activeData as Record<string, unknown>)) {
+          return {
+            kind: "existing",
+            generationId: activeGen,
+            isTrial: Boolean(
+              (activeData.metadata as Record<string, unknown> | null)?.is_trial
+            ),
+            status: (activeData.status as string) || "queued",
+          };
+        }
+        // Still dead inside the tx — clear lock and proceed to create.
+        tx.update(bookRef, {
+          status: "draft",
+          active_generation_id: null,
+          updated_at: now,
+        });
       }
 
       if (isTrial) {
@@ -115,9 +186,11 @@ export async function POST(request: Request) {
         provider: null,
         duration_ms: null,
         error_message: null,
+        cancelled: false,
         metadata: isTrial ? { is_trial: true, trial_reserved: true } : {},
         created_at: now,
         updated_at: now,
+        heartbeat_at: now,
       });
       tx.update(bookRef, {
         status: "generating",
@@ -131,8 +204,8 @@ export async function POST(request: Request) {
       return apiSuccess({
         generation_id: claim.generationId,
         id: claim.generationId,
-        is_trial: isTrial,
-        status: "queued",
+        is_trial: claim.isTrial,
+        status: claim.status,
         reused: true,
       });
     }
@@ -152,6 +225,7 @@ export async function POST(request: Request) {
         await genRef.set(
           {
             status: "failed",
+            cancelled: true,
             error_message:
               err instanceof AppError
                 ? err.message
@@ -183,6 +257,11 @@ export async function POST(request: Request) {
         startedAt,
       },
     ]);
+
+    await genRef.set(
+      { workflow_run_id: run.runId, updated_at: new Date().toISOString() },
+      { merge: true }
+    );
 
     return apiSuccess(
       {

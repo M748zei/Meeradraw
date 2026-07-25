@@ -72,15 +72,24 @@ async function hasRefund(
   userId: string,
   generationId: string
 ): Promise<boolean> {
-  const snap = await db
+  const ledger = db
     .collection("users")
     .doc(userId)
-    .collection("credit_ledger")
-    .where("operation", "==", "credit")
-    .where("reference_id", "==", `gen:${generationId}:refund`)
-    .limit(1)
-    .get();
-  return !snap.empty;
+    .collection("credit_ledger");
+  // Prefer :full; also accept legacy `gen:<id>:refund` and :partial for safety.
+  for (const ref of [
+    `gen:${generationId}:refund:full`,
+    `gen:${generationId}:refund`,
+    `gen:${generationId}:refund:partial`,
+  ]) {
+    const snap = await ledger
+      .where("operation", "==", "credit")
+      .where("reference_id", "==", ref)
+      .limit(1)
+      .get();
+    if (!snap.empty) return true;
+  }
+  return false;
 }
 
 async function reservedAmount(
@@ -177,7 +186,7 @@ async function main() {
       userId,
       amount,
       `Remboursement — réparation génération échouée (${status})`,
-      `gen:${g.id}:refund`
+      `gen:${g.id}:refund:full`
     );
     console.log(`    refunded ${amount} → balance ${after}`);
     refundedTotal += amount;

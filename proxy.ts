@@ -11,6 +11,7 @@ export async function proxy(request: NextRequest) {
     path.startsWith("/login") || path.startsWith("/signup") || path.startsWith("/auth");
   const isProtected =
     path.startsWith("/dashboard") ||
+    path.startsWith("/create") ||
     path.startsWith("/universes") ||
     path.startsWith("/books") ||
     path.startsWith("/library") ||

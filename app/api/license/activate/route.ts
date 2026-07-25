@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
-import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { clientIp, rateLimit } from "@/lib/rate-limit-store";
 import { LicenseService } from "@/services/license-service";
 import { z } from "zod";
 

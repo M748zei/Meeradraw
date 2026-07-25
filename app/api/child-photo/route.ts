@@ -1,7 +1,7 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { detectImageFormat } from "@/lib/image-format";
-import { rateLimit } from "@/lib/rate-limit";
+import { rateLimitAsync } from "@/lib/rate-limit-store";
 import { StorageService } from "@/services/storage-service";
 import { randomUUID } from "crypto";
 import { z } from "zod";
@@ -60,7 +60,11 @@ async function readLimitedJson(request: Request): Promise<unknown> {
 export async function POST(request: Request) {
   try {
     const { user } = await requireUser();
-    rateLimit(`child-photo:${user.id}`, { limit: 10, windowMs: 60_000 });
+    await rateLimitAsync(`child-photo:${user.id}`, {
+      limit: 10,
+      windowMs: 60_000,
+      durable: true,
+    });
     const body = schema.parse(await readLimitedJson(request));
 
     let raw = body.imageBase64.trim();
@@ -99,7 +103,12 @@ export async function POST(request: Request) {
     const ext =
       contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : "jpg";
     const path = `users/${user.id}/child-refs/${randomUUID()}.${ext}`;
-    const url = await new StorageService().uploadBytes(path, bytes, contentType);
+    const url = await new StorageService().uploadBytes(
+      path,
+      bytes,
+      contentType,
+      "sensitive"
+    );
     return apiSuccess({ url, path });
   } catch (e) {
     if (e instanceof z.ZodError) {

@@ -47,7 +47,7 @@ const DEFAULT_PAGE_ENDPOINT = "https://fal.run/fal-ai/ideogram/v3";
 /** Legacy flux/dev endpoint — kept available for override/fallback experiments. */
 const DEFAULT_IMAGE_ENDPOINT = "https://fal.run/fal-ai/flux/dev";
 const FAL_TIMEOUT_MS = Number(process.env.FAL_TIMEOUT_MS || 90_000);
-const FAL_RETRY_ATTEMPTS = Number(process.env.FAL_RETRY_ATTEMPTS || 3);
+const FAL_RETRY_ATTEMPTS = Number(process.env.FAL_RETRY_ATTEMPTS || 2);
 /** Default guidance raised for stronger prompt adherence (environment + line weight). */
 const DEFAULT_GUIDANCE_SCALE = Number(process.env.FAL_GUIDANCE_SCALE || 4.5);
 /**
@@ -55,15 +55,17 @@ const DEFAULT_GUIDANCE_SCALE = Number(process.env.FAL_GUIDANCE_SCALE || 4.5);
  * blank/near-blank OR as a subject floating on an empty background. Capped: after the
  * cap we KEEP THE BEST attempt (never fail the page — an empty page beats a failed one).
  */
-const FAL_QUALITY_REROLLS = Number(process.env.FAL_QUALITY_REROLLS ?? 2);
+/** Default quality re-rolls — keep lean; studio/parent override via input caps. */
+const FAL_QUALITY_REROLLS = Number(process.env.FAL_QUALITY_REROLLS ?? 1);
 /**
  * Extra re-rolls triggered by the VISION QC (lineup detected, action missing,
  * wrong cast, illegible cover title). Separate cap from the pixel re-rolls:
  * vision only runs on pixel-clean images, and after the cap the image is
  * ACCEPTED (fail-open — a static page beats a failed page). Each re-roll is an
  * internal fal cost — real $ on the fal key, not Meeradraw credits.
+ * Default 1 to avoid retry storms; override with VISION_QC_REROLLS.
  */
-const VISION_QC_REROLLS = Number(process.env.VISION_QC_REROLLS ?? 2);
+const VISION_QC_REROLLS = Number(process.env.VISION_QC_REROLLS ?? 1);
 
 /** Permanent fal failures — never retry (wastes wall-clock; some may still bill). */
 export class NonRetryableFalError extends Error {

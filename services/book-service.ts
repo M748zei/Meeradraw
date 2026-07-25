@@ -1,6 +1,7 @@
 import { AppError } from "@/lib/errors";
 import { docData, docsData } from "@/lib/firebase/docs";
 import { deleteDocumentsInBatches } from "@/services/firestore-delete";
+import { StorageService } from "@/services/storage-service";
 import type { Book, Page } from "@/types/database";
 import type { Firestore } from "firebase-admin/firestore";
 import { randomUUID } from "crypto";
@@ -8,6 +9,8 @@ import { randomUUID } from "crypto";
 export type BookWithPages = Book & { pages: Page[] };
 
 export class BookService {
+  private storage = new StorageService();
+
   constructor(private db: Firestore) {}
 
   async list(userId: string, universeId?: string): Promise<Book[]> {
@@ -19,9 +22,10 @@ export class BookService {
         .where("universe_id", "==", universeId);
     }
     const snap = await query.get();
-    return docsData<Book>(snap.docs).sort((a, b) =>
+    const books = docsData<Book>(snap.docs).sort((a, b) =>
       String(b.updated_at).localeCompare(String(a.updated_at))
     );
+    return Promise.all(books.map((b) => this.withFreshUrls(b)));
   }
 
   async get(userId: string, id: string): Promise<Book> {
@@ -29,7 +33,7 @@ export class BookService {
     if (!snap.exists || snap.data()?.user_id !== userId) {
       throw new AppError("NOT_FOUND", "Livre introuvable", 404);
     }
-    return docData<Book>(snap);
+    return this.withFreshUrls(docData<Book>(snap));
   }
 
   async getWithPages(userId: string, id: string): Promise<BookWithPages> {
@@ -40,8 +44,30 @@ export class BookService {
       .collection("pages")
       .orderBy("page_number", "asc")
       .get();
-    const pages = docsData<Page>(pagesSnap.docs);
+    const pages = await Promise.all(
+      docsData<Page>(pagesSnap.docs).map(async (p) => {
+        if (p.illustration_path) {
+          const url = await this.storage.signPath(p.illustration_path, "bookAsset");
+          if (url) return { ...p, illustration_url: url };
+        }
+        return p;
+      })
+    );
     return { ...book, pages };
+  }
+
+  /** Re-sign short-TTL Storage URLs from persisted paths. */
+  private async withFreshUrls(book: Book): Promise<Book> {
+    const next = { ...book };
+    if (book.cover_image_path) {
+      const url = await this.storage.signPath(book.cover_image_path, "bookAsset");
+      if (url) next.cover_image = url;
+    }
+    if (book.child_photo_path) {
+      const url = await this.storage.signPath(book.child_photo_path, "sensitive");
+      if (url) next.child_photo_url = url;
+    }
+    return next;
   }
 
   async create(
@@ -66,6 +92,7 @@ export class BookService {
       child_gender?: string;
       parent_story?: string;
       child_photo_url?: string;
+      child_photo_path?: string;
       source?: string;
     }
   ): Promise<Book> {
@@ -99,6 +126,7 @@ export class BookService {
       child_gender: input.child_gender?.trim() || null,
       parent_story: input.parent_story?.trim() || null,
       child_photo_url: input.child_photo_url?.trim() || null,
+      child_photo_path: input.child_photo_path?.trim() || null,
       source: input.source?.trim() || null,
       created_at: now,
       updated_at: now,

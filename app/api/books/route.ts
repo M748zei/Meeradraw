@@ -35,6 +35,7 @@ const createSchema = z.object({
   child_gender: z.enum(["girl", "boy", "unspecified"]).optional(),
   parent_story: z.string().max(2000).optional(),
   child_photo_url: z.string().min(8).max(4000).optional(),
+  child_photo_path: z.string().min(4).max(500).optional(),
   source: z.enum(["parent_create", "studio"]).optional(),
 });
 

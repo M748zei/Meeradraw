@@ -7,9 +7,9 @@ import { StatusBadge } from "@/components/books/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebase/admin";
-import { docData, docsData } from "@/lib/firebase/docs";
+import { docsData } from "@/lib/firebase/docs";
 import { getSessionUser } from "@/lib/firebase/session";
-import type { Book, Page } from "@/types/database";
+import { BookService } from "@/services/book-service";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -29,17 +29,16 @@ export default async function BookPage({ params }: Props) {
   if (!session) redirect("/login");
 
   const db = getAdminDb();
-  const bookSnap = await db.collection("books").doc(id).get();
-  if (!bookSnap.exists || bookSnap.data()?.user_id !== session.uid) notFound();
-  const book = docData<Book>(bookSnap);
-
-  const pagesSnap = await db
-    .collection("books")
-    .doc(id)
-    .collection("pages")
-    .orderBy("page_number", "asc")
-    .get();
-  const pages = docsData<Page>(pagesSnap.docs);
+  let book;
+  let pages;
+  try {
+    // Re-signs short-TTL Storage URLs from persisted paths.
+    const full = await new BookService(db).getWithPages(session.uid, id);
+    book = full;
+    pages = full.pages;
+  } catch {
+    notFound();
+  }
 
   const missingPages = pages.filter(
     (p) => !p.illustration_url || p.generation_status === "failed"

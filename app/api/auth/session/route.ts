@@ -4,7 +4,7 @@ import { getAdminAuth, getAdminDb, isFirebaseAdminConfigured } from "@/lib/fireb
 import { buildNewProfile } from "@/lib/api-auth";
 import { isDisposableEmail } from "@/lib/disposable-email";
 import { claimPendingCredits } from "@/services/chariow-sale";
-import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { clientIp, rateLimit } from "@/lib/rate-limit-store";
 import { z } from "zod";
 
 const schema = z.object({ idToken: z.string().min(10) });

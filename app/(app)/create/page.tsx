@@ -111,6 +111,7 @@ export default function CreateForChildPage() {
     setError(null);
     try {
       let childPhotoUrl: string | undefined;
+      let childPhotoPath: string | undefined;
       if (photoBase64) {
         const upRes = await fetchWithTimeout("/api/child-photo", {
           method: "POST",
@@ -123,6 +124,8 @@ export default function CreateForChildPage() {
           throw new Error(upJson.error?.message || "Upload de la photo impossible");
         }
         childPhotoUrl = upJson.data.url as string;
+        childPhotoPath =
+          typeof upJson.data.path === "string" ? upJson.data.path : undefined;
       }
 
       const uniRes = await fetchWithTimeout("/api/universes", {
@@ -180,6 +183,7 @@ export default function CreateForChildPage() {
           child_gender: gender,
           parent_story: story.slice(0, 2000),
           child_photo_url: childPhotoUrl,
+          child_photo_path: childPhotoPath,
           source: "parent_create",
           enrichment: {
             title: `L'aventure de ${name}`,

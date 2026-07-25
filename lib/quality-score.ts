@@ -1,14 +1,15 @@
 /**
- * Post-generation quality score from page delivery + QC telemetry.
- * Used to display a parent-facing score and gate "completed" vs "partial".
+ * Studio-only post-generation quality telemetry from page delivery + QC stats.
+ * Parent books do NOT write or display a quality score (incomplete UX removed).
+ * Lineup % is informational — it does not soft-fail / gate parent delivery.
  */
 
 import type { ImageQcStats } from "@/services/ai/types";
 
-/** Lineup share above this → book stays `partial` even if every page rendered. */
+/** Lineup share used for studio telemetry labels (not a parent soft-fail gate). */
 export const LINEUP_PARTIAL_THRESHOLD = 0.4;
 
-/** Minimum score (0–100) required to mark the book fully completed. */
+/** Score band used for studio labels. */
 export const QUALITY_COMPLETED_MIN = 70;
 
 export type BookQualitySummary = {
@@ -20,7 +21,7 @@ export type BookQualitySummary = {
   lineup_pages: number;
   pixel_rerolls: number;
   vision_rerolls: number;
-  /** True when score/lineup warrants a partial gate. */
+  /** True when score/lineup looks weak (studio telemetry only). */
   gate_partial: boolean;
   label: "excellent" | "bon" | "à améliorer" | "faible";
 };
@@ -41,7 +42,8 @@ export function labelForScore(score: number): BookQualitySummary["label"] {
 }
 
 /**
- * Build a parent-facing quality summary from delivered pages + per-image QC.
+ * Build a studio quality summary from delivered pages + per-image QC.
+ * Do not call for parent_create books.
  */
 export function buildBookQualitySummary(input: {
   pagesTotal: number;
@@ -58,11 +60,9 @@ export function buildBookQualitySummary(input: {
   for (const s of input.pageQc) {
     if (hasLineupSignal(s)) lineupPages += 1;
   }
-  // Lineup % over pages that actually rendered (failed pages aren't "lineup").
   const lineupBase = Math.max(ok, 1);
   const lineupPct = ok > 0 ? lineupPages / lineupBase : 0;
 
-  // Score: delivery first, then lineup penalty (up to −40), light re-roll noise (−5 max).
   const delivery = total > 0 ? (ok / total) * 100 : 0;
   const lineupPenalty = Math.min(40, lineupPct * 100 * 0.8);
   const rerollNoise = Math.min(
@@ -93,7 +93,7 @@ export function buildBookQualitySummary(input: {
   };
 }
 
-/** French one-liner for the book detail card. */
+/** French one-liner for studio tooling (not shown on parent book pages). */
 export function qualitySummaryCopy(q: BookQualitySummary): string {
   if (q.pages_ok === 0) {
     return "Aucune page illustrée — régénérez le cahier.";
