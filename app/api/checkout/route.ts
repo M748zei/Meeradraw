@@ -77,7 +77,11 @@ export async function POST(request: Request) {
           number: phone.number.replace(/\D/g, ""),
           country_code: phone.country_code.toUpperCase(),
         },
-        redirect_url: `${appUrl}/merci?sale={sale_id}`,
+        // Access product → dedicated open-access flow; credit packs → thank-you.
+        redirect_url:
+          "unlocksAccess" in pack && pack.unlocksAccess
+            ? `${appUrl}/ouvrir-mon-acces?sale={sale_id}`
+            : `${appUrl}/merci?sale={sale_id}`,
       }),
       cache: "no-store",
     });

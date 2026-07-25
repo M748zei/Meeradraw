@@ -58,7 +58,9 @@ export const CREDIT_PACKS = [
   },
 ] as const;
 
-export type CreditPack = (typeof CREDIT_PACKS)[number];
+export type CreditPack = (typeof CREDIT_PACKS)[number] & {
+  unlocksAccess?: boolean;
+};
 
 export function packForChariowProduct(productId: string | null | undefined) {
   if (!productId) return null;

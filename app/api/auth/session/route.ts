@@ -4,6 +4,11 @@ import { getAdminAuth, getAdminDb, isFirebaseAdminConfigured } from "@/lib/fireb
 import { buildNewProfile } from "@/lib/api-auth";
 import { isDisposableEmail } from "@/lib/disposable-email";
 import { claimPendingCredits } from "@/services/chariow-sale";
+import { AccessOpenService } from "@/services/access-open";
+import {
+  clearPurchaseContextCookie,
+  getPurchaseContextCookie,
+} from "@/lib/purchase-context";
 import { clientIp, rateLimit } from "@/lib/rate-limit-store";
 import { z } from "zod";
 
@@ -40,6 +45,43 @@ export async function POST(request: Request) {
         await claimPendingCredits(db, decoded.uid, decoded.email).catch((err) =>
           console.error("claimPendingCredits failed", err)
         );
+      }
+
+      // Post-purchase cookie context (from /ouvrir-mon-acces) — attach only when
+      // the Auth email matches and is verified / Google.
+      const purchaseCtx = await getPurchaseContextCookie();
+      if (purchaseCtx?.saleId && decoded.email) {
+        let emailVerified = Boolean(decoded.email_verified);
+        try {
+          const userRecord = await getAdminAuth().getUser(decoded.uid);
+          emailVerified = Boolean(userRecord.emailVerified);
+          if (
+            !emailVerified &&
+            userRecord.providerData.some((p) => p.providerId === "google.com")
+          ) {
+            emailVerified = true;
+          }
+        } catch {
+          /* keep token claim */
+        }
+        if (emailVerified) {
+          await new AccessOpenService(db)
+            .attachToUser({
+              userId: decoded.uid,
+              userEmail: decoded.email,
+              emailVerified: true,
+              saleId: purchaseCtx.saleId,
+            })
+            .then(() => clearPurchaseContextCookie())
+            .catch((err) =>
+              console.warn("attach purchase on session failed", err instanceof Error ? err.message : err)
+            );
+          await new AccessOpenService(db)
+            .claimPendingForUser(decoded.uid, decoded.email, true)
+            .catch((err) =>
+              console.warn("claimPendingForUser failed", err instanceof Error ? err.message : err)
+            );
+        }
       }
     }
 

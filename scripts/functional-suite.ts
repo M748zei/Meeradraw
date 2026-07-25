@@ -201,6 +201,69 @@ async function runLogicTests() {
     assert(s.email === "buyer@example.com", "email lower");
     assert(s.productId === "prd_d2ik58za", "product");
   });
+
+  const { maskEmail } = await import("../lib/mask-email");
+  const {
+    encodePurchaseContext,
+    decodePurchaseContext,
+  } = await import("../lib/purchase-context");
+  const { verifyChariowWebhookSignature } = await import("../lib/chariow/client");
+  const {
+    isKnownMeeradrawProduct,
+    packUnlocksAccess,
+  } = await import("../services/access-open");
+  const { createHmac } = await import("crypto");
+
+  await test("maskEmail hides local part", () => {
+    assert(maskEmail("ada@example.com") === "a***@example.com", maskEmail("ada@example.com"));
+    assert(maskEmail("A@x.co") === "a***@x.co", "short");
+    assert(maskEmail("") === "***", "empty");
+  });
+
+  await test("purchase context cookie round-trip + tamper reject", () => {
+    const prev =
+      process.env.PURCHASE_CONTEXT_SECRET ||
+      process.env.CHARIOW_WEBHOOK_SECRET ||
+      process.env.CRON_SECRET;
+    process.env.PURCHASE_CONTEXT_SECRET = "test-purchase-secret-32chars!!";
+    const token = encodePurchaseContext({
+      saleId: "sal_abc",
+      email: "Buyer@Example.com",
+      productId: "prd_d2ik58za",
+    });
+    const decoded = decodePurchaseContext(token);
+    assert(decoded?.saleId === "sal_abc", "saleId");
+    assert(decoded?.email === "buyer@example.com", "email normalized");
+    assert(decodePurchaseContext(token + "x") === null, "tamper");
+    assert(decodePurchaseContext("not.a.token") === null, "garbage");
+    if (prev) process.env.PURCHASE_CONTEXT_SECRET = prev;
+    else delete process.env.PURCHASE_CONTEXT_SECRET;
+  });
+
+  await test("Chariow webhook HMAC signature verification", () => {
+    const secret = "whsec_test_secret";
+    const body = JSON.stringify({ event: "successful.sale", sale: { id: "sal_1" } });
+    const sig = createHmac("sha256", secret).update(body, "utf8").digest("hex");
+    assert(verifyChariowWebhookSignature(body, sig, secret) === true, "valid");
+    assert(verifyChariowWebhookSignature(body, `sha256=${sig}`, secret) === true, "prefix");
+    assert(verifyChariowWebhookSignature(body, "deadbeef", secret) === false, "invalid");
+    assert(verifyChariowWebhookSignature(body, null, secret) === false, "missing");
+  });
+
+  await test("isKnownMeeradrawProduct + packUnlocksAccess", () => {
+    assert(isKnownMeeradrawProduct("prd_d2ik58za") === true, "entry");
+    assert(isKnownMeeradrawProduct("prd_0658xmlt") === true, "recharge");
+    assert(isKnownMeeradrawProduct("prd_other") === false, "other");
+    assert(packUnlocksAccess("prd_d2ik58za") === true, "unlocks");
+    assert(packUnlocksAccess("prd_0658xmlt") === false, "credits only");
+  });
+
+  await test("Google email mismatch messaging uses mask", () => {
+    const masked = maskEmail("parent@digiafrik.com");
+    const msg = `Pour protéger votre achat, connectez-vous avec l’adresse utilisée lors du paiement : ${masked}.`;
+    assert(msg.includes("p***@digiafrik.com"), msg);
+    assert(!msg.includes("parent@"), "no full email");
+  });
 }
 
 async function runMockAiTests() {
@@ -867,6 +930,53 @@ async function runHttpSmoke() {
       res.status === 200 || res.status === 403 || res.status === 500,
       `status=${res.status}`
     );
+  });
+
+  await test("GET /ouvrir-mon-acces reachable (mobile post-purchase)", async () => {
+    const res = await get("/ouvrir-mon-acces?sale=sal_test");
+    assert(res.status === 200, `status=${res.status}`);
+    assert(/Meeradraw|achat|espace/i.test(res.text), "branded copy");
+    assert(!/CHARIOW_API_KEY|sk_live_/i.test(res.text), "no chariow secret in HTML");
+  });
+
+  await test("POST /api/access/verify without sale → structured missing", async () => {
+    const res = await post("/api/access/verify", {});
+    // 200 with missing_sale, or 503 if firebase admin missing in CI
+    assert(
+      res.status === 200 || res.status === 503 || res.status === 500,
+      `status=${res.status}`
+    );
+    if (res.status === 200) {
+      const body = JSON.parse(res.text) as { success?: boolean; data?: { state?: string } };
+      assert(body.success === true, "success");
+      assert(
+        body.data?.state === "missing_sale" ||
+          body.data?.state === "not_configured" ||
+          body.data?.state === "unavailable",
+        `state=${body.data?.state}`
+      );
+    }
+  });
+
+  await test("POST /api/access/attach without session → 401", async () => {
+    const res = await post("/api/access/attach", { sale: "sal_x" });
+    assert(res.status === 401 || res.status === 503, `status=${res.status}`);
+  });
+
+  await test("webhook chariow invalid signature rejected when secret set", async () => {
+    if (!process.env.CHARIOW_WEBHOOK_SECRET) {
+      assert(true, "skipped — no secret in env");
+      return;
+    }
+    const res = await fetch(`${BASE_URL}/api/webhooks/chariow`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-chariow-signature": "totally-invalid-signature",
+      },
+      body: JSON.stringify({ event: "successful.sale", sale: { id: "sal_x" } }),
+    });
+    assert(res.status === 403, `status=${res.status}`);
   });
 
   await test("cron reap without secret → 403 in production-like or ok in dev", async () => {

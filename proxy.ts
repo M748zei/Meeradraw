@@ -9,6 +9,7 @@ export async function proxy(request: NextRequest) {
 
   const isAuthRoute =
     path.startsWith("/login") || path.startsWith("/signup") || path.startsWith("/auth");
+  const isPurchaseOpen = path.startsWith("/ouvrir-mon-acces");
   const isProtected =
     path.startsWith("/dashboard") ||
     path.startsWith("/create") ||
@@ -25,10 +26,24 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Post-purchase flow must stay public (cookie context + verify/attach APIs).
+  if (isPurchaseOpen) {
+    return NextResponse.next();
+  }
+
   if (!session && isProtected) {
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = "/login";
     redirectUrl.searchParams.set("next", path);
+    return NextResponse.redirect(redirectUrl);
+  }
+
+  // Never silently dump a purchase context into generic login: if a signed
+  // purchase cookie is present, send the buyer back to the dedicated flow.
+  const purchaseCtx = request.cookies.get("__md_purchase")?.value;
+  if (session && isAuthRoute && purchaseCtx) {
+    const redirectUrl = request.nextUrl.clone();
+    redirectUrl.pathname = "/ouvrir-mon-acces";
     return NextResponse.redirect(redirectUrl);
   }
 

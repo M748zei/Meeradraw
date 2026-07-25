@@ -1,14 +1,26 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2 } from "lucide-react";
 
 export const metadata = { title: "Merci — Meeradraw" };
 
 /**
- * Post-checkout landing. The credits are granted by the Chariow webhook a few
- * seconds after payment — this page just reassures and routes back.
+ * Post-checkout landing for credit recharges.
+ * If a sale id is present, prefer the dedicated open-access flow (covers the
+ * Accès Meeradraw product and any buyer arriving via a shared redirect URL).
  */
-export default function MerciPage() {
+export default async function MerciPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ sale?: string; sale_id?: string }>;
+}) {
+  const params = await searchParams;
+  const sale = params.sale || params.sale_id;
+  if (sale) {
+    redirect(`/ouvrir-mon-acces?sale=${encodeURIComponent(sale)}`);
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
       <div className="mx-auto max-w-md space-y-6 text-center">
@@ -18,8 +30,8 @@ export default function MerciPage() {
         <h1 className="font-display text-3xl">Merci pour ton achat ✦</h1>
         <p className="text-ink-muted">
           Tes crédits sont en route — ils apparaissent sur ton compte dans
-          quelques secondes. Si c&apos;est ton premier achat, pense aussi à
-          entrer ton code d&apos;accès reçu par email.
+          quelques secondes. Si c&apos;est ton premier achat, ouvre ton accès
+          depuis le lien reçu par e-mail.
         </p>
         <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
           <Link href="/credits">
@@ -30,7 +42,11 @@ export default function MerciPage() {
           </Link>
         </div>
         <p className="text-xs text-ink-muted">
-          Un souci ? Réponds simplement à l&apos;email de confirmation d&apos;achat.
+          Un souci ? Écris à{" "}
+          <a href="mailto:support.digiafrik@gmail.com" className="underline">
+            support.digiafrik@gmail.com
+          </a>
+          .
         </p>
       </div>
     </main>

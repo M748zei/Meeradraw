@@ -54,7 +54,8 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Collections serveur uniquement (licenses, chariow_events, etc.) :
-    // aucune règle → refus par défaut.
+    // Collections serveur uniquement (licenses, chariow_events,
+    // chariow_purchases, chariow_pending_credits, chariow_sale_reversals, …) :
+    // aucune règle → refus par défaut (Admin SDK only).
   }
 }
