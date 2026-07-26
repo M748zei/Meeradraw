@@ -63,6 +63,18 @@ function GenerateInner() {
     if (!generationId) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let pollCount = 0;
+    let consecutiveErrors = 0;
+
+    function nextDelay() {
+      if (typeof document !== "undefined" && document.hidden) return 15_000;
+      if (consecutiveErrors > 0) {
+        return Math.min(15_000, 2_000 * 2 ** Math.min(consecutiveErrors, 3));
+      }
+      if (pollCount < 10) return 2_000;
+      if (pollCount < 30) return 4_000;
+      return 8_000;
+    }
 
     async function poll() {
       if (!active) return;
@@ -71,14 +83,17 @@ function GenerateInner() {
         const json = await res.json();
         if (!json.success) throw new Error(json.error?.message || "Erreur");
         if (active) setProgress(json.data);
+        pollCount += 1;
+        consecutiveErrors = 0;
         const st = json.data.status as string;
         if (st === "completed" || st === "failed" || st === "partial") {
           return;
         }
       } catch (err) {
+        consecutiveErrors += 1;
         if (active) setError(err instanceof Error ? err.message : "Erreur");
       }
-      if (active) timer = setTimeout(poll, 1500);
+      if (active) timer = setTimeout(poll, nextDelay());
     }
 
     void poll();

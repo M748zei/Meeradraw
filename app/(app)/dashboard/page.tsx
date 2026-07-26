@@ -64,12 +64,13 @@ export default async function DashboardPage() {
         <Card className="border-sky-200 bg-sky-50">
           <p className="font-semibold text-sky-900">Débloque ton accès Meeradraw</p>
           <p className="mt-1 text-sm text-ink-muted">
-            Entre le code d&apos;accès reçu après ton achat pour lancer des
-            générations. Tes créations restent accessibles.
+            Ton achat est retrouvé automatiquement grâce à l&apos;adresse e-mail
+            vérifiée de ton compte. Si tu viens de payer, relance simplement la
+            vérification.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Link href="/license">
-              <Button size="sm">Débloquer mon accès</Button>
+              <Button size="sm">Retrouver mon achat</Button>
             </Link>
             {STORE_URL ? (
               <a href={STORE_URL} target="_blank" rel="noreferrer">

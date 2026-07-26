@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { getAdminAuth } from "@/lib/firebase/admin";
+import { cache } from "react";
 
 export const SESSION_COOKIE = "__session";
 const EXPIRES_IN_MS = 60 * 60 * 24 * 5 * 1000; // 5 days
@@ -30,7 +31,7 @@ export async function clearSessionCookie() {
   });
 }
 
-export async function getSessionUser() {
+export const getSessionUser = cache(async () => {
   const cookieStore = await cookies();
   const session = cookieStore.get(SESSION_COOKIE)?.value;
   if (!session) return null;
@@ -41,4 +42,4 @@ export async function getSessionUser() {
   } catch {
     return null;
   }
-}
+});
