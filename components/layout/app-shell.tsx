@@ -1,13 +1,13 @@
 import Link from "next/link";
 import { Logo } from "@/components/brand/logo";
 import { formatCredits } from "@/lib/utils";
-import { CreditCard, Home, KeyRound, Library, Sparkles, User } from "lucide-react";
+import { CreditCard, Home, Library, ShieldCheck, Sparkles, User } from "lucide-react";
 
 const nav = [
   { href: "/dashboard", label: "Studio", icon: Home },
   { href: "/library", label: "Bibliothèque", icon: Library },
   { href: "/create", label: "Créer", icon: Sparkles },
-  { href: "/license", label: "Accès", icon: KeyRound },
+  { href: "/license", label: "Mon accès", icon: ShieldCheck },
   { href: "/credits", label: "Crédits", icon: CreditCard },
   { href: "/profile", label: "Profil", icon: User },
 ];
