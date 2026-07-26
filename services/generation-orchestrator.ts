@@ -424,7 +424,6 @@ export class GenerationOrchestrator {
     const plan = this.loadStoryPlan(book);
     const style = book.style || "cute";
     const universeId = book.universe_id;
-    const parentMode = isParentBook(book);
     const fullCharacterBible =
       book.character_bible || formatCharacterLock(plan.characters);
     const worldSetting = [plan.world?.setting, plan.world?.mood]
