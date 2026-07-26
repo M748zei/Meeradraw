@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -78,6 +78,7 @@ async function compressPhotoForUpload(file: File): Promise<File> {
 
 export default function CreateForChildPage() {
   const router = useRouter();
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const [ageId, setAgeId] = useState<string>("6-8");
   const [themeId, setThemeId] = useState<string>("magic");
   const [childName, setChildName] = useState("");
@@ -433,24 +434,16 @@ export default function CreateForChildPage() {
           <p className="text-xs text-ink-muted">
             Pour que le héros lui ressemble. Portrait clair, visage visible. JPG, PNG, WebP, HEIC ou HEIF · max 12 Mo. Optionnel.
           </p>
-          {/*
-            Nuclear file picker: input sits ON TOP (z-20) covering 100% of the zone.
-            Visual children are pointer-events-none. No button, no label/htmlFor,
-            no input.click(), no sr-only/clip/display:none.
-            .file-drop-input expands the native Browse button hit area (see globals.css).
-          */}
-          <div
-            className="group relative min-h-[7.5rem] overflow-hidden rounded-2xl"
-            data-testid="child-photo-dropzone"
-          >
+          <div data-testid="child-photo-dropzone">
             <input
+              ref={photoInputRef}
               id="child-photo"
               name="child-photo"
               type="file"
               accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif"
               aria-labelledby="child-photo-label"
               data-testid="child-photo-input"
-              className="file-drop-input"
+              className="sr-only"
               disabled={loading}
               onChange={(e) => {
                 const file = e.target.files?.[0] ?? null;
@@ -459,13 +452,15 @@ export default function CreateForChildPage() {
                 e.currentTarget.value = "";
               }}
             />
-            <div
-              className="pointer-events-none relative z-0 flex w-full flex-col items-center gap-2 rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 px-4 py-6 text-sm text-ink-muted transition group-hover:border-sky-300 group-focus-within:border-sky-400 group-focus-within:ring-2 group-focus-within:ring-sky-400"
-              aria-hidden
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => photoInputRef.current?.click()}
+              className="flex min-h-[7.5rem] w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 px-4 py-6 text-sm text-ink-muted transition hover:border-sky-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Upload className="h-5 w-5 text-sky-600" />
               <span>{photoPreview ? "Changer la photo" : "Ajouter une photo"}</span>
-            </div>
+            </button>
           </div>
           {photoError ? (
             <p className="text-sm text-rose-700" role="alert">
