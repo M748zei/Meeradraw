@@ -63,8 +63,9 @@ async function reapOne(
   opts?: { force?: boolean }
 ): Promise<boolean> {
   const genRef = db.collection("generations").doc(genId);
-  // Transaction re-checks staleness so a concurrent finishing run (or a second
-  // reaper) can't double-fail a generation that just completed / heartbeated.
+  // First fence the worker without making the generation terminal. If the
+  // refund fails, queued/running + cancelled remains eligible for the next
+  // poll/cron pass, so a transient Firestore failure can never strand credits.
   const shouldRefund = await db.runTransaction(async (tx) => {
     const snap = await tx.get(genRef);
     const live = snap.data();
@@ -74,10 +75,10 @@ async function reapOne(
     if (!opts?.force && !isStale(live)) return false;
     const now = new Date().toISOString();
     tx.update(genRef, {
-      status: "failed",
       cancelled: true,
+      refund_pending: true,
       error_message:
-        "Génération interrompue (délai dépassé). Tes crédits ont été remboursés — relance quand tu veux.",
+        "Génération interrompue. Le remboursement automatique est en cours.",
       updated_at: now,
       heartbeat_at: now,
     });
@@ -88,6 +89,18 @@ async function reapOne(
   const userId = typeof data.user_id === "string" ? data.user_id : null;
   const bookId = typeof data.book_id === "string" ? data.book_id : null;
   const cost = typeof data.credits_used === "number" ? data.credits_used : 0;
+
+  // Compensation must succeed before the generation becomes terminal. Both
+  // operations are idempotent, so another reaper can safely resume here.
+  if (userId && cost > 0) {
+    await new CreditService(db).refund(
+      userId,
+      cost,
+      "Remboursement — génération interrompue (délai dépassé)",
+      `gen:${genId}:refund:full`
+    );
+  }
+  await releaseTrialSlotIfNeeded(db, genId, data);
 
   if (bookId) {
     const bookRef = db.collection("books").doc(bookId);
@@ -110,19 +123,20 @@ async function reapOne(
       })
       .catch(() => undefined);
   }
-  if (userId && cost > 0) {
-    await new CreditService(db).refund(
-      userId,
-      cost,
-      "Remboursement — génération interrompue (délai dépassé)",
-      `gen:${genId}:refund:full`
-    );
-  }
-  try {
-    await releaseTrialSlotIfNeeded(db, genId, data);
-  } catch (err) {
-    console.error(`[reaper] trial slot release failed for ${genId}`, err);
-  }
+  const completedAt = new Date().toISOString();
+  await genRef.set(
+    {
+      status: "failed",
+      cancelled: true,
+      refund_pending: false,
+      credits_used: 0,
+      error_message:
+        "Génération interrompue (délai dépassé). Tes crédits ont été remboursés — relance quand tu veux.",
+      updated_at: completedAt,
+      heartbeat_at: completedAt,
+    },
+    { merge: true }
+  );
   console.warn(
     `[reaper] generation ${genId} reaped (refund ${cost} to ${userId}, stale>${HEARTBEAT_STALE_MS}ms)`
   );
