@@ -54,6 +54,7 @@ async function runLogicTests() {
   const { extractSale } = await import("../services/chariow-sale");
   const { hasVerifiedEmailOwnership } = await import("../lib/email-ownership");
   const { safeRechargeReturnPath } = await import("../lib/recharge-return");
+  const { normalizeCheckoutPhone } = await import("../lib/checkout-phone");
 
   await test("estimateBookCost colorbook 12 pages", () => {
     // cover 5 + 12*2 + pdf 1 = 30
@@ -88,6 +89,27 @@ async function runLogicTests() {
     assert(safeRechargeReturnPath("https://evil.example") === null, "absolute URL");
     assert(safeRechargeReturnPath("//evil.example") === null, "protocol relative");
     assert(safeRechargeReturnPath("/books/a/../../admin") === null, "traversal");
+  });
+
+  await test("checkout phone uses international number and supported country", () => {
+    const niger = normalizeCheckoutPhone({ number: "90 00 00 00", country_code: "NE" });
+    assert(niger?.number === "22790000000", `niger=${niger?.number}`);
+    assert(niger?.country_code === "NE", `country=${niger?.country_code}`);
+
+    const alreadyInternational = normalizeCheckoutPhone({
+      number: "+221 77 000 00 00",
+      country_code: "SN",
+    });
+    assert(alreadyInternational?.number === "221770000000", "keeps international prefix");
+
+    assert(
+      normalizeCheckoutPhone({ number: "90000000", country_code: "US" }) === null,
+      "unsupported/stale country must be collected again"
+    );
+    assert(
+      normalizeCheckoutPhone({ number: "123", country_code: "NE" }) === null,
+      "short number rejected"
+    );
   });
 
   await test("free trial constants", () => {
