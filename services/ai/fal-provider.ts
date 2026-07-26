@@ -13,7 +13,7 @@ import { styleImageCraftLine } from "@/services/ai/style-contracts";
 import { withRetry } from "@/lib/async";
 import { isBlankOrTooFaint, hasPoorEnvironment, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
-import { checkCast, checkCoverTitle, checkPageAction } from "@/lib/vision-qc";
+import { checkCast, checkCoverTitle, checkIdentityReferences, checkPageAction } from "@/lib/vision-qc";
 import { StorageService } from "@/services/storage-service";
 import { randomUUID } from "crypto";
 
@@ -46,6 +46,7 @@ function endpointSupportsNegative(endpoint: string): boolean {
 const DEFAULT_PAGE_ENDPOINT = "https://fal.run/fal-ai/ideogram/v3";
 /** Legacy flux/dev endpoint — kept available for override/fallback experiments. */
 const DEFAULT_IMAGE_ENDPOINT = "https://fal.run/fal-ai/flux/dev";
+const DEFAULT_MULTI_REF_ENDPOINT = "https://fal.run/fal-ai/flux-2-pro/edit";
 const FAL_TIMEOUT_MS = Number(process.env.FAL_TIMEOUT_MS || 90_000);
 const FAL_RETRY_ATTEMPTS = Number(process.env.FAL_RETRY_ATTEMPTS || 2);
 /** Default guidance raised for stronger prompt adherence (environment + line weight). */
@@ -121,33 +122,53 @@ export class FalImageProvider implements ImageAIProvider {
       process.env.FAL_IMAGE_ENDPOINT?.trim() ||
       DEFAULT_PAGE_ENDPOINT;
     const refEndpoint = process.env.FAL_REF_ENDPOINT?.trim() || "";
-
-    // A paid strict interior must never silently lose its visual identity reference.
-    // Fail before calling a text-only image model so credits can be protected upstream.
-    if (
-      input.strictQuality &&
-      !input.isCharacterSheet &&
-      !input.isCover &&
-      input.referenceImageUrl &&
-      !refEndpoint
-    ) {
+    const multiRefEndpoint =
+      process.env.FAL_MULTI_REF_ENDPOINT?.trim() || DEFAULT_MULTI_REF_ENDPOINT;
+    const orderedReferenceUrls = Array.from(
+      new Set(
+        (input.referenceImageUrls?.length
+          ? input.referenceImageUrls
+          : input.referenceImageUrl
+            ? [input.referenceImageUrl]
+            : []
+        ).filter((url): url is string => typeof url === "string" && Boolean(url.trim()))
+      )
+    ).slice(0, 9);
+    const strictInterior =
+      Boolean(input.strictQuality) && !input.isCharacterSheet && !input.isCover;
+    if (strictInterior && !orderedReferenceUrls.length) {
       throw new NonRetryableFalError(
-        "Missing FAL_REF_ENDPOINT for strict reference-guided generation"
+        "Strict coloring page requires ordered character references"
+      );
+    }
+    if (strictInterior && orderedReferenceUrls.length === 1 && !refEndpoint) {
+      throw new NonRetryableFalError(
+        "Missing FAL_REF_ENDPOINT for strict single-reference generation"
+      );
+    }
+    if (strictInterior && orderedReferenceUrls.length > 1 && !multiRefEndpoint) {
+      throw new NonRetryableFalError(
+        "Missing FAL_MULTI_REF_ENDPOINT for strict multi-reference generation"
       );
     }
 
-    // Cover WITH lettered title always goes text-only Ideogram: Kontext cannot
-    // render reliable lettering, and Ideogram's is the whole point (audit T6).
-    // Character sheets normally text-only, except photo-identity sheets.
-    const useReference =
-      Boolean(refEndpoint) &&
-      Boolean(input.referenceImageUrl) &&
+    const referenceAllowed =
       !input.forceTextOnly &&
       !(input.isCover && input.coverTitle) &&
       (!input.isCharacterSheet || Boolean(input.identityFromPhoto));
+    const useMultiReference =
+      referenceAllowed && orderedReferenceUrls.length > 1 && Boolean(multiRefEndpoint);
+    const useReference =
+      referenceAllowed &&
+      orderedReferenceUrls.length > 0 &&
+      (useMultiReference || Boolean(refEndpoint));
 
     const prompt = buildPrompt(input, useReference);
-    const endpoint = useReference ? refEndpoint : textEndpoint;
+    const endpoint = useMultiReference
+      ? multiRefEndpoint
+      : useReference
+        ? refEndpoint
+        : textEndpoint;
     const visionCap =
       typeof input.maxVisionRerolls === "number" && input.maxVisionRerolls >= 0
         ? input.maxVisionRerolls
@@ -185,7 +206,9 @@ export class FalImageProvider implements ImageAIProvider {
       isCharacterSheet: Boolean(input.isCharacterSheet),
       negativePrompt: input.negativePrompt,
       worldNegative: input.worldNegative,
-      referenceImageUrl: useReference ? input.referenceImageUrl : undefined,
+      referenceImageUrl:
+        useReference && !useMultiReference ? orderedReferenceUrls[0] : undefined,
+      referenceImageUrls: useMultiReference ? orderedReferenceUrls : undefined,
       seed: input.seed,
       stylePreset: input.stylePreset,
       heroGender: input.heroGender,
@@ -203,7 +226,7 @@ export class FalImageProvider implements ImageAIProvider {
         validateLineArt,
         requireColored,
         recoveryPrompt,
-        label: useReference ? "fal-ref" : "fal",
+        label: useMultiReference ? "fal-multi-ref" : useReference ? "fal-ref" : "fal",
         input,
         maxVisionRerolls: visionCap,
         maxQualityRerolls: qualityCap,
@@ -516,6 +539,35 @@ export class FalImageProvider implements ImageAIProvider {
             }
           }
         }
+        const identityUrls = input.referenceImageUrls || [];
+        if (
+          !input.isCharacterSheet &&
+          identityUrls.length > 0 &&
+          input.expectedCast?.length === identityUrls.length
+        ) {
+          const identity = await checkIdentityReferences(
+            current.url,
+            input.expectedCast.map((character, index) => ({
+              ...character,
+              referenceImageUrl: identityUrls[index],
+            }))
+          );
+          if (!identity && input.strictQuality) {
+            visionScore += 5;
+            prevVisionNudges.push(CAST_FIX_BOOST);
+            verdicts.push("identity:vision-unavailable");
+          } else if (identity && !identity.matches) {
+            visionScore += 5;
+            qcStats.identityMismatchDetected = true;
+            prevVisionNudges.push(CAST_FIX_BOOST);
+            const scores = identity.scores
+              .map((item) => `${item.name}=${item.score}`)
+              .join(",");
+            verdicts.push(
+              `identity:${scores || identity.issue || "reference mismatch"}`
+            );
+          }
+        }
         if (verdicts.length) {
           qcStats.visionVerdicts = [...(qcStats.visionVerdicts || []), ...verdicts];
         }
@@ -685,6 +737,7 @@ function buildFalBody(params: {
   negativePrompt?: string;
   worldNegative?: string;
   referenceImageUrl?: string;
+  referenceImageUrls?: string[];
   seed?: number;
   stylePreset?: string;
   heroGender?: string;
@@ -697,17 +750,48 @@ function buildFalBody(params: {
     negativePrompt,
     worldNegative,
     referenceImageUrl,
+    referenceImageUrls,
     seed,
     stylePreset,
     heroGender,
     consistencyMode,
   } = params;
   const isKontext = /kontext/i.test(endpoint);
+  const isMultiReferenceEdit = /flux-2(?:-pro)?\/edit/i.test(endpoint);
   const isIdeogram = /ideogram/i.test(endpoint);
-  const useReference = Boolean(referenceImageUrl);
+  const useReference =
+    Boolean(referenceImageUrl) || Boolean(referenceImageUrls?.length);
   const pageNegative = isCharacterSheet
     ? CHARACTER_SHEET_NEGATIVE_PROMPT
     : buildNegativePrompt(negativePrompt, worldNegative, heroGender);
+
+  if (isMultiReferenceEdit) {
+    const refs = Array.from(new Set(referenceImageUrls || [])).slice(0, 9);
+    if (refs.length < 2) {
+      throw new NonRetryableFalError(
+        "Multi-reference endpoint requires at least two ordered images"
+      );
+    }
+    const multiBody: Record<string, unknown> = {
+      prompt,
+      image_urls: refs,
+      image_size: "portrait_4_3",
+      output_format: "png",
+      enable_safety_checker: true,
+    };
+    if (typeof seed === "number" && Number.isFinite(seed)) {
+      multiBody.seed = seed % 2147483647;
+    }
+    // FLUX.2 dev exposes tuning fields; Pro intentionally does not.
+    if (/fal-ai\/flux-2\/edit/i.test(endpoint)) {
+      multiBody.num_images = 1;
+      multiBody.guidance_scale = Number(process.env.FAL_MULTI_REF_GUIDANCE || 2.5);
+      multiBody.num_inference_steps = Number(
+        process.env.FAL_MULTI_REF_STEPS || 28
+      );
+    }
+    return multiBody;
+  }
 
   // Ideogram V3: expand_prompt:false (disables MagicPrompt so OUR exact prompt is used)
   // + a real negative_prompt. NO steps/guidance/output_format in schema.
@@ -805,6 +889,12 @@ function buildRecoveryPrompt(input: ImageGenerationInput): string {
 }
 
 function buildPrompt(input: ImageGenerationInput, useReference: boolean): string {
+  const referenceMap = (input.referenceImageUrls || [])
+    .map((_, index) => {
+      const character = input.expectedCast?.[index];
+      return `@image${index + 1} is the immutable identity source for ${character?.name || `character ${index + 1}`} (${character?.kind || "character"}). Preserve that exact identity once.`;
+    })
+    .join(" ");
   if (input.isCharacterSheet) {
     return buildCharacterSheetPrompt({
       characters: input.characterBible || "",
@@ -815,14 +905,19 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
   }
   if (input.isCover) {
     if (useReference) {
-      return buildReferenceGuidedScenePrompt({
-        scene: `Coloring book COVER poster: ${input.refScene || input.action || input.prompt}. Keep the top third visually calm (simple sky) as a title band. ABSOLUTELY NO TEXT anywhere in the image.`,
-        characters: input.characterBible || "",
-        style: input.style,
-        world: input.worldSetting || "",
-        action: input.action,
-        settingElements: input.settingElements,
-      });
+      return [
+        referenceMap,
+        buildReferenceGuidedScenePrompt({
+          scene: `Coloring book COVER poster: ${input.refScene || input.action || input.prompt}. Keep the top third visually calm (simple sky) as a title band. ABSOLUTELY NO TEXT anywhere in the image.`,
+          characters: input.characterBible || "",
+          style: input.style,
+          world: input.worldSetting || "",
+          action: input.action,
+          settingElements: input.settingElements,
+        }),
+      ]
+        .filter(Boolean)
+        .join(" ");
     }
     return buildCoverPrompt({
       title: input.coverTitle || input.prompt,
@@ -835,16 +930,21 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
     });
   }
   if (useReference) {
-    return buildReferenceGuidedScenePrompt({
-      // Compact scene for Kontext — the full assembled prompt makes it copy the
-      // reference lineup (see ImageGenerationInput.refScene).
-      scene: input.refScene || input.prompt,
-      characters: input.characterBible || "",
-      style: input.style,
-      world: input.worldSetting || "",
-      action: input.action,
-      settingElements: input.settingElements,
-    });
+    return [
+      referenceMap,
+      buildReferenceGuidedScenePrompt({
+        // Compact scene for reference editing: identity maps stay explicit while
+        // the scene remains short enough to avoid copying portrait composition.
+        scene: input.refScene || input.prompt,
+        characters: input.characterBible || "",
+        style: input.style,
+        world: input.worldSetting || "",
+        action: input.action,
+        settingElements: input.settingElements,
+      }),
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
   return buildColoringPagePrompt({
     scene: input.prompt,
