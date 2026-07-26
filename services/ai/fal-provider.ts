@@ -730,7 +730,7 @@ export class FalImageProvider implements ImageAIProvider {
  * - Flux text-to-image (dev/pro/schnell): `image_size` + steps/guidance.
  * - Other img2img endpoints keep the legacy `strength` param.
  */
-function buildFalBody(params: {
+export function buildFalBody(params: {
   prompt: string;
   endpoint: string;
   isCharacterSheet: boolean;
