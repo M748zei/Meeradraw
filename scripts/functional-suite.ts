@@ -956,6 +956,7 @@ async function runHttpSmoke() {
     ["/api/license/activate", { license_key: "AAAA-BBBB-CCCC" }],
     ["/api/ai/enrich-idea", { idea: "une idée de livre de coloriage" }],
     ["/api/checkout", { pack_id: "recharge" }],
+    ["/api/access/reconcile", {}],
   ];
   for (const [path, body] of authedPosts) {
     await test(`POST ${path} without auth → 401`, async () => {
