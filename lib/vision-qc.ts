@@ -223,13 +223,22 @@ Check ALL five product requirements:
 5. PROFESSIONAL LINE ART: clean organic children's-book ink drawing with controlled varied line weight and readable forms; generic emoji/clipart look, huge glossy eyes, malformed shapes or careless tangencies fail.
 JSON schema: {"lineup": <boolean>, "action_visible": <boolean>, "environment_rich": <boolean>, "anatomy_valid": <boolean>, "professional_line_art": <boolean>, "issue": "<brief list of every failed requirement>"}`
   );
-  if (!result || typeof result.lineup !== "boolean") return null;
+  if (
+    !result ||
+    typeof result.lineup !== "boolean" ||
+    typeof result.action_visible !== "boolean" ||
+    typeof result.environment_rich !== "boolean" ||
+    typeof result.anatomy_valid !== "boolean" ||
+    typeof result.professional_line_art !== "boolean"
+  ) {
+    return null;
+  }
   return {
     lineup: result.lineup,
-    actionVisible: Boolean(result.action_visible),
-    environmentRich: Boolean(result.environment_rich),
-    anatomyValid: Boolean(result.anatomy_valid),
-    professionalLineArt: Boolean(result.professional_line_art),
+    actionVisible: result.action_visible,
+    environmentRich: result.environment_rich,
+    anatomyValid: result.anatomy_valid,
+    professionalLineArt: result.professional_line_art,
     issue: result.issue ? String(result.issue).slice(0, 240) : undefined,
   };
 }
