@@ -23,15 +23,57 @@ import { fetchWithTimeout } from "@/lib/async";
 import { cn, formatCredits } from "@/lib/utils";
 import { Check, Sparkles, Upload } from "lucide-react";
 
-const ACCEPTED_PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const ACCEPTED_PHOTO_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+]);
+const MAX_UPLOAD_DATA_BYTES = 2_800_000;
+const MAX_SOURCE_PHOTO_BYTES = 12_000_000;
 
 function isAcceptedPhotoFile(file: File): boolean {
   if (ACCEPTED_PHOTO_TYPES.has(file.type.toLowerCase())) return true;
   // Some mobile browsers leave type empty — fall back to extension.
   if (!file.type) {
-    return /\.(jpe?g|png|webp)$/i.test(file.name);
+    return /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name);
   }
   return false;
+}
+
+async function readPhotoAsDataUrl(file: Blob): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Lecture impossible"));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function compressPhotoForUpload(file: File): Promise<File> {
+  if (file.size <= MAX_UPLOAD_DATA_BYTES) return file;
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    bitmap.close();
+    throw new Error("Canvas indisponible");
+  }
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (value) => (value ? resolve(value) : reject(new Error("Compression impossible"))),
+      "image/jpeg",
+      0.86
+    );
+  });
+  if (blob.size > MAX_UPLOAD_DATA_BYTES) throw new Error("Photo encore trop lourde");
+  return new File([blob], "photo-enfant.jpg", { type: "image/jpeg" });
 }
 
 export default function CreateForChildPage() {
@@ -70,44 +112,49 @@ export default function CreateForChildPage() {
     return theme.ideaTemplate(name);
   }, [theme, childName, parentStory, gender]);
 
-  function onPhotoChange(file: File | null) {
+  async function onPhotoChange(file: File | null) {
     setPhotoPreview(null);
     setPhotoBase64(null);
     setPhotoError(null);
     if (!file) return;
 
-    const mime = (file.type || "").toLowerCase();
-    if (mime === "image/heic" || mime === "image/heif" || /\.heic$/i.test(file.name)) {
-      setPhotoError(
-        "Format HEIC non pris en charge. Ouvrez la photo dans Photos, puis exportez-la en JPG."
-      );
-      return;
-    }
     if (!isAcceptedPhotoFile(file)) {
-      setPhotoError("Photo : JPG, PNG ou WebP uniquement.");
+      setPhotoError("Photo : JPG, PNG, WebP, HEIC ou HEIF uniquement.");
       return;
     }
-    if (file.size > 5_000_000) {
-      setPhotoError("Photo trop lourde (max 5 Mo).");
+    if (file.size > MAX_SOURCE_PHOTO_BYTES) {
+      setPhotoError("Photo trop lourde (max 12 Mo).");
       return;
     }
 
-    const reader = new FileReader();
-    reader.onerror = () => {
-      setPhotoError("Impossible de lire la photo. Réessayez avec un autre fichier.");
-    };
-    reader.onload = () => {
-      const dataUrl = String(reader.result || "");
-      if (!dataUrl.startsWith("data:image/")) {
-        setPhotoError("Photo invalide. Réessayez avec un JPG, PNG ou WebP.");
+    try {
+      const mime = (file.type || "").toLowerCase();
+      const isHeic =
+        mime === "image/heic" ||
+        mime === "image/heif" ||
+        /\.(heic|heif)$/i.test(file.name);
+
+      let prepared = file;
+      if (!isHeic) {
+        prepared = await compressPhotoForUpload(file);
+      } else if (file.size > MAX_UPLOAD_DATA_BYTES) {
+        setPhotoError(
+          "Cette photo HEIC dépasse 2,8 Mo. Sur iPhone, choisissez « Le plus compatible » ou exportez-la en JPG."
+        );
         return;
       }
+
+      const dataUrl = await readPhotoAsDataUrl(prepared);
+      if (!dataUrl.startsWith("data:image/")) throw new Error("Photo invalide");
       setPhotoPreview(dataUrl);
       setPhotoBase64(dataUrl);
       setPhotoError(null);
       setError(null);
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      setPhotoError(
+        "Impossible de préparer cette photo. Essayez un autre fichier ou exportez-la en JPG."
+      );
+    }
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -384,8 +431,7 @@ export default function CreateForChildPage() {
             <span className="font-normal text-ink-muted">(recommandée)</span>
           </div>
           <p className="text-xs text-ink-muted">
-            Pour que le héros lui ressemble. Portrait clair, visage visible. JPG, PNG
-            ou WebP · max 5 Mo. Optionnel.
+            Pour que le héros lui ressemble. Portrait clair, visage visible. JPG, PNG, WebP, HEIC ou HEIF · max 12 Mo. Optionnel.
           </p>
           {/*
             Nuclear file picker: input sits ON TOP (z-20) covering 100% of the zone.
@@ -401,14 +447,14 @@ export default function CreateForChildPage() {
               id="child-photo"
               name="child-photo"
               type="file"
-              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+              accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif"
               aria-labelledby="child-photo-label"
               data-testid="child-photo-input"
               className="file-drop-input"
               disabled={loading}
               onChange={(e) => {
                 const file = e.target.files?.[0] ?? null;
-                onPhotoChange(file);
+                void onPhotoChange(file);
                 // Reset after read so the same file can be chosen again.
                 e.currentTarget.value = "";
               }}
