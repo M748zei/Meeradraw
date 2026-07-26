@@ -117,6 +117,10 @@ function isParentBook(book: Book): boolean {
   return book.source === "parent_create";
 }
 
+function requiresPremiumVisualQuality(book: Book): boolean {
+  return isParentBook(book) || book.type === "colorbook";
+}
+
 function lightResearchBrief(idea: string) {
   return {
     topic: idea.slice(0, 120),
@@ -373,7 +377,7 @@ export class GenerationOrchestrator {
   ): Promise<void> {
     await this.ensureActive(userId, bookId, generationId);
     const book = await this.books.get(userId, bookId);
-    const maxPasses = isParentBook(book)
+    const maxPasses = requiresPremiumVisualQuality(book)
       ? PARENT_HEAL_PASSES
       : STUDIO_HEAL_PASSES;
     if (pass > maxPasses) {
@@ -457,7 +461,7 @@ export class GenerationOrchestrator {
           identityFromPhoto: Boolean(photoUrl),
           expectedCast: sheetCast,
           qcStats: sheetStats,
-          strictQuality: parentMode,
+          strictQuality: requiresPremiumVisualQuality(book),
           ...(parentMode ? PARENT_FAL_CAPS : STUDIO_FAL_CAPS),
         });
         await this.setQcImage(generationId, "model_sheet", sheetStats);
@@ -592,7 +596,7 @@ export class GenerationOrchestrator {
       worldNegative,
       expectedCast: expectedCastFor(coverHero),
       qcStats: coverStats,
-      strictQuality: parentMode,
+      strictQuality: requiresPremiumVisualQuality(book),
       ...(parentMode
         ? {
             ...PARENT_FAL_CAPS,
@@ -741,9 +745,8 @@ export class GenerationOrchestrator {
       // uses that character's crop; a multi-character scene uses the full sheet.
       const soloCrop =
         characterIds.length === 1 ? sheetCrops[characterIds[0]]?.url : undefined;
-      const pageReference = parentMode
-        ? soloCrop || book.character_sheet_url || undefined
-        : soloCrop;
+      const pageReference =
+        soloCrop || book.character_sheet_url || undefined;
       const expectedCast = planPage
         ? expectedCastFor(charactersForPage(plan, planPage))
         : expectedCastFor(
@@ -783,7 +786,7 @@ export class GenerationOrchestrator {
         worldNegative,
         expectedCast,
         qcStats: pageStats,
-        strictQuality: parentMode,
+        strictQuality: requiresPremiumVisualQuality(book),
         ...(parentMode
           ? {
               ...PARENT_FAL_CAPS,
@@ -854,6 +857,7 @@ export class GenerationOrchestrator {
         ...(d.data() as Record<string, unknown>),
       }));
     const parentMode = isParentBook(book);
+    const strictDelivery = requiresPremiumVisualQuality(book);
     const completedCount = pageDocs.filter(
       (p) => p.generation_status === "completed"
     ).length;
@@ -864,7 +868,7 @@ export class GenerationOrchestrator {
     // Never mark a book "completed" with blank pages
     if (completedCount === 0) {
       await this.books.update(userId, bookId, {
-        status: parentMode ? "draft" : "failed",
+        status: strictDelivery ? "draft" : "failed",
         active_generation_id: null,
       });
       await this.credits.refund(
@@ -890,8 +894,8 @@ export class GenerationOrchestrator {
     }
 
     const plannedPages = book.page_count || pageDocs.length;
-    // Parent promise: never ship an incomplete book as "ready".
-    if (parentMode && completedCount < plannedPages) {
+    // Product promise: no paid coloring book ships incomplete or below QC.
+    if (strictDelivery && completedCount < plannedPages) {
       await this.books.update(userId, bookId, {
         status: "draft",
         active_generation_id: null,
@@ -977,12 +981,11 @@ export class GenerationOrchestrator {
           visionRerolls: qcSummary.vision_rerolls,
         });
 
-    // Parent: all pages OK → completed (no lineup soft-fail).
-    // Studio: partial when pages missing; lineup score is telemetry only (no soft-fail gate).
+    // Strict coloring books reached this point only when every promised page passed.
     const bookStatus =
-      failedCount > 0 ? (parentMode ? "failed" : "partial") : "completed";
+      failedCount > 0 ? (strictDelivery ? "failed" : "partial") : "completed";
     const genStatus =
-      failedCount > 0 ? (parentMode ? "failed" : "partial") : "completed";
+      failedCount > 0 ? (strictDelivery ? "failed" : "partial") : "completed";
 
     await this.books.update(userId, bookId, {
       status: bookStatus === "failed" ? "failed" : bookStatus,
@@ -1036,8 +1039,8 @@ export class GenerationOrchestrator {
       duration_ms: Date.now() - started,
       error_message:
         failedCount > 0
-          ? parentMode
-            ? "Le cahier n'est pas complet. Réessayez — on vise toutes les pages."
+          ? strictDelivery
+            ? "Le cahier n'est pas complet ou n'a pas passé le contrôle qualité. Vos crédits sont protégés."
             : `${failedCount} page(s) sans illustration — utilisez « Régénérer cette page ».`
           : null,
     });
@@ -1114,7 +1117,10 @@ export class GenerationOrchestrator {
         if (active != null && active !== generationId) return;
         tx.update(bookRef, {
           status:
-            snap.data()?.source === "parent_create" ? "draft" : "failed",
+            snap.data()?.source === "parent_create" ||
+            snap.data()?.type === "colorbook"
+              ? "draft"
+              : "failed",
           active_generation_id: null,
           updated_at: new Date().toISOString(),
         });
