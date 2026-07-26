@@ -30,20 +30,20 @@ export type StyleContract = {
 };
 
 const BASE_COLORING =
-  "Bold uniform black outlines, closed shapes, large colorable white areas, pure B&W line art, no grey shading, no color fills, no photorealism, no text, no watermark. Friendly child faces with dark pupils and iris in each eye; natural round child heads — never blank white eyes, never elongated or deformed skulls.";
+  "Professional hand-inked children's-book line art with clean ORGANIC contours and gently varied line weight, closed shapes, large colorable white areas, pure B&W, no grey shading, no color fills, no photorealism, no text, no watermark. Natural expressive child faces with modest readable eyes, dark pupils and iris — never emoji eyes, giant glossy eyes, generic vector clipart, elongated heads or malformed anatomy.";
 
 const CONTRACTS: Record<StyleId, StyleContract> = {
   simple: {
     id: "simple",
-    density: "sparse",
-    kontextCue: "Simple beginner: very thick outlines, few large shapes, chunky silhouettes.",
-    imageCraft: `${BASE_COLORING} SIMPLE beginner style: VERY thick outlines, few large shapes, minimal interior detail, max 1–2 props, easy for ages 3–5 to color. Silhouettes chunky and clear.`,
+    density: "balanced",
+    kontextCue: "Premium preschool ink: simple large shapes, rich scene, organic varied outlines.",
+    imageCraft: `${BASE_COLORING} PREMIUM PRESCHOOL style: simple large closed shapes and clear silhouettes, but a COMPLETE scene with foreground, midground and background plus 6–10 large colorable props/zones. Easy for ages 3–5 without looking empty or cheap.`,
     visualLockRules:
       "visualLock: age, simple skin tone, simple hair shape, round friendly face, chunky body, ONE solid outfit color described as line pattern, ONE accessory max. Keep descriptors short.",
     worldBias:
-      "Décors minimalistes mais présents : 2–4 grands éléments colorables (arbre, maison, nuage, sol). Pas de micro-détail.",
+      "Décors complets mais simples : premier plan, plan moyen et arrière-plan, avec 6–10 grands éléments fermés à colorier. Pas de micro-détail ni de grand vide.",
     forbidden:
-      "no fine hatching, no tiny patterns, no crowded backgrounds, no thin sketchy lines, no complex architecture",
+      "no fine hatching, no tiny patterns, no crowded backgrounds, no empty scenery, no generic clipart, no giant glossy eyes, no complex architecture",
   },
   kawaii: {
     id: "kawaii",
