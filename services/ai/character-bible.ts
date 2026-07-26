@@ -10,7 +10,9 @@ export function maxCastForPageCount(pageCount: number): number {
 
 /** Parent books: tiny cast — hero child (+ optional one friend). */
 export function maxCastForParentBook(): number {
-  return 2;
+  // Hero + story companion/animal + one supporting person (for example Aïcha).
+  // The previous cap of 2 silently deleted named characters from the parent's story.
+  return 3;
 }
 
 export type NormalizeStoryPlanOpts = {
@@ -139,36 +141,24 @@ export function enforceParentChildHero(
     introducedOnPage: 1,
   };
 
-  // Prefer hero-only; keep at most one DISTINCT supporting child (never a lookalike).
+  // Keep up to two DISTINCT story characters. Preserve their real age and
+  // species: an adult stays an adult and an animal stays that exact animal.
   const others = characters
     .filter((_, i) => i !== heroIdx)
-    .slice(0, 1)
+    .slice(0, 2)
     .map((c, i) => {
-      const lock = stripAdultWording(c.visualLock || c.appearance || "");
+      const lock = c.visualLock || c.appearance || "";
       const looksLikeHero =
         norm(c.name) === norm(name) ||
         /same (face|outfit|hair)|identical|twin|clone/i.test(
           `${c.visualLock} ${c.description}`
         );
       if (looksLikeHero) return null;
-      const isAdultish = /adult|woman|man|mother|father|elderly|grand/i.test(
-        `${c.visualLock} ${c.ageBand} ${c.description}`
-      );
-      if (isAdultish) {
-        return {
-          ...c,
-          id: `char_${i + 2}`,
-          name: c.name === name ? "Ami" : c.name,
-          ageBand: "child friend ~same age",
-          visualLock: `${lock}, DISTINCT child friend different face/hair/outfit from ${name}, NOT a clone, NOT an adult`,
-          body: "small child",
-          proportions: "child proportions",
-        };
-      }
       return {
         ...c,
         id: `char_${i + 2}`,
-        visualLock: `${lock}, DISTINCT from hero ${name}, different face hair outfit, never a twin clone`,
+        name: c.name === name ? `Compagnon ${i + 1}` : c.name,
+        visualLock: `${lock}, EXACT same age/species/face/body/outfit on every appearance, DISTINCT from hero ${name}, never a twin or clone`,
       };
     })
     .filter(Boolean) as StoryCharacter[];
@@ -511,22 +501,25 @@ export function normalizeStoryPlan(
       pageSetting: (p.pageSetting || "").trim() || undefined,
       focalPoint: (p.focalPoint || "").trim() || undefined,
       storyText: clampStoryText(p.storyText),
-      // The canned-environment injector predates the structured storyboard and
-      // can hijack the world (verified: a generic "indoor kitchen with tiled
-      // wall" turned an African village page into a modern European kitchen).
-      // When the model provided its own pageSetting, trust it — only pages
-      // WITHOUT a structured setting get the legacy environment inference.
-      illustrationDescription: (p.pageSetting || "").trim()
-        ? `${ensureSceneMentionsCast(p.illustrationDescription, characters, characterIds)} No empty white void. No floating characters. Simplified mitten-style kid hands or hands holding objects. Max 2 characters.`
-        : ensureRichEnvironment(
-            ensureSceneMentionsCast(
-              p.illustrationDescription,
-              characters,
-              characterIds
-            ),
-            p.storyText,
-            plan.world?.setting
-          ),
+      // Every paid page gets the environment-enrichment contract, including
+      // pages where the LLM supplied pageSetting. The scene stays authoritative;
+      // enrichment only adds colorable depth and never substitutes another world.
+      illustrationDescription: ensureRichEnvironment(
+        ensureSceneMentionsCast(
+          [
+            p.illustrationDescription,
+            (p.pageSetting || "").trim()
+              ? `THIS PAGE'S SETTING: ${p.pageSetting}.`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
+          characters,
+          characterIds
+        ),
+        p.storyText,
+        plan.world?.setting
+      ),
       negativePrompt: (p.negativePrompt || "").trim() || DEFAULT_PAGE_NEGATIVE,
     };
   });
@@ -1249,13 +1242,15 @@ function ensureRichEnvironment(
       : "ENVIRONMENT: rich colorable setting with mid-ground props and simple background (never empty white void, never only tiny grass tufts).";
   }
 
+  const richness =
+    "COLORING VALUE: compose a coherent foreground, midground and background with 6–10 LARGE CLOSED colorable objects/zones specific to this scene; ground and sky must also contain meaningful closed shapes. Hero occupies at most 35% of the page. Organic professional ink contours with gently varied line weight — never generic vector clipart or giant glossy emoji eyes.";
   const bans =
-    "No empty white void. No floating characters. Simplified mitten-style kid hands or hands holding objects. Max 2 characters.";
+    "No empty white void. No floating characters. No malformed, missing, fused or duplicated limbs. Simplified readable child hands holding objects when relevant. Max 2 characters.";
 
   // If the model already wrote its own ENVIRONMENT: block, keep it (Fix B: don't stack
   // conflicting canned environments on top of the model's own scene-derived one).
   if (scene.toLowerCase().includes("environment:")) {
-    return `${scene} ${bans}`.trim();
+    return `${scene} ${richness} ${bans}`.trim();
   }
-  return `${scene} ${envHint} ${bans}`.trim();
+  return `${scene} ${envHint} ${richness} ${bans}`.trim();
 }
