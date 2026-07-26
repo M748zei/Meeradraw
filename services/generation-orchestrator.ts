@@ -866,7 +866,13 @@ export class GenerationOrchestrator {
     const parentMode = isParentBook(book);
     const strictDelivery = requiresPremiumVisualQuality(book);
     const completedCount = pageDocs.filter(
-      (p) => p.generation_status === "completed"
+      (p) =>
+        p.generation_status === "completed" &&
+        (!strictDelivery ||
+          (typeof p.illustration_url === "string" &&
+            Boolean(p.illustration_url) &&
+            typeof p.illustration_path === "string" &&
+            Boolean(p.illustration_path)))
     ).length;
     const failedCount = pageDocs.filter(
       (p) => p.generation_status === "failed"
@@ -939,6 +945,7 @@ export class GenerationOrchestrator {
       title: full.title,
       subtitle: full.subtitle,
       coverUrl: full.cover_image,
+      strict: strictDelivery,
       pages: full.pages.map((p) => ({
         pageNumber: p.page_number,
         title: p.title,
@@ -959,6 +966,11 @@ export class GenerationOrchestrator {
       );
     } catch (uploadErr) {
       pdfPath = null;
+      if (strictDelivery) {
+        throw new Error(
+          `Strict PDF storage upload failed: ${uploadErr instanceof Error ? uploadErr.message : String(uploadErr)}`
+        );
+      }
       console.error("PDF storage upload failed; trying inline data URL", uploadErr);
       const dataUrl = `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`;
       const firestoreSafeLimit = 800_000;
@@ -969,6 +981,10 @@ export class GenerationOrchestrator {
           "PDF data URL exceeds Firestore-safe size; pdf_url left null — use /api/pdf/export"
         );
       }
+    }
+
+    if (strictDelivery && (!pdfUrl || !pdfPath)) {
+      throw new Error("Strict delivery requires a persisted PDF artifact");
     }
 
     // QC telemetry: studio only (parent path never writes/displays a quality score).
