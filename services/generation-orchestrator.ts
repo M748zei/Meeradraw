@@ -500,30 +500,105 @@ export class GenerationOrchestrator {
       throw new Error("Premium colorbook cast sheet failed strict visual quality");
     }
 
-    // Per-character crops: solo pages use the exact character crop; multi-cast
-    // pages use the full validated sheet so animals/adults cannot mutate.
-    if (characterSheetUrl) {
-      const sheetCrops = await buildSheetCrops(
-        characterSheetUrl,
-        plan.characters,
-        `${universeId}/books/${bookId}/generations/${generationId}`,
-        this.storage
-      );
-      await this.db.collection("universes").doc(universeId).update({
-        model_sheet_crops: sheetCrops,
-        updated_at: new Date().toISOString(),
-      });
-      const afterChars = await charsRef.get();
-      const sheetBatch = this.db.batch();
-      afterChars.docs.forEach((d) => {
-        sheetBatch.update(d.ref, { image_reference: characterSheetUrl });
-      });
-      await sheetBatch.commit();
-    } else {
-      console.warn(
-        "hero portrait implausible/unavailable after retries; pages will use TEXT-ONLY generation (no Kontext reference)"
-      );
+    // Generate and validate one immutable portrait per character. Composite-sheet
+    // slicing is forbidden: it silently swaps identities when spacing is uneven.
+    const individualReferences: Record<string, { url: string; path: string }> = {};
+    for (const [characterIndex, character] of plan.characters.entries()) {
+      for (let attempt = 1; attempt <= sheetAttempts; attempt++) {
+        try {
+          const portraitStats: ImageQcStats = {};
+          const photoReference =
+            character.id === "char_1" || characterIndex === 0 ? photoUrl : undefined;
+          const portrait = await imageProvider.generateImage({
+            prompt: photoReference
+              ? "single premium cartoon character portrait matching the child reference"
+              : "single premium cartoon character portrait",
+            style,
+            characterBible: formatCharacterLock([character]),
+            worldSetting,
+            isCharacterSheet: true,
+            referenceImageUrl: photoReference,
+            identityFromPhoto: Boolean(photoReference),
+            expectedCast: expectedCastFor([character]),
+            qcStats: portraitStats,
+            strictQuality: strictVisual,
+            ...(strictVisual
+              ? {
+                  ...PARENT_FAL_CAPS,
+                  seed: pageStyleSeed(bookId, 1000 + characterIndex * 10 + attempt),
+                  consistencyMode: true,
+                }
+              : STUDIO_FAL_CAPS),
+          });
+          await this.setQcImage(
+            generationId,
+            `character_${character.id}`,
+            portraitStats
+          );
+          if (await this.isImplausibleHero(portrait.url)) continue;
+          const persisted = await this.storage.persistImageFromUrl(
+            portrait.url,
+            `universes/${universeId}/books/${bookId}/generations/${generationId}/characters/${character.id}.png`
+          );
+          if (strictVisual && !persisted.path) {
+            throw new Error(`Character ${character.name} portrait was not persisted`);
+          }
+          individualReferences[character.id] = {
+            url: persisted.url,
+            path: persisted.path || "",
+          };
+          break;
+        } catch (portraitError) {
+          console.warn(
+            `character portrait ${character.name} attempt ${attempt}/${sheetAttempts} failed`,
+            portraitError
+          );
+        }
+      }
+      if (strictVisual && !individualReferences[character.id]) {
+        throw new Error(
+          `Premium character reference failed for ${character.name}`
+        );
+      }
     }
+
+    const effectiveReferences =
+      Object.keys(individualReferences).length > 0
+        ? individualReferences
+        : characterSheetUrl
+          ? await buildSheetCrops(
+              characterSheetUrl,
+              plan.characters,
+              `${universeId}/books/${bookId}/generations/${generationId}`,
+              this.storage
+            )
+          : {};
+    if (
+      strictVisual &&
+      plan.characters.some((character) => !effectiveReferences[character.id]?.url)
+    ) {
+      throw new Error("Premium book is missing an individual character reference");
+    }
+    await this.db.collection("universes").doc(universeId).update({
+      model_sheet_crops: effectiveReferences,
+      updated_at: new Date().toISOString(),
+    });
+    const afterChars = await charsRef.get();
+    const sheetBatch = this.db.batch();
+    afterChars.docs.forEach((doc) => {
+      const data = doc.data();
+      const character = plan.characters.find(
+        (candidate) =>
+          candidate.id === doc.id ||
+          candidate.id === data.id ||
+          candidate.name === data.name
+      );
+      const reference = character
+        ? effectiveReferences[character.id]?.url
+        : characterSheetUrl;
+      if (reference) sheetBatch.update(doc.ref, { image_reference: reference });
+    });
+    await sheetBatch.commit();
 
     await this.books.update(userId, bookId, {
       character_sheet_url: characterSheetUrl,
@@ -578,8 +653,22 @@ export class GenerationOrchestrator {
       plan.pages.find((p) => p.action)?.action ||
       plan.summary;
     const coverStats: ImageQcStats = {};
-    // Prefer sheet identity (photo→cartoon) + server title overlay — never a random crowd.
-    const useOverlayTitle = Boolean(characterSheetUrl);
+    const coverReferenceMap =
+      (universeSnap.data()?.model_sheet_crops as Record<
+        string,
+        { url: string; path: string }
+      >) || {};
+    const coverReferenceImageUrls = coverHero
+      .map((character) => coverReferenceMap[character.id]?.url)
+      .filter((url): url is string => Boolean(url));
+    if (
+      requiresPremiumVisualQuality(book) &&
+      coverReferenceImageUrls.length !== coverHero.length
+    ) {
+      throw new Error("Premium cover is missing an individual character reference");
+    }
+    // Prefer individual identity sources + server title overlay.
+    const useOverlayTitle = coverReferenceImageUrls.length > 0;
     const coverGender =
       (typeof book.child_gender === "string" && book.child_gender.trim()) ||
       undefined;
@@ -589,8 +678,12 @@ export class GenerationOrchestrator {
       characterBible: formatCharacterLock(coverHero),
       worldSetting,
       isCover: true,
-      referenceImageUrl: characterSheetUrl || undefined,
-      forceTextOnly: !characterSheetUrl,
+      referenceImageUrl:
+        coverReferenceImageUrls[0] || characterSheetUrl || undefined,
+      referenceImageUrls:
+        coverReferenceImageUrls.length > 0 ? coverReferenceImageUrls : undefined,
+      forceTextOnly:
+        coverReferenceImageUrls.length === 0 && !characterSheetUrl,
       coverTitle: useOverlayTitle ? undefined : plan.title,
       action: coverAction,
       refScene: `${coverAction}. Draw ONLY the one hero child in action — no crowd of extra children.`,
@@ -753,17 +846,23 @@ export class GenerationOrchestrator {
         .join(" ");
 
       const pageStats: ImageQcStats = {};
-      // Paid parent pages must inherit the validated visual cast. A solo scene
-      // uses that character's crop; a multi-character scene uses the full sheet.
-      const soloCrop =
-        characterIds.length === 1 ? sheetCrops[characterIds[0]]?.url : undefined;
-      const pageReference =
-        soloCrop || book.character_sheet_url || undefined;
-      const expectedCast = planPage
-        ? expectedCastFor(charactersForPage(plan, planPage))
-        : expectedCastFor(
-            plan.characters.filter((c) => characterIds.includes(c.id))
+      const pageCharacters = planPage
+        ? charactersForPage(plan, planPage)
+        : plan.characters.filter((character) =>
+            characterIds.includes(character.id)
           );
+      const expectedCast = expectedCastFor(pageCharacters);
+      const referenceImageUrls = pageCharacters
+        .map((character) => sheetCrops[character.id]?.url)
+        .filter((url): url is string => Boolean(url));
+      if (
+        requiresPremiumVisualQuality(book) &&
+        referenceImageUrls.length !== pageCharacters.length
+      ) {
+        throw new Error("Premium page is missing an ordered character reference");
+      }
+      const pageReference =
+        referenceImageUrls[0] || book.character_sheet_url || undefined;
       const settingElements = settingElementsForScene(
         settingBible?.elements,
         `${scene} ${storyText}`
@@ -789,6 +888,8 @@ export class GenerationOrchestrator {
         worldSetting,
         isColoringPage: true,
         referenceImageUrl: pageReference,
+        referenceImageUrls:
+          referenceImageUrls.length > 0 ? referenceImageUrls : undefined,
         forceTextOnly: !pageReference,
         refScene: (page.ref_scene as string) || undefined,
         shotType,

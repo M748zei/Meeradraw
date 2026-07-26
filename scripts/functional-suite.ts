@@ -121,6 +121,49 @@ async function runLogicTests() {
     assert(rejected, "strict PDF must reject a missing cover/page");
   });
 
+  await test("fal multi-reference body preserves ordered portraits", async () => {
+    const { buildFalBody } = await import("../services/ai/fal-provider");
+    const body = buildFalBody({
+      prompt: "@image1 Mina and @image2 Léo explore the garden",
+      endpoint: "https://fal.run/fal-ai/flux-2-pro/edit",
+      isCharacterSheet: false,
+      referenceImageUrls: [
+        "https://storage.googleapis.com/test/mina.png",
+        "https://storage.googleapis.com/test/leo.png",
+      ],
+      seed: 42,
+    });
+    assert(
+      JSON.stringify(body.image_urls) ===
+        JSON.stringify([
+          "https://storage.googleapis.com/test/mina.png",
+          "https://storage.googleapis.com/test/leo.png",
+        ]),
+      "ordered image_urls must be preserved"
+    );
+    assert(body.image_size === "portrait_4_3", "native portrait output");
+    assert(!("image_url" in body), "multi-reference must not degrade to one image");
+    assert(!("guidance_scale" in body), "Flux 2 Pro rejects dev-only tuning");
+  });
+
+  await test("fal multi-reference body rejects a single portrait", async () => {
+    const { buildFalBody, NonRetryableFalError } = await import(
+      "../services/ai/fal-provider"
+    );
+    let rejected = false;
+    try {
+      buildFalBody({
+        prompt: "scene",
+        endpoint: "https://fal.run/fal-ai/flux-2-pro/edit",
+        isCharacterSheet: false,
+        referenceImageUrls: ["https://storage.googleapis.com/test/mina.png"],
+      });
+    } catch (error) {
+      rejected = error instanceof NonRetryableFalError;
+    }
+    assert(rejected, "multi-reference endpoint requires at least two portraits");
+  });
+
   await test("estimateBookCost colorbook 12 pages", () => {
     // cover 5 + 12*2 + pdf 1 = 30
     assert(estimateBookCost(12, "colorbook") === 30, `got ${estimateBookCost(12)}`);
