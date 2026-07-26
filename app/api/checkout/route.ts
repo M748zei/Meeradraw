@@ -1,7 +1,8 @@
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit-store";
-import { CREDIT_PACKS } from "@/config/credits";
+import { RECHARGE_PACKS } from "@/config/credits";
+import { safeRechargeReturnPath } from "@/lib/recharge-return";
 import { z } from "zod";
 
 /**
@@ -13,12 +14,11 @@ import { z } from "zod";
  */
 
 const schema = z.object({
-  pack_id: z.enum(
-    CREDIT_PACKS.map((p) => p.id) as [string, ...string[]]
-  ),
+  pack_id: z.string().refine((id) => RECHARGE_PACKS.some((pack) => pack.id === id)),
   phone: z
     .object({ number: z.string().min(6).max(20), country_code: z.string().length(2) })
     .optional(),
+  return_to: z.string().max(300).optional(),
 });
 
 const API_BASE = () => process.env.CHARIOW_API_BASE || "https://api.chariow.com/v1";
@@ -28,7 +28,8 @@ export async function POST(request: Request) {
     const { db, user, profile } = await requireUser();
     rateLimit(`checkout:${user.id}`, { limit: 10, windowMs: 60_000 });
     const body = schema.parse(await request.json());
-    const pack = CREDIT_PACKS.find((p) => p.id === body.pack_id)!;
+    const pack = RECHARGE_PACKS.find((p) => p.id === body.pack_id)!;
+    const returnTo = safeRechargeReturnPath(body.return_to);
 
     const apiKey = process.env.CHARIOW_API_KEY?.trim();
     const storeBase = (process.env.NEXT_PUBLIC_CHARIOW_STORE_URL || "").replace(/\/[^/]*$/, "");
@@ -77,11 +78,13 @@ export async function POST(request: Request) {
           number: phone.number.replace(/\D/g, ""),
           country_code: phone.country_code.toUpperCase(),
         },
-        // Access product → dedicated open-access flow; credit packs → thank-you.
-        redirect_url:
-          "unlocksAccess" in pack && pack.unlocksAccess
-            ? `${appUrl}/ouvrir-mon-acces?sale={sale_id}`
-            : `${appUrl}/merci?sale={sale_id}`,
+        redirect_url: `${appUrl}/merci?sale={sale_id}${
+          returnTo ? `&return_to=${encodeURIComponent(returnTo)}` : ""
+        }`,
+        custom_metadata: {
+          meeradraw_user_id: user.id,
+          pack_id: pack.id,
+        },
       }),
       cache: "no-store",
     });
@@ -112,7 +115,11 @@ export async function POST(request: Request) {
         currency: "xof",
         status: "pending",
         reference: saleId,
-        metadata: { pack_id: pack.id, credits: pack.credits },
+        metadata: {
+          pack_id: pack.id,
+          credits: pack.credits,
+          return_to: returnTo,
+        },
         created_at: new Date().toISOString(),
       });
       return apiSuccess({ checkout_url: data.payment.checkout_url, sale_id: saleId });
