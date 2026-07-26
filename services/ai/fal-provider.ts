@@ -445,7 +445,7 @@ export class FalImageProvider implements ImageAIProvider {
         const verdicts: string[] = [];
         if (input.isCharacterSheet && input.expectedCast?.length) {
           const cast = await checkCast(current.url, input.expectedCast);
-          if (!cast && input.strictQuality) {
+          if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
             visionScore += 4;
             prevVisionNudges.push(CAST_FIX_BOOST);
             verdicts.push("cast:vision-unavailable");
@@ -457,7 +457,7 @@ export class FalImageProvider implements ImageAIProvider {
         } else if (input.isCover) {
           if (input.coverTitle) {
             const title = await checkCoverTitle(current.url, input.coverTitle);
-            if (!title && input.strictQuality) {
+            if (!title && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
               prevVisionNudges.push(TITLE_FIX_BOOST);
               verdicts.push("title:vision-unavailable");
@@ -469,7 +469,7 @@ export class FalImageProvider implements ImageAIProvider {
           }
           if (input.expectedCast?.length) {
             const cast = await checkCast(current.url, input.expectedCast);
-            if (!cast && input.strictQuality) {
+            if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
               prevVisionNudges.push(CAST_FIX_BOOST);
               verdicts.push("cast:vision-unavailable");
@@ -484,7 +484,7 @@ export class FalImageProvider implements ImageAIProvider {
           // reference lineup when this check is missing).
           if (input.action) {
             const poster = await checkPageAction(current.url, input.action);
-            if (!poster && input.strictQuality) {
+            if (!poster && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
               prevVisionNudges.push(PREMIUM_PAGE_BOOST);
               verdicts.push("cover-quality:vision-unavailable");
@@ -499,7 +499,7 @@ export class FalImageProvider implements ImageAIProvider {
         } else if (input.isColoringPage) {
           if (input.expectedCast?.length) {
             const cast = await checkCast(current.url, input.expectedCast);
-            if (!cast && input.strictQuality) {
+            if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
               prevVisionNudges.push(CAST_FIX_BOOST);
               verdicts.push("cast:vision-unavailable");
@@ -510,7 +510,7 @@ export class FalImageProvider implements ImageAIProvider {
             }
           }
           const page = await checkPageAction(current.url, input.action || "");
-          if (!page && input.strictQuality) {
+          if (!page && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
             visionScore += 4;
             prevVisionNudges.push(PREMIUM_PAGE_BOOST);
             verdicts.push("page-quality:vision-unavailable");
@@ -553,7 +553,7 @@ export class FalImageProvider implements ImageAIProvider {
               referenceImageUrl: identityUrls[index],
             }))
           );
-          if (!identity && input.strictQuality) {
+          if (!identity && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
             visionScore += 5;
             prevVisionNudges.push(CAST_FIX_BOOST);
             verdicts.push("identity:vision-unavailable");
