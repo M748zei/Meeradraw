@@ -445,7 +445,8 @@ export class GenerationOrchestrator {
     // Pages are not allowed to invent the cast independently anymore.
     let characterSheetUrl: string | null = null;
     const sheetCast = expectedCastFor(plan.characters);
-    const sheetAttempts = parentMode ? PARENT_SHEET_MAX_ATTEMPTS : SHEET_MAX_ATTEMPTS;
+    const strictVisual = requiresPremiumVisualQuality(book);
+    const sheetAttempts = strictVisual ? PARENT_SHEET_MAX_ATTEMPTS : SHEET_MAX_ATTEMPTS;
     for (let attempt = 1; attempt <= sheetAttempts; attempt++) {
       try {
         const sheetStats: ImageQcStats = {};
@@ -461,8 +462,14 @@ export class GenerationOrchestrator {
           identityFromPhoto: Boolean(photoUrl),
           expectedCast: sheetCast,
           qcStats: sheetStats,
-          strictQuality: requiresPremiumVisualQuality(book),
-          ...(parentMode ? PARENT_FAL_CAPS : STUDIO_FAL_CAPS),
+          strictQuality: strictVisual,
+          ...(strictVisual
+            ? {
+                ...PARENT_FAL_CAPS,
+                seed: pageStyleSeed(bookId, 900 + attempt),
+                consistencyMode: true,
+              }
+            : STUDIO_FAL_CAPS),
         });
         await this.setQcImage(generationId, "model_sheet", sheetStats);
         if (await this.isImplausibleHero(sheet.url)) {
@@ -490,8 +497,8 @@ export class GenerationOrchestrator {
       }
     }
 
-    if (parentMode && !characterSheetUrl) {
-      throw new Error("Parent cast sheet failed strict visual quality");
+    if (strictVisual && !characterSheetUrl) {
+      throw new Error("Premium colorbook cast sheet failed strict visual quality");
     }
 
     // Per-character crops: solo pages use the exact character crop; multi-cast
@@ -787,7 +794,7 @@ export class GenerationOrchestrator {
         expectedCast,
         qcStats: pageStats,
         strictQuality: requiresPremiumVisualQuality(book),
-        ...(parentMode
+        ...(requiresPremiumVisualQuality(book)
           ? {
               ...PARENT_FAL_CAPS,
               seed: pageStyleSeed(bookId, pageNumber),
