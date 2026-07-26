@@ -190,53 +190,55 @@ export async function upsertPurchaseFromSale(
   const license = await resolveLicenseKey(db, sale, productId);
 
   const ref = db.collection(PURCHASES_COLLECTION).doc(saleId);
-  const existing = await ref.get();
-  const prev = existing.data() as Partial<PurchaseDoc> | undefined;
+  return db.runTransaction(async (tx) => {
+    const existing = await tx.get(ref);
+    const prev = existing.data() as Partial<PurchaseDoc> | undefined;
 
-  let status: PurchaseDoc["status"] =
-    category === "completed"
-      ? prev?.status === "attached"
-        ? "attached"
-        : "completed"
-      : category === "failed"
-        ? "failed"
-        : "pending_payment";
+    let status: PurchaseDoc["status"] =
+      category === "completed"
+        ? prev?.status === "attached"
+          ? "attached"
+          : "completed"
+        : category === "failed"
+          ? "failed"
+          : "pending_payment";
 
-  if (prev?.status === "refunded" || prev?.status === "cancelled") {
-    status = prev.status;
-  }
+    if (prev?.status === "refunded" || prev?.status === "cancelled") {
+      status = prev.status;
+    }
 
-  const doc: PurchaseDoc = {
-    sale_id: saleId,
-    email: email || prev?.email || "",
-    product_id: productId,
-    product_name: str(sale.product?.name) || prev?.product_name || null,
-    customer_id: str(sale.customer?.id) || prev?.customer_id || null,
-    status,
-    access_status:
-      prev?.access_status === "active"
-        ? "active"
-        : status === "completed"
-          ? "pending"
-          : prev?.access_status || "none",
-    user_id: prev?.user_id ?? null,
-    license_key: license.key || prev?.license_key || null,
-    license_id: license.licenseId || prev?.license_id || null,
-    pack_id: pack?.id ?? prev?.pack_id ?? null,
-    credits: pack?.credits ?? prev?.credits ?? null,
-    unlocks_access: packUnlocksAccess(productId),
-    purchased_at: sale.completed_at || sale.created_at || prev?.purchased_at || nowIso(),
-    access_started_at: prev?.access_started_at ?? null,
-    access_ends_at: license.expiresAt || prev?.access_ends_at || null,
-    max_devices: license.maxDevices ?? prev?.max_devices ?? null,
-    refunded_at: prev?.refunded_at ?? null,
-    source: prev?.source || source,
-    created_at: prev?.created_at || nowIso(),
-    updated_at: nowIso(),
-  };
+    const doc: PurchaseDoc = {
+      sale_id: saleId,
+      email: email || prev?.email || "",
+      product_id: productId,
+      product_name: str(sale.product?.name) || prev?.product_name || null,
+      customer_id: str(sale.customer?.id) || prev?.customer_id || null,
+      status,
+      access_status:
+        prev?.access_status === "active"
+          ? "active"
+          : status === "completed"
+            ? "pending"
+            : prev?.access_status || "none",
+      user_id: prev?.user_id ?? null,
+      license_key: license.key || prev?.license_key || null,
+      license_id: license.licenseId || prev?.license_id || null,
+      pack_id: pack?.id ?? prev?.pack_id ?? null,
+      credits: pack?.credits ?? prev?.credits ?? null,
+      unlocks_access: packUnlocksAccess(productId),
+      purchased_at: sale.completed_at || sale.created_at || prev?.purchased_at || nowIso(),
+      access_started_at: prev?.access_started_at ?? null,
+      access_ends_at: license.expiresAt || prev?.access_ends_at || null,
+      max_devices: license.maxDevices ?? prev?.max_devices ?? null,
+      refunded_at: prev?.refunded_at ?? null,
+      source: prev?.source || source,
+      created_at: prev?.created_at || nowIso(),
+      updated_at: nowIso(),
+    };
 
-  await ref.set(doc, { merge: true });
-  return doc;
+    tx.set(ref, doc, { merge: true });
+    return doc;
+  });
 }
 
 /**
@@ -418,7 +420,7 @@ export class AccessOpenService {
     }
 
     const purchaseRef = this.db.collection(PURCHASES_COLLECTION).doc(opts.saleId);
-    let purchaseSnap = await purchaseRef.get();
+    const purchaseSnap = await purchaseRef.get();
     let purchase = purchaseSnap.data() as PurchaseDoc | undefined;
 
     if (!purchase || purchase.status === "pending_payment") {
@@ -499,6 +501,42 @@ export class AccessOpenService {
         redirectTo: "/create",
       };
     }
+
+    // Claim ownership before any external activation or credit mutation.
+    // Two concurrent accounts must never be able to attach the same sale.
+    purchase = await this.db.runTransaction(async (tx) => {
+      const latestSnap = await tx.get(purchaseRef);
+      const latest = latestSnap.data() as PurchaseDoc | undefined;
+      if (!latest) {
+        throw new AppError("NOT_FOUND", "Nous n’avons pas retrouvé votre achat.", 404);
+      }
+      if (latest.user_id && latest.user_id !== opts.userId) {
+        throw new AppError(
+          "CONFLICT",
+          `Cet achat est déjà lié à un autre compte. Connectez-vous avec ${maskEmail(latest.email)} ou contactez ${SUPPORT_EMAIL}.`,
+          409
+        );
+      }
+      if (latest.email.trim().toLowerCase() !== userEmail) {
+        throw new AppError(
+          "FORBIDDEN",
+          `Pour protéger votre achat, connectez-vous avec l’adresse utilisée lors du paiement : ${maskEmail(latest.email)}.`,
+          403,
+          undefined,
+          { email_mismatch: true, email_masked: maskEmail(latest.email) }
+        );
+      }
+      tx.set(
+        purchaseRef,
+        {
+          user_id: opts.userId,
+          source: "attach",
+          updated_at: nowIso(),
+        },
+        { merge: true }
+      );
+      return { ...latest, user_id: opts.userId };
+    });
 
     const licenses = new LicenseService(this.db);
     let accessEndsAt = purchase.access_ends_at;
