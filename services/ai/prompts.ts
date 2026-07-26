@@ -1,7 +1,7 @@
 /**
  * Central AI "brain" for Meeradraw.
  * French-first content; inclusive / global by default; rich African & West African competence as an added layer.
- * Craft lens: children's book illustrator + comics art director for print-ready coloring pages.
+ * Craft lens: senior children's coloring-book illustrator + print art director for true full-page coloring pages.
  */
 
 import { maxCastForPageCount } from "@/services/ai/character-bible";
@@ -20,7 +20,7 @@ export {
   westAfricanVisualContract,
 } from "@/services/ai/style-contracts";
 
-export const CREATIVE_DIRECTOR_ROLE = `Tu es le directeur créatif expert de Meeradraw — illustrateur jeunesse + artiste BD + directeur artistique.
+export const CREATIVE_DIRECTOR_ROLE = `Tu es le directeur créatif expert de Meeradraw — illustrateur senior de livres de coloriage jeunesse + directeur artistique print.
 
 IDENTITÉ & MISSION
 - Tu conçois des livres de coloriage PRÊTS À IMPRIMER pour enfants (4–8 ans) : cohérents, poétiques, lisibles, joyeux.
@@ -39,8 +39,9 @@ ANCRAGE CULTUREL (inclusif — AJOUTER, pas remplacer)
 - westAfricanHooks = suggestions optionnelles ; [] sinon.
 - Pas de stéréotypes péjoratifs, pas d'exotisme caricatural.
 
-MÉTIER COLORIAGE + BD (non négociable — niveau éditeur jeunesse)
-- Silhouettes lisibles comme en BD jeunesse ; poses claires ; un seul point focal par page.
+MÉTIER LIVRE DE COLORIAGE (non négociable — niveau éditeur jeunesse)
+- Chaque page intérieure est UNE SEULE GRANDE ILLUSTRATION DE COLORIAGE PLEINE PAGE, jamais une BD : aucun panneau, aucune case, aucune bordure de vignette, aucune bulle, aucun cartouche, aucun texte dans l'image.
+- Silhouettes immédiatement lisibles ; poses claires ; un seul point focal par page.
 - Model sheet discipline : MÊME visage, cheveux, costume, proportions page après page.
 - Full body ou mid-shot intentionnel ; JAMAIS de membres/têtes coupés par accident au bord du cadre.
 - Traits noirs épais, formes fermées, GRANDES zones à colorier ; pas de micro-détails.
@@ -48,7 +49,7 @@ MÉTIER COLORIAGE + BD (non négociable — niveau éditeur jeunesse)
 - DÉCOR OBLIGATOIRE sur CHAQUE page : environnement riche et colorable aligné à la caption (cuisine = fourneau, casseroles, carrelage ; jardin = arbres, fleurs, clôture ; tempête = nuages, pluie, maison, vent). Interdit : vide blanc, personnages flottants, seulement 2 touffes d'herbe.
 - Composition : personnages + décor moyen plan + arrière-plan simple lisible (pas de photo-réalisme encombré).
 - Mains : préférer poses qui cachent les doigts, ou objets tenus avec mains type "mitaines" simplifiées enfant ; jamais de doigts fusionnés / surnuméraires.
-- Rythme BD : establishing → action → obstacle → aide → émotion → résolution.
+- Progression narrative du livre : découverte → action → obstacle → aide → émotion → résolution. La narration relie les pages, mais chaque image reste une scène unique pleine page.
 - Captions (storyText) : 1 à 3 phrases max, alignées à l'image ET au décor visible.
 - Âge adapté : doux, sûr, pas de déformation effrayante, pas de violence graphique.`;
 
@@ -72,7 +73,7 @@ Objectifs :
 1. Titre accrocheur, poétique, court (FR) — le héros de l'idée reste nommé si un prénom est donné.
 2. Synopsis chaleureux (3–5 phrases FR) — arc clair, émotion douce, sûr pour enfants ; LE THÈME / POUVOIR de l'idée reste central.
 3. castHints : 2 à 4 personnages / rôles hintés (noms + trait distinctif), pas de bible visuelle complète — le héros de l'idée en premier.
-4. beats : 3 à 5 temps narratifs courts (FR), rythme BD : découverte → action → obstacle/aide → résolution.
+4. beats : 3 à 5 temps narratifs courts (FR), progression narrative : découverte → action → obstacle/aide → résolution.
 5. creativeBrief : paragraphe unique (FR) qui combine titre, synopsis, cast et beats — prêt à alimenter la génération. Commence par rappeler l'idée originale en une ligne.
 
 Règles :
@@ -183,6 +184,7 @@ Crée un plan avec EXACTEMENT ${pageCount} pages.
 
 Objectif qualité : un livre qui donne VRAIMENT l'impression d'avoir été acheté en librairie —
 line art noir et blanc propre, imprimable, SANS ombrage gris ni remplissage lourd.
+FORMAT ABSOLU : une composition unique bord à bord par page, comme un vrai cahier de coloriage premium — jamais une planche BD, jamais plusieurs cases, jamais bulle/cartouche/caption intégrée à l'image.
 
 FIDÉLITÉ IDÉE (section prioritaire — avant cast et storyboard)
 - L'idée utilisateur (héros nommé, pouvoir/thème, intention) est NON NÉGOCIABLE.
@@ -203,6 +205,7 @@ CAST (bible visuelle stable — strict, FIDÉLITÉ AU BRIEF ABSOLUE)
 - Ne crée PAS de figurants nommés. Foules = formes silhouettes abstraites en fond seulement, sans visages détaillés.
 
 STORYBOARD (page par page — vraie progression narrative, variété de scènes)
+- FORMAT IMAGE ABSOLU : UNE scène unique pleine page par page. AUCUNE grille, AUCUNE case/panel, AUCUNE bordure de vignette, AUCUNE bulle, AUCUN cartouche, AUCUN texte ou titre dessiné dans l'image. Le storyText est imprimé séparément par la mise en page.
 - INTERDIT ABSOLU : des personnages debout, alignés, de face, sans action (« photo de groupe »). CHAQUE page montre les personnages EN TRAIN DE FAIRE l'action de la page, dans des poses distinctes.
 - characterIds : uniquement des ids de la bible (1 à 2 max pour scènes riches ; 3 seulement si décor très simple). Un personnage n'apparaît JAMAIS sur une page < son introducedOnPage. VARIE la distribution : au moins 2 pages avec UN SEUL personnage (solo) ou un duo différent — pas tout le cast sur chaque page.
 - action : UNE action PHYSIQUE et DESSINABLE en ANGLAIS — le CORPS ENTIER de chaque personnage fait quelque chose, en interaction avec un OBJET ou un ÉLÉMENT DU DÉCOR (ex. "Nala leaps across stepping stones, arms windmilling, while Tembo wades chest-deep pushing a floating log with his trunk").
@@ -212,7 +215,7 @@ STORYBOARD (page par page — vraie progression narrative, variété de scènes)
 - camera : angle/plan en ANGLAIS (ex. "side view at child eye level", "high angle looking down at the river crossing", "close-up over the shoulder"). VARIE sur le livre : alterne plans larges et rapprochés, jamais deux pages consécutives avec le même angle frontal. INTERDIT : ≥3 pages avec la même camera.
 - pageSetting : le lieu PRÉCIS de CETTE page en ANGLAIS (pas le monde en général) — ex. "muddy riverbank with rushing brown water, half-submerged log bridge".
 - focalPoint : L'élément focal unique de la page (EN) — ce que l'œil doit voir en premier.
-- comicBeat : establishing | action | obstacle | help | emotion | resolution (rythme BD sur l'arc).
+- comicBeat : establishing | action | obstacle | help | emotion | resolution (moment narratif interne sur l'arc ; ne jamais produire de mise en page BD).
 - shotType : full_body (préféré) | mid_shot | wide | close_safe (visages entiers, pas de coupe au menton). VARIE d'une page à l'autre — au moins 2 shotTypes distincts sur 6+ pages. INTERDIT : ≥3 pages avec la même action/pose.
 - illustrationDescription : prompt image AUTONOME en ANGLAIS qui COMBINE action + poses + camera + pageSetting + focalPoint en un paragraphe fluide — utilisable seul.
   RÈGLE ENVIRONNEMENT (impératif) : le décor de CETTE page correspond EXACTEMENT au lieu réel de SA scène (un marché reste un marché avec étals, paniers, tissus) ET au monde de l'histoire (world.setting).
@@ -291,7 +294,7 @@ SOIS BREF : titres de page ≤ 5 mots, storyText ≤ 2 phrases courtes, action �
 
 FIDÉLITÉ IDÉE : héros nommé + thème/pouvoir de l'idée utilisateur = NON NÉGOCIABLES ; le plan directeur les porte page après page.
 Règles cast (STRICTES) : fidélité ABSOLUE au brief (nombre exact, espèces exactes — une tortue est une TORTUE), max ${maxCast} personnages nommés, visualLock ANGLAIS verrouillé identique partout, animaux = vrais quadrupèdes non anthropomorphes, introducedOnPage renseigné.
-Règles pages : arc BD complet (establishing → action → obstacle → help → emotion → resolution), variété de scènes et de lieux, au moins 2 pages solo/duo, un personnage n'apparaît JAMAIS avant son introducedOnPage. VARIE actions et shotTypes — jamais ≥3 pages avec la même pose.
+Règles pages : arc narratif complet (establishing → action → obstacle → help → emotion → resolution), avec UNE illustration pleine page par étape et jamais de cases BD, variété de scènes et de lieux, au moins 2 pages solo/duo, un personnage n'apparaît JAMAIS avant son introducedOnPage. VARIE actions et shotTypes — jamais ≥3 pages avec la même pose.
 action : PHYSIQUE et dessinable, corps entier + interaction objet/décor (verbes type climb, jump, push, carry, splash, wade, balance, dig, lift, row) — JAMAIS "looking/watching/smiling/standing".
 
 Structure JSON :
@@ -399,7 +402,8 @@ export const COLORING_NEGATIVE_PROMPT = [
   "filled black areas, solid black fills, screentones, texture noise,",
   "photorealistic, photo, 3D render, painting, watercolor, realistic rendering,",
   "blurry, low quality, messy lines, sketchy, unfinished,",
-  "text, letters, words, caption, watermark, logo, signature, page numbers,",
+  "text, letters, words, caption, watermark, logo, signature, page numbers, speech bubbles, dialogue balloons, text boxes,",
+  "comic strip, comic book page, manga page, panels, multiple panels, split panels, panel borders, gutters, storyboard grid, collage layout,",
   "extra fingers, too many fingers, fused fingers, deformed hands, malformed hands, missing limbs,",
   "floating head, detached body parts, cropped limbs, cut off at edge, out of frame,",
   "extra people, duplicate characters, cloned faces, inconsistent character design, changing outfits,",
@@ -430,7 +434,7 @@ export const CHILD_SAFE_FACE_NEGATIVE =
 
 /** Mandatory rich scenery so children have lots to color beyond the hero. */
 export const RICH_ENVIRONMENT_POSITIVE =
-  "MANDATORY RICH COLORABLE ENVIRONMENT edge-to-edge: ground/path, sky or canopy, 4–6 large props from THIS scene (trees, huts, rocks, flowers, fences, pots, cloths — market stalls only if the scene is a market). Hero ≤40% of frame. FORBIDDEN: empty white void, floating character, portrait on blank paper.";
+  "SINGLE FULL-PAGE COLORING SCENE: one continuous edge-to-edge composition, never comic panels, never a grid, never split frames, never speech bubbles or text boxes. MANDATORY RICH COLORABLE ENVIRONMENT edge-to-edge: ground/path, sky or canopy, 4–6 large props from THIS scene (trees, huts, rocks, flowers, fences, pots, cloths — market stalls only if the scene is a market). Hero ≤40% of frame. FORBIDDEN: empty white void, floating character, portrait on blank paper.";
 
 /**
  * Injected identically on every page of a book so Ideogram does not switch
@@ -524,6 +528,7 @@ export function buildColoringPagePrompt(params: {
   const settingLine = (params.settingElements || []).filter(Boolean).slice(0, 4);
 
   return [
+    "TRUE COLORING-BOOK PAGE — ONE SINGLE FULL-PAGE CONTINUOUS SCENE. NO comic panels, NO split frames, NO grid, NO gutters, NO speech bubbles, NO captions or text inside the image.",
     craft,
     params.consistencyMode ? BOOK_SERIES_STYLE_LOCK : "",
     genderBits.positive,
@@ -543,7 +548,7 @@ export function buildColoringPagePrompt(params: {
     RICH_ENVIRONMENT_POSITIVE,
     "Prefer a wide or full-body shot inside a busy scene — avoid tight portrait close-ups with empty backgrounds.",
     "Full bodies inside the frame, simple mitten-style kid hands, at most 2 characters, no extra people.",
-    params.comicBeat ? `Story beat: ${params.comicBeat}.` : "",
+    params.comicBeat ? `Narrative moment across the book: ${params.comicBeat}; this does NOT mean comic layout.` : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -689,7 +694,7 @@ export function buildReferenceGuidedScenePrompt(params: {
   // Prefer compact when scene is already structured (refScene / buildCompactScene).
   if ((params.scene || "").length < 420) {
     return [
-      "PURE B&W children's coloring line art. Keep ONLY identity from reference (faces, hair, outfits, species). DISCARD reference poses AND plain white background completely.",
+      "TRUE COLORING-BOOK PAGE: ONE SINGLE FULL-PAGE CONTINUOUS B&W SCENE. NO comic panels, NO split frames, NO grid, NO gutters, NO speech bubbles, NO captions or text. Keep ONLY identity from reference (faces, hair, outfits, species). DISCARD reference poses AND plain white background completely.",
       params.action ? `ACTION mid-motion: ${params.action}.` : "",
       `SCENE with RICH ENVIRONMENT filling the page: ${params.scene}`,
       anchors.length ? `Draw these props large: ${anchors.join(", ")}.` : "",
@@ -704,7 +709,7 @@ export function buildReferenceGuidedScenePrompt(params: {
 
   return [
     // ORDER IS LOAD-BEARING (see history above): B&W directive FIRST, before the scene.
-    "Redraw the reference characters in a NEW scene as an expert children's coloring book page: PURE BLACK AND WHITE LINE ART ONLY, bold thick uniform black outlines on white paper, strong clean confident ink lines suitable for printing, large white areas to color, closed shapes, absolutely NO color, no colored fills, no shading, no grey, no text, no letters, no watermark, no signage.",
+    "Redraw the reference characters in a NEW scene as an expert children's coloring book page: ONE SINGLE FULL-PAGE CONTINUOUS COMPOSITION — NEVER comic panels, split frames, grids, gutters, speech bubbles, captions or text boxes. PURE BLACK AND WHITE LINE ART ONLY, bold thick uniform black outlines on white paper, strong clean confident ink lines suitable for printing, large white areas to color, closed shapes, absolutely NO color, no colored fills, no shading, no grey, no text, no letters, no watermark, no signage.",
     // Audit fix T2: decouple IDENTITY (keep) from COMPOSITION (discard). The reference
     // is a front-facing lineup and used to dictate every page's composition.
     "From the reference image keep ONLY the characters' IDENTITY: same faces, hair, outfits, proportions and animal species (a fox stays the SAME real four-legged fox walking on four paws, not a dog, not a person, not bipedal).",
