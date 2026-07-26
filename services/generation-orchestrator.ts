@@ -16,6 +16,7 @@ import { buildSheetCrops } from "@/services/ai/sheet-crops";
 import { overlayCoverTitle } from "@/lib/cover-title";
 import type { ImageQcStats, SettingBible, StoryPlan } from "@/services/ai/types";
 import { getImageProvider, getTextProvider } from "@/services/ai";
+import { MockTextProvider } from "@/services/ai/mock-provider";
 import { pageStyleSeed } from "@/lib/book-style-seed";
 import { heroGenderPromptBits } from "@/services/ai/prompts";
 import { BookService } from "@/services/book-service";
@@ -266,14 +267,30 @@ export class GenerationOrchestrator {
       progress: parentMode ? 15 : 18,
     });
 
-    const plan = await textProvider.generateStoryPlan(
-      idea,
-      pageCount,
-      style,
-      research,
-      audience,
-      { originalIdea, childName, childGender, parentMode }
-    );
+    let plan: StoryPlan;
+    try {
+      plan = await textProvider.generateStoryPlan(
+        idea,
+        pageCount,
+        style,
+        research,
+        audience,
+        { originalIdea, childName, childGender, parentMode }
+      );
+    } catch (err) {
+      // A text-provider outage must not block a paid parent book. The local
+      // planner preserves the requested story, child name, page count and style
+      // so image generation can continue without spending extra text credits.
+      console.warn("text story plan unavailable; using local fallback", err);
+      plan = await new MockTextProvider().generateStoryPlan(
+        idea,
+        pageCount,
+        style,
+        research,
+        audience,
+        { originalIdea, childName, childGender, parentMode }
+      );
+    }
 
     // firestoreSafe: LLM output may contain nested arrays / undefined that
     // Firestore rejects (a single bad field kills the whole generation).
