@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn, formatCredits } from "@/lib/utils";
+import { trackMetaEvent } from "@/components/analytics/meta-pixel";
 
 const PHONE_COUNTRIES = [
   { code: "NE", label: "Niger (+227)" },
@@ -39,6 +40,14 @@ function CreditsInner() {
   const [phoneCountry, setPhoneCountry] = useState("NE");
 
   async function buy(packId: string, phone?: { number: string; country_code: string }) {
+    const selectedPack = RECHARGE_PACKS.find((pack) => pack.id === packId);
+    trackMetaEvent("InitiateCheckout", {
+      content_name: selectedPack?.name ?? packId,
+      content_ids: [packId],
+      content_type: "product",
+      value: selectedPack?.priceFcfa,
+      currency: "XOF",
+    });
     setLoading(packId);
     setMessage(null);
     try {
