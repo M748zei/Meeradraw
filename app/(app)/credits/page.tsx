@@ -2,7 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
-import { CREDIT_PACKS, formatFcfa } from "@/config/credits";
+import { RECHARGE_PACKS, formatFcfa } from "@/config/credits";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,8 @@ function CreditsInner() {
   const search = useSearchParams();
   const success = search.get("success");
   const need = search.get("need");
+  const book = search.get("book");
+  const returnTo = book && /^[A-Za-z0-9_-]+$/.test(book) ? `/books/${book}` : null;
   const [loading, setLoading] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(
     success ? "Crédits ajoutés avec succès ✦" : null
@@ -43,7 +45,11 @@ function CreditsInner() {
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pack_id: packId, ...(phone ? { phone } : {}) }),
+        body: JSON.stringify({
+          pack_id: packId,
+          ...(phone ? { phone } : {}),
+          ...(returnTo ? { return_to: returnTo } : {}),
+        }),
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message || "Erreur");
@@ -129,7 +135,7 @@ function CreditsInner() {
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {CREDIT_PACKS.map((pack) => (
+        {RECHARGE_PACKS.map((pack) => (
           <Card
             key={pack.id}
             className={cn(
@@ -140,11 +146,6 @@ function CreditsInner() {
             {"popular" in pack && pack.popular ? (
               <span className="absolute -top-3 right-4 rounded-full bg-sky-500 px-3 py-0.5 text-xs font-semibold text-white">
                 Populaire
-              </span>
-            ) : null}
-            {"unlocksAccess" in pack && pack.unlocksAccess ? (
-              <span className="absolute -top-3 right-4 rounded-full bg-mint-500 px-3 py-0.5 text-xs font-semibold text-white">
-                Débloque le studio
               </span>
             ) : null}
             <h3 className="font-display text-xl">{pack.name}</h3>
