@@ -195,7 +195,7 @@ CONCEPT
 CAST (bible visuelle stable — strict, FIDÉLITÉ AU BRIEF ABSOLUE)
 - Le cast reprend EXACTEMENT les personnages du brief de l'utilisateur : MÊME NOMBRE (si le brief dit « seulement deux personnages », le cast final en a DEUX), MÊME ESPÈCE (une tortue est une TORTUE, jamais un humain), même âge, même rôle. AUCUN personnage inventé en plus.
 - Maximum ${maxCast} personnages NOMMÉS au total (livres courts = cast serré) — et JAMAIS plus que ce que le brief demande.
-- Chaque personnage a un id stable (char_1, char_2…), un champ kind explicite (`human`, `lion`, `turtle`, etc.) et un visualLock en ANGLAIS, très détaillé, verrouillé. `kind` est la vérité sémantique : un lionceau reste `lion`, jamais `human` :
+- Chaque personnage a un id stable (char_1, char_2…), un champ kind explicite (human, lion, turtle, etc.) et un visualLock en ANGLAIS, très détaillé, verrouillé. kind est la vérité sémantique : un lionceau reste lion, jamais human :
   âge approximatif, skin tone, hair (forme/texture), face (yeux, nez, expression type), body/proportions, outfit (couleurs décrites comme motifs de line-art : "striped shirt", "solid skirt"), signature accessory UNIQUE.
 - visualLock = phrase LOCK réutilisable mot pour mot ; ne change JAMAIS d'une page à l'autre (mêmes visages, coiffures, tenues).
 - Personnage ANIMAL : son visualLock le décrit comme un VRAI animal quadrupède de son espèce — "real four-legged fox, walking on four paws" — JAMAIS debout sur deux pattes, JAMAIS de vêtements, collier ou sac, non anthropomorphe.
