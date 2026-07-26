@@ -8,7 +8,7 @@ export const AGE_BANDS = [
     label: "3–5 ans",
     audience: "enfants 3–5 ans",
     promptHint:
-      "Vocabulaire très simple, phrases courtes. Traits TRÈS épais, grandes zones, décors minimalistes (style simple).",
+      "Vocabulaire très simple, phrases courtes. Grandes zones fermées faciles à colorier, trait organique professionnel, décor complet sur trois plans avec 6–10 grands éléments — jamais vide.",
     defaultStyle: "simple" as const,
     defaultPages: 6,
   },
