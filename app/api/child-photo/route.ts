@@ -8,18 +8,18 @@ import { z } from "zod";
 
 export const maxDuration = 30;
 
-const MAX_JSON_BYTES = 8_500_000;
+const MAX_JSON_BYTES = 4_100_000;
 
 const schema = z.object({
   /** data URL or raw base64 */
-  imageBase64: z.string().min(40).max(8_000_000),
-  contentType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
+  imageBase64: z.string().min(40).max(4_000_000),
+  contentType: z\n    .enum(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"])\n    .default("image/jpeg"),
 });
 
 async function readLimitedJson(request: Request): Promise<unknown> {
   const contentLength = Number(request.headers.get("content-length") || 0);
   if (contentLength > MAX_JSON_BYTES) {
-    throw new AppError("VALIDATION_ERROR", "Photo trop lourde (max ~5 Mo).", 400);
+    throw new AppError("VALIDATION_ERROR", "Photo trop lourde. La photo doit être compressée avant l’envoi.", 400);
   }
   if (!request.body) {
     throw new AppError("VALIDATION_ERROR", "Photo manquante.", 400);
@@ -93,21 +93,21 @@ export async function POST(request: Request) {
 
     let raw = body.imageBase64.trim();
     let contentType = body.contentType;
-    const dataUrl = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/i.exec(raw);
+    const dataUrl = /^data:(image\/(?:jpeg|png|webp|heic|heif));base64,(.+)$/i.exec(raw);
     if (dataUrl) {
       contentType = dataUrl[1].toLowerCase() as typeof contentType;
       raw = dataUrl[2];
     }
-    const bytes = Buffer.from(raw.replace(/\s/g, ""), "base64");
-    if (bytes.length < 500 || bytes.length > 5_500_000) {
+    let bytes = Buffer.from(raw.replace(/\s/g, ""), "base64");
+    if (bytes.length < 500 || bytes.length > 3_000_000) {
       throw new AppError(
         "VALIDATION_ERROR",
-        "Photo trop petite ou trop lourde (max ~5 Mo).",
+        "Photo trop petite ou trop lourde (max 3 Mo après compression).",
         400
       );
     }
-    const detected = detectImageFormat(bytes);
-    const detectedContentType =
+    let detected = detectImageFormat(bytes);
+    let detectedContentType =
       detected === "jpeg"
         ? "image/jpeg"
         : detected === "png"
@@ -115,10 +115,32 @@ export async function POST(request: Request) {
           : detected === "webp"
             ? "image/webp"
             : null;
+
+    // iPhone photos commonly arrive as HEIC/HEIF. Sharp/libvips decodes them
+    // server-side and normalizes orientation before Storage/Fal receives a JPEG.
+    if (!detectedContentType && /image\/hei[cf]/i.test(contentType)) {
+      try {
+        const sharp = (await import("sharp")).default;
+        bytes = await sharp(bytes)
+          .rotate()
+          .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 88, mozjpeg: true })
+          .toBuffer();
+        detected = "jpeg";
+        detectedContentType = "image/jpeg";
+      } catch {
+        throw new AppError(
+          "VALIDATION_ERROR",
+          "Cette photo HEIC n’a pas pu être convertie. Exportez-la en JPG puis réessayez.",
+          400
+        );
+      }
+    }
+
     if (!detectedContentType) {
       throw new AppError(
         "VALIDATION_ERROR",
-        "Photo invalide — utilisez un vrai fichier JPG, PNG ou WebP.",
+        "Photo invalide — utilisez un vrai fichier JPG, PNG, WebP, HEIC ou HEIF.",
         400
       );
     }
