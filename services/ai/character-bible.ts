@@ -677,8 +677,12 @@ export function characterKind(c: StoryCharacter): string {
 /** Vision-QC expected cast for a set of characters. */
 export function expectedCastFor(
   characters: StoryCharacter[]
-): Array<{ name: string; kind: string }> {
-  return characters.map((c) => ({ name: c.name, kind: characterKind(c) }));
+): Array<{ name: string; kind: string; visualLock?: string }> {
+  return characters.map((c) => ({
+    name: c.name,
+    kind: characterKind(c),
+    visualLock: (c.visualLock || c.appearance || "").slice(0, 600),
+  }));
 }
 
 /**
