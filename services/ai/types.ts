@@ -31,6 +31,8 @@ export interface StoryCharacter {
    */
   visualLock: string;
   personality: string;
+  /** Explicit semantic species/kind; never infer an animal as human from its name. */
+  kind?: string;
   ageBand?: string;
   skinTone?: string;
   hair?: string;
