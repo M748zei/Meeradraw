@@ -30,7 +30,7 @@ export type StyleContract = {
 };
 
 const BASE_COLORING =
-  "Professional hand-inked children's-book line art with clean ORGANIC contours and gently varied line weight, closed shapes, large colorable white areas, pure B&W, no grey shading, no color fills, no photorealism, no text, no watermark. Natural expressive child faces with modest readable eyes, dark pupils and iris — never emoji eyes, giant glossy eyes, generic vector clipart, elongated heads or malformed anatomy.";
+  "Professional hand-inked children's coloring-book line art: ONE SINGLE FULL-PAGE CONTINUOUS SCENE, never comic panels, never split frames, never a grid, never gutters, speech bubbles, captions or text boxes. Clean ORGANIC contours with gently varied line weight, closed shapes, large colorable white areas, pure B&W, no grey shading, no color fills, no photorealism, no text, no watermark. Natural expressive child faces with modest readable eyes, dark pupils and iris — never emoji eyes, giant glossy eyes, generic vector clipart, elongated heads or malformed anatomy.";
 
 const CONTRACTS: Record<StyleId, StyleContract> = {
   simple: {
@@ -60,12 +60,12 @@ const CONTRACTS: Record<StyleId, StyleContract> = {
   cartoon: {
     id: "cartoon",
     density: "rich",
-    kontextCue: "Cartoon kids-comics: expressive gesture, dynamic silhouette, bold staging.",
-    imageCraft: `${BASE_COLORING} CARTOON / comics-for-kids: expressive silhouettes, clear gesture lines, squash-and-stretch poses, readable comic staging, bold contours, secondary action in props. Dynamic camera.`,
+    kontextCue: "Cartoon coloring page: expressive gesture, dynamic silhouette, one full-page scene.",
+    imageCraft: `${BASE_COLORING} CARTOON COLORING style: expressive silhouettes, clear gesture lines, squash-and-stretch poses, readable single-scene staging, bold contours, secondary action in props. Dynamic camera, but always one continuous full-page composition.`,
     visualLockRules:
-      "visualLock: age, skin, hair, face with a signature expression baseline, athletic or comic body proportions, outfit with 1–2 clear patterns, signature accessory — identical every page.",
+      "visualLock: age, skin, hair, face with a signature expression baseline, athletic child-friendly cartoon body proportions, outfit with 1–2 clear patterns, signature accessory — identical every page.",
     worldBias:
-      "Décors BD jeunesse lisibles : plans clairs, un focal fort, props qui soutiennent l'action (pas de photo-réalisme).",
+      "Décors de coloriage jeunesse lisibles : une scène pleine page continue, plans clairs, un focal fort, props qui soutiennent l'action (pas de photo-réalisme, aucune case BD).",
     forbidden:
       "no static mugshot poses, no photoreal faces, no muddy overlapping characters, no thin unfinished sketch lines",
   },
