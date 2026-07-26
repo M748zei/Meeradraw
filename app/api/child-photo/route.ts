@@ -13,7 +13,9 @@ const MAX_JSON_BYTES = 4_100_000;
 const schema = z.object({
   /** data URL or raw base64 */
   imageBase64: z.string().min(40).max(4_000_000),
-  contentType: z\n    .enum(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"])\n    .default("image/jpeg"),
+  contentType: z
+    .enum(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"])
+    .default("image/jpeg"),
 });
 
 async function readLimitedJson(request: Request): Promise<unknown> {
