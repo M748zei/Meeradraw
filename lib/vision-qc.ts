@@ -56,10 +56,16 @@ export interface CastCheck {
 }
 
 export interface PageCheck {
-  /** True = characters standing in a row, front-facing, no action (the audit's #1 defect). */
+  /** True = characters standing in a row, front-facing, no action. */
   lineup: boolean;
   /** True = the requested action is actually visible in the image. */
   actionVisible: boolean;
+  /** Foreground + midground + background contain enough large closed shapes to color. */
+  environmentRich: boolean;
+  /** No malformed, duplicated or missing limbs/facial features. */
+  anatomyValid: boolean;
+  /** Looks like professionally illustrated children's line art, not generic clipart. */
+  professionalLineArt: boolean;
   issue?: string;
 }
 
@@ -195,19 +201,29 @@ export async function checkPageAction(
   const result = await askVision<{
     lineup: boolean;
     action_visible: boolean;
+    environment_rich: boolean;
+    anatomy_valid: boolean;
+    professional_line_art: boolean;
     issue?: string;
   }>(
     imageUrl,
-    `This is a children's coloring book page. Requested action for this page: "${action}".
-Question 1 (lineup syndrome): are the characters simply STANDING IN A ROW, front-facing, side by side, with static poses and no real action — like a character reference sheet where only the background changed?
-Question 2: is the requested action ("${action}") actually VISIBLE in the drawing (the characters are physically doing it)?
-JSON schema: {"lineup": <true if question 1 is yes>, "action_visible": <true if question 2 is yes>, "issue": "<short reason when lineup is true or action_visible is false>"}`
+    `This is a premium printable children's coloring-book page. Requested action: "${action || "a clear story action"}".
+Check ALL five product requirements:
+1. LINEUP: characters must not merely stand front-facing in a static row.
+2. ACTION: the requested story action must be physically visible.
+3. COLORING VALUE: the scene must have a coherent foreground, midground and background with at least 6 large CLOSED colorable objects/zones (for example trees, plants, path, houses, clouds, furniture or scene-specific props). Tiny grass marks do not count. Large blank sky/ground and portrait-only compositions fail.
+4. ANATOMY: faces, eyes, hands, arms, legs and bodies must be coherent; no missing, extra, fused or duplicated parts.
+5. PROFESSIONAL LINE ART: clean organic children's-book ink drawing with controlled varied line weight and readable forms; generic emoji/clipart look, huge glossy eyes, malformed shapes or careless tangencies fail.
+JSON schema: {"lineup": <boolean>, "action_visible": <boolean>, "environment_rich": <boolean>, "anatomy_valid": <boolean>, "professional_line_art": <boolean>, "issue": "<brief list of every failed requirement>"}`
   );
   if (!result || typeof result.lineup !== "boolean") return null;
   return {
     lineup: result.lineup,
     actionVisible: Boolean(result.action_visible),
-    issue: result.issue ? String(result.issue).slice(0, 200) : undefined,
+    environmentRich: Boolean(result.environment_rich),
+    anatomyValid: Boolean(result.anatomy_valid),
+    professionalLineArt: Boolean(result.professional_line_art),
+    issue: result.issue ? String(result.issue).slice(0, 240) : undefined,
   };
 }
 
