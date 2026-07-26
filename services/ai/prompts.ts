@@ -694,14 +694,14 @@ export function buildReferenceGuidedScenePrompt(params: {
   // Prefer compact when scene is already structured (refScene / buildCompactScene).
   if ((params.scene || "").length < 420) {
     return [
-      "TRUE COLORING-BOOK PAGE: ONE SINGLE FULL-PAGE CONTINUOUS B&W SCENE. NO comic panels, NO split frames, NO grid, NO gutters, NO speech bubbles, NO captions or text. Keep ONLY identity from reference (faces, hair, outfits, species). DISCARD reference poses AND plain white background completely.",
+      "TRUE COLORING PAGE: ONE continuous full-page B&W scene; NO panels, frames, grid, gutters, bubbles, captions or text. Keep ONLY reference identity (face, hair, outfit, species); discard its pose and background.",
       params.action ? `ACTION mid-motion: ${params.action}.` : "",
-      `SCENE with RICH ENVIRONMENT filling the page: ${params.scene}`,
+      `SCENE with a rich colorable environment: ${params.scene}`,
       anchors.length ? `Draw these props large: ${anchors.join(", ")}.` : "",
-      RICH_ENVIRONMENT_POSITIVE,
+      "Fill the page with foreground, midground and a simple background; no empty void.",
       CHILD_SAFE_FACE_POSITIVE,
       styleKontextCue(params.style),
-      "New camera + dynamic poses. Wide scene, hero smaller in frame. No blank void. No color, no text.",
+      "New camera and dynamic poses. Full bodies inside print margins. Bold closed black outlines, large white coloring areas; no color, gray, shading or text.",
     ]
       .filter(Boolean)
       .join(" ");
