@@ -58,6 +58,14 @@ export async function POST(request: Request) {
         await claimPendingCredits(db, decoded.uid, decoded.email).catch((err) =>
           console.error("claimPendingCredits failed", err)
         );
+        await new AccessOpenService(db)
+          .claimPendingForUser(decoded.uid, decoded.email, true)
+          .catch((err) =>
+            console.warn(
+              "claimPendingForUser failed",
+              err instanceof Error ? err.message : err
+            )
+          );
       }
 
       // Post-purchase cookie context (from /ouvrir-mon-acces) — attach only when
@@ -75,11 +83,6 @@ export async function POST(request: Request) {
             .then(() => clearPurchaseContextCookie())
             .catch((err) =>
               console.warn("attach purchase on session failed", err instanceof Error ? err.message : err)
-            );
-          await new AccessOpenService(db)
-            .claimPendingForUser(decoded.uid, decoded.email, true)
-            .catch((err) =>
-              console.warn("claimPendingForUser failed", err instanceof Error ? err.message : err)
             );
         }
       }
