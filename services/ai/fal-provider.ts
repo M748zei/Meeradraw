@@ -97,7 +97,9 @@ const EYES_BOOST =
 const LINEART_BOOST =
   "STRICT BLACK AND WHITE LINE ART ONLY: pure black outlines on white paper, absolutely NO color, no colored fills, no shading, no grey — a printable coloring page, NOT a colored illustration. No artist signature, no watermark, no text in the corners.";
 const STYLE_PRESERVE_BOOST =
-  "CRITICAL STYLE PRESERVE: keep the EXACT same outline weight, cartoon hand, and coloring-book aesthetic as the rest of this book — do not switch artists or line styles.";
+  "CRITICAL STYLE PRESERVE: keep the EXACT same organic ink hand, character identities, proportions and coloring-book aesthetic as the rest of this book — do not switch artists or line styles.";
+const PREMIUM_PAGE_BOOST =
+  "PREMIUM PRODUCT GATE: coherent foreground, midground and background with at least 6 LARGE CLOSED scene-specific colorable objects; correct anatomy with no missing/extra/fused limbs; professional organic children's-book ink with gently varied line weight; no generic clipart and no giant glossy emoji eyes.";
 /** Re-roll nudge when the hero cast portrait came back B&W (degenerate) instead of colored. */
 const COLOR_SHEET_BOOST =
   "IMPORTANT: render the characters in soft flat COLORS (colored skin, hair, outfits and fur) with bold cartoon outlines — this reference portrait must NOT be black-and-white line art.";
@@ -436,17 +438,47 @@ export class FalImageProvider implements ImageAIProvider {
               );
             }
           }
-        } else if (input.isColoringPage && input.action) {
-          const page = await checkPageAction(current.url, input.action);
-          if (page && (page.lineup || !page.actionVisible)) {
-            // Lineup when vision responds = mandatory defect (score 3), never silent accept.
-            visionScore += page.lineup ? 3 : 1;
-            prevVisionNudges.push(ANTI_LINEUP_BOOST);
-            verdicts.push(
-              `${page.lineup ? "lineup" : "action-missing"}:${page.issue || input.action.slice(0, 60)}`
-            );
-            if (page.lineup) {
-              qcStats.lineupDetected = true;
+        } else if (input.isColoringPage) {
+          if (input.expectedCast?.length) {
+            const cast = await checkCast(current.url, input.expectedCast);
+            if (!cast && input.strictQuality) {
+              visionScore += 4;
+              prevVisionNudges.push(CAST_FIX_BOOST);
+              verdicts.push("cast:vision-unavailable");
+            } else if (cast && !cast.matches) {
+              visionScore += 4;
+              prevVisionNudges.push(CAST_FIX_BOOST);
+              verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
+            }
+          }
+          const page = await checkPageAction(current.url, input.action || "");
+          if (!page && input.strictQuality) {
+            visionScore += 4;
+            prevVisionNudges.push(PREMIUM_PAGE_BOOST);
+            verdicts.push("page-quality:vision-unavailable");
+          } else if (page) {
+            if (page.lineup || !page.actionVisible) {
+              visionScore += page.lineup ? 3 : 1;
+              prevVisionNudges.push(ANTI_LINEUP_BOOST);
+              verdicts.push(
+                `${page.lineup ? "lineup" : "action-missing"}:${page.issue || input.action?.slice(0, 60) || ""}`
+              );
+              if (page.lineup) qcStats.lineupDetected = true;
+            }
+            if (!page.environmentRich) {
+              visionScore += 4;
+              prevVisionNudges.push(ENV_BOOST, PREMIUM_PAGE_BOOST);
+              verdicts.push(`environment:${page.issue || "not enough colorable scenery"}`);
+            }
+            if (!page.anatomyValid) {
+              visionScore += 4;
+              prevVisionNudges.push(PREMIUM_PAGE_BOOST);
+              verdicts.push(`anatomy:${page.issue || "malformed anatomy"}`);
+            }
+            if (!page.professionalLineArt) {
+              visionScore += 3;
+              prevVisionNudges.push(PREMIUM_PAGE_BOOST);
+              verdicts.push(`craft:${page.issue || "generic or careless line art"}`);
             }
           }
         }
@@ -530,6 +562,11 @@ export class FalImageProvider implements ImageAIProvider {
       (qcStats.visionVerdicts || []).some((v) => v.startsWith("lineup"))
     ) {
       throw new Error("lineup after vision re-rolls");
+    }
+    if (input?.strictQuality && best.score > 0) {
+      throw new Error(
+        `strict visual quality gate rejected image (score ${best.score}): ${(qcStats.visionVerdicts || []).slice(-4).join("; ") || "pixel quality defect"}`
+      );
     }
     if (best.score > 0) {
       console.warn(`[${label}] keeping best available image after re-rolls (score ${best.score})`);
