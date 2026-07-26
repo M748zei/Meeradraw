@@ -212,7 +212,7 @@ export class FalImageProvider implements ImageAIProvider {
       return result;
     } catch (err) {
       // If reference path fails after retries, fall back to text-only with same locked prompt.
-      if (useReference) {
+      if (useReference && !input.strictQuality) {
         console.warn("fal reference generation failed; falling back to text-only", err);
         const fallbackPrompt = buildPrompt(input, false);
         const fallbackBody = buildFalBody({
@@ -386,7 +386,9 @@ export class FalImageProvider implements ImageAIProvider {
         requireColored && current.bytes && !blank ? !isColored(current.bytes) : false;
       // Blank / empty-void pages are severe; poor environment is almost as bad for
       // a coloring book (nothing to color). Weight it high so we re-roll hard.
+      const analysisUnavailable = wantsQualityCheck && !current.bytes;
       const score =
+        (analysisUnavailable ? 5 : 0) +
         (blank ? 3 : 0) +
         (colored ? 2 : 0) +
         (notColored ? 2 : 0) +
@@ -415,7 +417,11 @@ export class FalImageProvider implements ImageAIProvider {
         } else if (input.isCover) {
           if (input.coverTitle) {
             const title = await checkCoverTitle(current.url, input.coverTitle);
-            if (title && !title.titleLegible) {
+            if (!title && input.strictQuality) {
+              visionScore += 4;
+              prevVisionNudges.push(TITLE_FIX_BOOST);
+              verdicts.push("title:vision-unavailable");
+            } else if (title && !title.titleLegible) {
               visionScore += 2;
               prevVisionNudges.push(TITLE_FIX_BOOST);
               verdicts.push(`title:${title.issue || "illegible"}`);
@@ -533,7 +539,7 @@ export class FalImageProvider implements ImageAIProvider {
     // Last-resort rescue: if the best attempt is STILL blank, flux likely choked on the
     // long descriptive prompt. Retry with a short, high-adherence prompt a couple times —
     // short prompts render far more reliably. Keep the first non-blank result.
-    if (best && best.blank && recoveryPrompt) {
+    if (best && best.blank && recoveryPrompt && !input?.strictQuality) {
       for (let r = 0; r < 2 && best.blank; r++) {
         body.prompt = recoveryPrompt;
         try {
@@ -557,6 +563,8 @@ export class FalImageProvider implements ImageAIProvider {
       }
     }
 
+    // Strict delivery never lets a short-prompt rescue or uninspected provider
+    // response bypass the complete pixel + semantic quality gate.
     // Only a total inability to produce ANY image is a real failure.
     if (!best) {
       throw lastError instanceof Error
