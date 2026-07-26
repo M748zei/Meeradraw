@@ -145,33 +145,60 @@ async function reapOne(
 
 async function reapRetryOne(
   db: Firestore,
-  retryId: string,
-  data: Record<string, unknown>
+  retryId: string
 ): Promise<boolean> {
   const retryRef = db.collection("generation_retries").doc(retryId);
-  const shouldRefund = await db.runTransaction(async (tx) => {
+  // Fence the abandoned worker without making the retry terminal. A transient
+  // refund failure must leave the document queryable by the next cron pass.
+  const retryData = await db.runTransaction(async (tx) => {
     const snap = await tx.get(retryRef);
-    if (!isStale(snap.data())) return false;
+    const live = snap.data();
+    if (!live || live.status !== "running" || !isStale(live)) return null;
+    const now = new Date().toISOString();
     tx.update(retryRef, {
-      status: "failed",
       cancelled: true,
-      error_message: "Régénération interrompue (délai dépassé) — crédits remboursés.",
-      updated_at: new Date().toISOString(),
+      refund_pending: true,
+      error_message:
+        "Régénération interrompue. Le remboursement automatique est en cours.",
+      updated_at: now,
+      heartbeat_at: now,
     });
-    return true;
+    return live as Record<string, unknown>;
   });
-  if (!shouldRefund) return false;
+  if (!retryData) return false;
 
-  const userId = typeof data.user_id === "string" ? data.user_id : null;
-  const reserved = typeof data.reserved_amount === "number" ? data.reserved_amount : 0;
-  const recovered = typeof data.recovered === "number" ? data.recovered : 0;
-  const perPage = typeof data.per_page === "number" ? data.per_page : 0;
+  // Use the transaction snapshot rather than the earlier query snapshot: a
+  // page may have completed between the sweep query and the cancellation fence.
+  const userId =
+    typeof retryData.user_id === "string" ? retryData.user_id : null;
+  const reserved =
+    typeof retryData.reserved_amount === "number"
+      ? retryData.reserved_amount
+      : 0;
+  const recovered =
+    typeof retryData.recovered === "number" ? retryData.recovered : 0;
+  const perPage =
+    typeof retryData.per_page === "number" ? retryData.per_page : 0;
   const refundAmount = Math.max(0, reserved - recovered * perPage);
-  const bookId = typeof data.book_id === "string" ? data.book_id : null;
-  const pageIds = Array.isArray(data.page_ids)
-    ? data.page_ids.filter((id): id is string => typeof id === "string")
+  const bookId =
+    typeof retryData.book_id === "string" ? retryData.book_id : null;
+  const pageIds = Array.isArray(retryData.page_ids)
+    ? retryData.page_ids.filter((id): id is string => typeof id === "string")
     : [];
 
+  // Compensation first. If this throws, status remains `running` with
+  // `cancelled=true`, which is immediately stale and safe to retry.
+  if (userId && refundAmount > 0) {
+    await new CreditService(db).refund(
+      userId,
+      refundAmount,
+      "Remboursement — régénération interrompue (délai dépassé)",
+      `retry:${retryId}:refund`
+    );
+  }
+
+  // Only unlock pages after compensation is confirmed. The token condition
+  // prevents this old retry from touching a page claimed by a newer retry.
   if (bookId && pageIds.length) {
     const pagesCol = db.collection("books").doc(bookId).collection("pages");
     await Promise.all(
@@ -200,14 +227,20 @@ async function reapRetryOne(
     );
   }
 
-  if (userId && refundAmount > 0) {
-    await new CreditService(db).refund(
-      userId,
-      refundAmount,
-      "Remboursement — régénération interrompue (délai dépassé)",
-      `retry:${retryId}:refund`
-    );
-  }
+  const completedAt = new Date().toISOString();
+  await retryRef.set(
+    {
+      status: "failed",
+      cancelled: true,
+      refund_pending: false,
+      refunded_amount: refundAmount,
+      error_message:
+        "Régénération interrompue (délai dépassé) — crédits remboursés.",
+      updated_at: completedAt,
+      heartbeat_at: completedAt,
+    },
+    { merge: true }
+  );
   console.warn(
     `[reaper] retry ${retryId} reaped (refund ${refundAmount} to ${userId})`
   );
@@ -269,7 +302,7 @@ export async function reapStaleGenerations(db: Firestore, limit = 200): Promise<
     const data = doc.data();
     if (!isStale(data)) continue;
     try {
-      if (await reapRetryOne(db, doc.id, data)) reaped += 1;
+      if (await reapRetryOne(db, doc.id)) reaped += 1;
     } catch (err) {
       console.error(`[reaper] retry failed for ${doc.id}`, err);
     }

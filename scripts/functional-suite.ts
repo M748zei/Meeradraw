@@ -446,7 +446,9 @@ async function runFirestoreIntegration() {
   const { BookService } = await import("../services/book-service");
   const { UniverseService } = await import("../services/universe-service");
   const { applyChariowSale, reverseChariowSale } = await import("../services/chariow-sale");
-  const { reapIfStale } = await import("../services/generation-reaper");
+  const { reapIfStale, reapStaleGenerations } = await import(
+    "../services/generation-reaper"
+  );
 
   const db = getAdminDb();
   const userA = `user-a-${randomUUID()}`;
@@ -811,6 +813,97 @@ async function runFirestoreIntegration() {
     assert(done.status === "failed", "terminal only after refund");
     assert(done.refund_pending === false, "refund no longer pending");
     assert((await credits.getBalance(missingUserId)) === 70, "refund applied once");
+  });
+
+  await test("retry reaper stays recoverable until refund succeeds", async () => {
+    const retryId = randomUUID();
+    const bookId = randomUUID();
+    const pageId = randomUUID();
+    const missingUserId = randomUUID();
+    const stale = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await db.collection("books").doc(bookId).set({
+      user_id: missingUserId,
+      status: "partial",
+      page_count: 1,
+      created_at: stale,
+      updated_at: stale,
+    });
+    await db
+      .collection("books")
+      .doc(bookId)
+      .collection("pages")
+      .doc(pageId)
+      .set({
+        book_id: bookId,
+        page_number: 1,
+        generation_status: "generating",
+        retry_token: retryId,
+        created_at: stale,
+        updated_at: stale,
+      });
+    await db.collection("generation_retries").doc(retryId).set({
+      user_id: missingUserId,
+      book_id: bookId,
+      page_ids: [pageId],
+      reserved_amount: 2,
+      per_page: 2,
+      recovered: 0,
+      status: "running",
+      created_at: stale,
+      updated_at: stale,
+      heartbeat_at: stale,
+    });
+
+    assert(
+      (await reapStaleGenerations(db)) === 0,
+      "first sweep must report refund failure"
+    );
+    const pending = (
+      await db.collection("generation_retries").doc(retryId).get()
+    ).data()!;
+    assert(pending.status === "running", "retry must remain queryable");
+    assert(pending.cancelled === true, "old worker must be fenced");
+    assert(pending.refund_pending === true, "refund must remain pending");
+    const locked = (
+      await db
+        .collection("books")
+        .doc(bookId)
+        .collection("pages")
+        .doc(pageId)
+        .get()
+    ).data()!;
+    assert(
+      locked.generation_status === "generating",
+      "page stays locked until compensation succeeds"
+    );
+
+    await db.collection("users").doc(missingUserId).set({
+      email: `${missingUserId}@example.com`,
+      credits: 50,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    assert(
+      (await reapStaleGenerations(db)) === 1,
+      "second sweep must finish the pending refund"
+    );
+    const done = (
+      await db.collection("generation_retries").doc(retryId).get()
+    ).data()!;
+    assert(done.status === "failed", "terminal only after refund");
+    assert(done.refund_pending === false, "refund no longer pending");
+    assert(done.refunded_amount === 2, "refunded amount recorded");
+    assert((await credits.getBalance(missingUserId)) === 52, "refund applied once");
+    const unlocked = (
+      await db
+        .collection("books")
+        .doc(bookId)
+        .collection("pages")
+        .doc(pageId)
+        .get()
+    ).data()!;
+    assert(unlocked.generation_status === "failed", "page unlocked after refund");
+    assert(unlocked.retry_token == null, "stale retry token removed");
   });
 
   await test("GenerationOrchestrator full mock pipeline (trial)", async () => {
