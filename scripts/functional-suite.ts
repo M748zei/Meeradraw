@@ -470,6 +470,22 @@ async function runPdfTests() {
     });
     assert(bytes.byteLength > 500, "still produces PDF");
   });
+
+  await test("buildBookPdf normalizes Unicode punctuation unsupported by WinAnsi", async () => {
+    const bytes = await pdf.buildBookPdf({
+      title: "Amadou — l’aventure",
+      subtitle: "Parent‑enfant… prêt à imprimer ✦",
+      pages: [
+        {
+          pageNumber: 1,
+          title: "Arrivée au marché‑village",
+          storyText:
+            "Amadou arrive main dans la main avec sa grand‑mère — mission accomplie.",
+        },
+      ],
+    });
+    assert(bytes.byteLength > 500, "unicode-safe PDF produced");
+  });
 }
 
 async function runFirestoreIntegration() {

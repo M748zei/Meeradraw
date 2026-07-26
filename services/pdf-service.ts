@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
 import { detectImageFormat } from "@/lib/image-format";
 import { fetchSafeImageBytes } from "@/lib/safe-image-url";
 
@@ -55,7 +55,7 @@ export class PDFService {
       }
     }
 
-    const titleLines = wrapText(input.title.slice(0, 72), 28);
+    const titleLines = wrapText(pdfSafeText(input.title, bold).slice(0, 72), 28);
     let titleY = Math.min(coverImgBottom, 160);
     for (const line of titleLines.slice(0, 3)) {
       const tw = bold.widthOfTextAtSize(line, 22);
@@ -69,7 +69,7 @@ export class PDFService {
       titleY -= 28;
     }
     if (input.subtitle) {
-      const sub = input.subtitle.slice(0, 90);
+      const sub = pdfSafeText(input.subtitle, font).slice(0, 90);
       const sw = font.widthOfTextAtSize(sub, 12);
       cover.drawText(sub, {
         x: Math.max(MARGIN, (PAGE_W - sw) / 2),
@@ -104,7 +104,7 @@ export class PDFService {
 
       let cursorY = PAGE_H - MARGIN - 22;
       if (page.title) {
-        p.drawText(page.title.slice(0, 70), {
+        p.drawText(pdfSafeText(page.title, bold).slice(0, 70), {
           x: MARGIN,
           y: cursorY,
           size: 14,
@@ -150,7 +150,7 @@ export class PDFService {
       }
 
       if (page.storyText) {
-        const lines = wrapText(page.storyText, 62);
+        const lines = wrapText(pdfSafeText(page.storyText, font), 62);
         let y = MARGIN + captionReserve - 28;
         for (const line of lines.slice(0, 5)) {
           p.drawText(line, {
@@ -190,6 +190,32 @@ async function embedRemoteImage(
   } catch {
     return null;
   }
+}
+
+/**
+ * Standard PDF fonts use WinAnsi and throw on common French/LLM punctuation
+ * such as the non-breaking hyphen (U+2011). Normalize typographic punctuation,
+ * then replace any remaining character the embedded font cannot encode.
+ */
+function pdfSafeText(value: string, font: PDFFont): string {
+  const normalized = value
+    .replace(/[\u00a0\u202f]/g, " ")
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
+    .replace(/[\u2018\u2019\u201a\u201b]/g, "'")
+    .replace(/[\u201c\u201d\u201e\u201f]/g, '"')
+    .replace(/\u2026/g, "...")
+    .replace(/[\u2022\u25cf]/g, "-");
+
+  let safe = "";
+  for (const char of normalized) {
+    try {
+      font.encodeText(char);
+      safe += char;
+    } catch {
+      safe += "?";
+    }
+  }
+  return safe;
 }
 
 function wrapText(text: string, maxChars: number): string[] {

@@ -257,7 +257,22 @@ export function lockPlanToParentNarrative(
 
   next = {
     ...next,
-    pages: (next.pages || []).map((p, i) => {
+    pages: (next.pages || []).map((p, i, pages) => {
+      if (i === pages.length - 1) {
+        return {
+          ...p,
+          title: "La mission accomplie",
+          storyText: `${name} accomplit sa mission : ${shortSource}`.slice(0, 280),
+          action: `${name} completes the exact parent story: ${shortSource}`.slice(
+            0,
+            320
+          ),
+          focalPoint: name,
+          characterIds: ["char_1"],
+          comicBeat: "resolution",
+          shotType: "wide",
+        };
+      }
       const hay = `${p.title} ${p.storyText} ${p.action} ${p.pageSetting}`;
       if (!sourceAllowsSub && subRe.test(hay)) {
         return rewritePageToTheme(p, name, themeKey, i, (next.pages || []).length);
@@ -480,9 +495,13 @@ export function normalizeStoryPlan(
       }
     }
 
+    const polishedTitle = (p.title || `Page ${pageNumber}`)
+      .replace(/\bAider à la étalage\b/gi, "Aider à préparer l’étalage")
+      .replace(/\bà la étalage\b/gi, "à l’étalage");
     return {
       ...p,
       pageNumber,
+      title: polishedTitle,
       characterIds,
       comicBeat: beat,
       shotType: p.shotType || (beat === "establishing" ? "wide" : "full_body"),

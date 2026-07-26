@@ -125,9 +125,11 @@ function GenerateInner() {
   const parentFacingError = (() => {
     const raw = error || progress?.error_message || "";
     if (!raw) return null;
-    // Never sugarcoat a hard failure as "still finishing" (also: fal dumps often
-    // contain the word "lineup" in prompts and used to trigger this soft lie).
-    if (failed) return raw;
+    // Provider, workflow and storage errors are internal diagnostics. Parents
+    // get a clear next step without stack traces, provider names or raw prompts.
+    if (failed) {
+      return "La création n’a pas pu être finalisée. Aucun livre incomplet ne sera livré et vos crédits restent protégés. Vous pouvez recommencer.";
+    }
     if (/qualité\s*\d+\s*\/\s*100|score\s*[:=]?\s*\d+/i.test(raw) && raw.length < 220) {
       return "On termine encore quelques pages pour vous offrir un cahier complet.";
     }

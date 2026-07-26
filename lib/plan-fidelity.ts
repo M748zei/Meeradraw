@@ -393,9 +393,29 @@ export function assertParentNarrativeLock(
     }
   }
 
+  // The ending must resolve the parent's actual plot, not merely mention the
+  // hero before switching to an unrelated side quest. Check the final two
+  // pages for a meaningful share of the parent's distinctive non-name tokens.
+  const { names } = extractIdeaKeywords(source);
+  const nameTokens = new Set(names.map(normalize));
+  const resolutionTokens = tokens.filter((t) => !nameTokens.has(t));
+  if (resolutionTokens.length >= 4 && plan.pages?.length) {
+    const ending = normalize(
+      plan.pages
+        .slice(-2)
+        .map((p) => `${p.title || ""} ${p.storyText || ""} ${p.action || ""}`)
+        .join(" ")
+    );
+    const endingHits = resolutionTokens.filter((t) => ending.includes(t)).length;
+    if (endingHits / resolutionTokens.length < 0.2) {
+      reasons.push(
+        "La fin ne résout pas l'intrigue demandée par le parent (les éléments clés disparaissent)."
+      );
+    }
+  }
+
   // Every page caption must mention the hero name if we can extract one, OR
   // share at least one distinctive source token (blocks total plot replacement).
-  const { names } = extractIdeaKeywords(source);
   const heroName = names[0];
   if (heroName && plan.pages?.length) {
     const heroN = normalize(heroName);

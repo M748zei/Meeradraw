@@ -284,6 +284,30 @@ test("parent narrative lock rejects travel substitution for princess story", () 
   assert(!r.ok, "expected narrative lock failure");
 });
 
+test("parent narrative lock rejects an ending that abandons the requested plot", () => {
+  const source =
+    "Amadou aide sa grand-mère au marché du village, retrouve le panier de fruits perdu et apprend l'entraide.";
+  const drifted: StoryPlan = {
+    ...goodPlan,
+    title: "Le panier disparu",
+    summary: source,
+    pages: goodPlan.pages.map((p, index, pages) => ({
+      ...p,
+      title: index < pages.length - 2 ? "Le panier perdu" : "Une autre aventure",
+      storyText:
+        index < pages.length - 2
+          ? "Amadou cherche le panier de fruits au marché."
+          : "Amadou aide un animal puis célèbre la fin de l'aventure.",
+      action:
+        index < pages.length - 2
+          ? "Amadou searches for the missing fruit basket"
+          : "Amadou follows an unrelated animal side quest",
+    })),
+  };
+  const r = assertParentNarrativeLock(source, drifted);
+  assert(!r.ok, "ending must resolve the parent's requested plot");
+});
+
 test("hero gender lock fails when girl described as boy", () => {
   const badGender: StoryPlan = {
     ...goodPlan,
