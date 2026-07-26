@@ -221,14 +221,25 @@ export async function POST(request: Request) {
           const planPage = storyPlan?.pages.find(
             (candidate) => candidate.pageNumber === page.page_number
           );
-          const expectedCast = planPage && storyPlan
-            ? expectedCastFor(charactersForPage(storyPlan, planPage))
-            : undefined;
+          const pageCharacters =
+            planPage && storyPlan
+              ? charactersForPage(storyPlan, planPage)
+              : [];
+          const expectedCast =
+            pageCharacters.length > 0 ? expectedCastFor(pageCharacters) : undefined;
+          const referenceImageUrls = pageCharacters
+            .map((character) => sheetCrops[character.id]?.url)
+            .filter((url): url is string => Boolean(url));
+          if (
+            strictDelivery &&
+            referenceImageUrls.length !== pageCharacters.length
+          ) {
+            throw new Error(
+              "Premium retry requires every ordered character reference"
+            );
+          }
           const referenceImageUrl =
-            (Array.isArray(page.character_ids) &&
-              page.character_ids.length === 1 &&
-              sheetCrops[page.character_ids[0]]?.url) ||
-            characterSheetUrl;
+            referenceImageUrls[0] || characterSheetUrl || undefined;
           if (strictDelivery && !referenceImageUrl) {
             throw new Error("Premium retry requires a character reference");
           }
@@ -249,6 +260,8 @@ export async function POST(request: Request) {
             worldSetting,
             isColoringPage: true,
             referenceImageUrl,
+            referenceImageUrls:
+              referenceImageUrls.length > 0 ? referenceImageUrls : undefined,
             shotType: page.shot_type,
             comicBeat: page.comic_beat,
             action: (typeof page.action === "string" && page.action) || undefined,
