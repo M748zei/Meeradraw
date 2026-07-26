@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -36,7 +36,6 @@ function isAcceptedPhotoFile(file: File): boolean {
 
 export default function CreateForChildPage() {
   const router = useRouter();
-  const photoInputRef = useRef<HTMLInputElement>(null);
   const [ageId, setAgeId] = useState<string>("6-8");
   const [themeId, setThemeId] = useState<string>("magic");
   const [childName, setChildName] = useState("");
@@ -45,6 +44,7 @@ export default function CreateForChildPage() {
   const [pageCount, setPageCount] = useState(6);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoBase64, setPhotoBase64] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,50 +70,41 @@ export default function CreateForChildPage() {
     return theme.ideaTemplate(name);
   }, [theme, childName, parentStory, gender]);
 
-  function openPhotoPicker() {
-    const input = photoInputRef.current;
-    if (!input) {
-      setError("Impossible d’ouvrir le sélecteur de photo. Rechargez la page.");
-      return;
-    }
-    // Reset so choosing the same file again still fires onChange.
-    input.value = "";
-    input.click();
-  }
-
   function onPhotoChange(file: File | null) {
     setPhotoPreview(null);
     setPhotoBase64(null);
+    setPhotoError(null);
     if (!file) return;
 
     const mime = (file.type || "").toLowerCase();
     if (mime === "image/heic" || mime === "image/heif" || /\.heic$/i.test(file.name)) {
-      setError(
+      setPhotoError(
         "Format HEIC non pris en charge. Ouvrez la photo dans Photos, puis exportez-la en JPG."
       );
       return;
     }
     if (!isAcceptedPhotoFile(file)) {
-      setError("Photo : JPG, PNG ou WebP uniquement.");
+      setPhotoError("Photo : JPG, PNG ou WebP uniquement.");
       return;
     }
     if (file.size > 5_000_000) {
-      setError("Photo trop lourde (max 5 Mo).");
+      setPhotoError("Photo trop lourde (max 5 Mo).");
       return;
     }
 
     const reader = new FileReader();
     reader.onerror = () => {
-      setError("Impossible de lire la photo. Réessayez avec un autre fichier.");
+      setPhotoError("Impossible de lire la photo. Réessayez avec un autre fichier.");
     };
     reader.onload = () => {
       const dataUrl = String(reader.result || "");
       if (!dataUrl.startsWith("data:image/")) {
-        setError("Photo invalide. Réessayez avec un JPG, PNG ou WebP.");
+        setPhotoError("Photo invalide. Réessayez avec un JPG, PNG ou WebP.");
         return;
       }
       setPhotoPreview(dataUrl);
       setPhotoBase64(dataUrl);
+      setPhotoError(null);
       setError(null);
     };
     reader.readAsDataURL(file);
@@ -148,6 +139,7 @@ export default function CreateForChildPage() {
 
     setLoading(true);
     setError(null);
+    setPhotoError(null);
     try {
       let childPhotoUrl: string | undefined;
       let childPhotoPath: string | undefined;
@@ -166,25 +158,30 @@ export default function CreateForChildPage() {
         try {
           upJson = await upRes.json();
         } catch {
-          throw new Error("Upload de la photo impossible. Réessayez.");
+          const msg = "Upload de la photo impossible. Réessayez.";
+          setPhotoError(msg);
+          throw new Error(msg);
         }
         if (!upRes.ok || !upJson.success) {
           const code = upJson.error?.code;
+          let msg = upJson.error?.message || "Upload de la photo impossible. Réessayez.";
           if (upRes.status === 401 || code === "UNAUTHORIZED") {
-            throw new Error("Connectez-vous pour envoyer la photo de l’enfant.");
+            msg = "Connectez-vous pour envoyer la photo de l’enfant.";
+          } else if (upRes.status === 429 || code === "RATE_LIMITED") {
+            msg = "Trop d’envois. Réessayez dans une minute.";
+          } else if (upRes.status >= 500) {
+            msg = "Le serveur n’a pas pu enregistrer la photo. Réessayez.";
           }
-          if (upRes.status === 429 || code === "RATE_LIMITED") {
-            throw new Error("Trop d’envois. Réessayez dans une minute.");
-          }
-          throw new Error(
-            upJson.error?.message || "Upload de la photo impossible. Réessayez."
-          );
+          setPhotoError(msg);
+          throw new Error(msg);
         }
         childPhotoUrl = upJson.data?.url as string;
         childPhotoPath =
           typeof upJson.data?.path === "string" ? upJson.data.path : undefined;
         if (!childPhotoUrl) {
-          throw new Error("Upload de la photo incomplet. Réessayez.");
+          const msg = "Upload de la photo incomplet. Réessayez.";
+          setPhotoError(msg);
+          throw new Error(msg);
         }
       }
 
@@ -390,24 +387,38 @@ export default function CreateForChildPage() {
             Pour que le héros lui ressemble. Portrait clair, visage visible. JPG, PNG
             ou WebP · max 5 Mo. Optionnel.
           </p>
-          <input
-            ref={photoInputRef}
-            id="child-photo-input"
-            type="file"
-            accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-            className="sr-only"
-            tabIndex={-1}
-            aria-labelledby="child-photo-label"
-            onChange={(e) => onPhotoChange(e.target.files?.[0] ?? null)}
-          />
-          <button
-            type="button"
-            onClick={openPhotoPicker}
-            className="flex w-full cursor-pointer flex-col items-center gap-2 rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 px-4 py-6 text-sm text-ink-muted transition hover:border-sky-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
-          >
-            <Upload className="h-5 w-5 text-sky-600" aria-hidden />
-            <span>{photoPreview ? "Changer la photo" : "Ajouter une photo"}</span>
-          </button>
+          {/*
+            Native file input covers the drop zone (opacity-0, full size).
+            Do NOT use display:none, sr-only clip, or programmatic input.click() —
+            Safari/iOS blocks those patterns.
+          */}
+          <div className="group relative">
+            <div
+              className="pointer-events-none flex w-full flex-col items-center gap-2 rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 px-4 py-6 text-sm text-ink-muted transition group-hover:border-sky-300 group-focus-within:border-sky-400 group-focus-within:ring-2 group-focus-within:ring-sky-400"
+              aria-hidden
+            >
+              <Upload className="h-5 w-5 text-sky-600" />
+              <span>{photoPreview ? "Changer la photo" : "Ajouter une photo"}</span>
+            </div>
+            <input
+              id="child-photo"
+              name="child-photo"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+              aria-labelledby="child-photo-label"
+              className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
+              onClick={(e) => {
+                // Reset so choosing the same file again still fires onChange.
+                (e.currentTarget as HTMLInputElement).value = "";
+              }}
+              onChange={(e) => onPhotoChange(e.target.files?.[0] ?? null)}
+            />
+          </div>
+          {photoError ? (
+            <p className="text-sm text-rose-700" role="alert">
+              {photoError}
+            </p>
+          ) : null}
           {photoPreview ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
