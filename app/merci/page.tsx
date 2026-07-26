@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { safeRechargeReturnPath } from "@/lib/recharge-return";
+import { trackMetaEvent } from "@/components/analytics/meta-pixel";
 
 type PurchaseState = "checking" | "confirmed" | "delayed" | "not_found";
 
@@ -19,6 +20,7 @@ function MerciContent() {
   );
   const [state, setState] = useState<PurchaseState>(sale ? "checking" : "not_found");
   const [credits, setCredits] = useState<number | null>(null);
+  const purchaseTracked = useRef(false);
 
   useEffect(() => {
     if (!sale) return;
@@ -36,6 +38,19 @@ function MerciContent() {
         if (!cancelled && response.ok && json.data?.state === "confirmed") {
           setCredits(json.data.credits);
           setState("confirmed");
+          if (!purchaseTracked.current) {
+            purchaseTracked.current = true;
+            trackMetaEvent(
+              "Purchase",
+              {
+                content_name: "Crédits MeeraDraw",
+                content_ids: [`credits-${json.data.credits}`],
+                content_type: "product",
+                currency: "XOF",
+              },
+              { eventID: `chariow-${sale}` }
+            );
+          }
           if (returnTo) {
             timer = setTimeout(() => router.replace(returnTo), 2200);
           }
