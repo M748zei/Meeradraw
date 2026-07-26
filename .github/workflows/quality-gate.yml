@@ -1,0 +1,41 @@
+name: Quality Gate
+
+on:
+  push:
+    branches:
+      - main
+      - agent/world-class-coloring-quality
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Logic tests
+        run: npm run test:functional:logic
+      - name: Production build
+        run: npm run build
+        env:
+          MOCK_AI: "true"
+          NEXT_TELEMETRY_DISABLED: "1"
