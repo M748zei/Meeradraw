@@ -3,6 +3,7 @@ import { createSessionCookie, clearSessionCookie } from "@/lib/firebase/session"
 import { getAdminAuth, getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebase/admin";
 import { buildNewProfile } from "@/lib/api-auth";
 import { isDisposableEmail } from "@/lib/disposable-email";
+import { hasVerifiedEmailOwnership } from "@/lib/email-ownership";
 import { claimPendingCredits } from "@/services/chariow-sale";
 import { AccessOpenService } from "@/services/access-open";
 import {
@@ -19,6 +20,18 @@ export async function POST(request: Request) {
     rateLimit(`session:${clientIp(request)}`, { limit: 15, windowMs: 60_000 });
     const { idToken } = schema.parse(await request.json());
     const decoded = await getAdminAuth().verifyIdToken(idToken);
+    let emailOwnershipVerified = hasVerifiedEmailOwnership(
+      Boolean(decoded.email_verified)
+    );
+    try {
+      const userRecord = await getAdminAuth().getUser(decoded.uid);
+      emailOwnershipVerified = hasVerifiedEmailOwnership(
+        Boolean(userRecord.emailVerified),
+        userRecord.providerData.map((provider) => provider.providerId)
+      );
+    } catch {
+      /* Keep the verified Firebase token claim. */
+    }
 
     // One account = one real email = the free trials. Throwaway domains are
     // rejected for email/password AND Google sign-ins; the just-created Auth
@@ -41,7 +54,7 @@ export async function POST(request: Request) {
       }
       // Purchases made with this email before the account existed (or while
       // the webhook raced signup) land now — idempotent per sale.
-      if (decoded.email) {
+      if (decoded.email && emailOwnershipVerified) {
         await claimPendingCredits(db, decoded.uid, decoded.email).catch((err) =>
           console.error("claimPendingCredits failed", err)
         );
@@ -51,20 +64,7 @@ export async function POST(request: Request) {
       // the Auth email matches and is verified / Google.
       const purchaseCtx = await getPurchaseContextCookie();
       if (purchaseCtx?.saleId && decoded.email) {
-        let emailVerified = Boolean(decoded.email_verified);
-        try {
-          const userRecord = await getAdminAuth().getUser(decoded.uid);
-          emailVerified = Boolean(userRecord.emailVerified);
-          if (
-            !emailVerified &&
-            userRecord.providerData.some((p) => p.providerId === "google.com")
-          ) {
-            emailVerified = true;
-          }
-        } catch {
-          /* keep token claim */
-        }
-        if (emailVerified) {
+        if (emailOwnershipVerified) {
           await new AccessOpenService(db)
             .attachToUser({
               userId: decoded.uid,
