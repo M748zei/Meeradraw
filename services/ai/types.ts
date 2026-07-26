@@ -182,6 +182,11 @@ export interface ImageGenerationInput {
    * recovery keeps the style contract (no aesthetic jump).
    */
   consistencyMode?: boolean;
+  /**
+   * Paid parent-book contract: never return a candidate that has not passed
+   * semantic visual QC (cast/species, anatomy, action and colorable scenery).
+   */
+  strictQuality?: boolean;
 }
 
 /** Per-image QC telemetry so re-roll cost is observable (logged on generations). */
