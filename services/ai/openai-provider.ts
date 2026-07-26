@@ -51,12 +51,14 @@ function createTextClient(prefer: "groq" | "openai" = "groq"): OpenAI {
     });
   }
   if (openaiKey) {
-    return new OpenAI({ apiKey: openaiKey });
+    return new OpenAI({ apiKey: openaiKey, timeout: 30_000, maxRetries: 0 });
   }
   if (groqKey) {
     return new OpenAI({
       apiKey: groqKey,
       baseURL: "https://api.groq.com/openai/v1",
+      timeout: 30_000,
+      maxRetries: 0,
     });
   }
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30_000, maxRetries: 0 });
