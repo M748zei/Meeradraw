@@ -437,7 +437,7 @@ export const RICH_ENVIRONMENT_POSITIVE =
  * "artist hand" / line weight mid-book (parent text-only path especially).
  */
 export const BOOK_SERIES_STYLE_LOCK =
-  "BOOK SERIES LOCK (identical every page): same uniform thick black outline weight, same children's cartoon line-art hand, same character face/hair/outfit proportions, same world drawing language — looks like ONE artist drew the whole book. Never switch style, never sketchier/thinner/more detailed than other pages.";
+  "BOOK SERIES LOCK (identical every page): same controlled thick black outline system with gently varied organic emphasis, same children's book ink hand, same character face/hair/outfit proportions, same world drawing language — looks like ONE professional artist drew the whole book. Never switch style, never become sketchier, thinner or more detailed than adjacent pages.";
 
 /** Gender-specific positives/negatives for parent hero identity. */
 export function heroGenderPromptBits(gender?: string | null): {
@@ -519,7 +519,7 @@ export function buildColoringPagePrompt(params: {
         ? "Wide shot: full figures inside a rich environment with large colorable props."
         : params.shotType === "close_safe"
           ? "Close-but-safe: full face and shoulders inside the frame, background props still visible."
-          : "Full-body shot: characters standing in the environment, head-to-toe inside the frame.";
+          : "Full-body action shot: characters actively moving in the environment, head-to-toe inside the frame.";
 
   const settingLine = (params.settingElements || []).filter(Boolean).slice(0, 4);
 
@@ -614,6 +614,8 @@ export function buildCharacterSheetPrompt(params: {
   /** When true, keep likeness of a real child photo (Kontext/img2img). */
   identityFromPhoto?: boolean;
 }): string {
+  const referenceCraft =
+    "PREMIUM COLORED CHARACTER DESIGN REFERENCE: soft flat colors, crisp organic outlines, clean readable silhouette, accurate child anatomy or natural animal anatomy, plain white background. This is NOT a coloring page: no B&W-only rule, no scenery, no text.";
   const countClause = params.castCount
     ? `EXACTLY ${params.castCount} figure${params.castCount > 1 ? "s" : ""} in the image — count them: ${params.castCount}, not one more, not one less.`
     : "";
@@ -625,7 +627,7 @@ export function buildCharacterSheetPrompt(params: {
       `CHARACTER LOCK to honor: ${params.characters}.`,
       "EXACTLY ONE figure — the hero child only. No siblings, no crowd, no adults.",
       countClause,
-      styleImageCraftLine(params.style),
+      referenceCraft,
       "Soft flat COLORS, clean bold cartoon outlines, warm and joyful. NO text, no letters, no watermark, no scary eyes, no adult proportions.",
     ]
       .filter(Boolean)
@@ -636,7 +638,7 @@ export function buildCharacterSheetPrompt(params: {
     `DRAW EXACTLY THIS CAST — one figure per listed character, nobody else: ${params.characters}.`,
     countClause,
     CHILD_SAFE_FACE_POSITIVE,
-    styleImageCraftLine(params.style),
+    referenceCraft,
     "Each character keeps their exact species, gender, age, skin tone, hairstyle and outfit as described — no substitutions, no duplicates, no twins.",
     "Any ANIMAL character is a REAL animal of its species standing ON ALL FOUR LEGS in natural side profile (a fox = real four-legged fox with pointy ears, slender snout, bushy tail; an elephant = real elephant calf on four legs with its trunk down) — NOT a dog, NOT a human child, NOT standing upright on two legs, NOT wearing a collar or clothes, NOT anthropomorphic.",
     "Soft flat COLORS with clean bold cartoon outlines, friendly and warm, simple shapes for young children.",
