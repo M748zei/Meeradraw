@@ -94,7 +94,7 @@ export async function POST(request: Request) {
     const body = schema.parse(await readLimitedJson(request));
 
     let raw = body.imageBase64.trim();
-    let contentType = body.contentType;
+    let contentType: string = body.contentType;
     const dataUrl = /^data:(image\/(?:jpeg|png|webp|heic|heif));base64,(.+)$/i.exec(raw);
     if (dataUrl) {
       contentType = dataUrl[1].toLowerCase() as typeof contentType;
