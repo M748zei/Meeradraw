@@ -91,6 +91,42 @@ body {
   border-width: 0;
 }
 
+/*
+  Full-zone photo picker: native <input type="file"> only paints a small
+  "Browse" button as the real hit target. Stretch that button to 100% so
+  clicks anywhere on the dashed zone open the chooser (WebKit/Blink/Gecko).
+  opacity:0 alone can disable hit-testing in Safari — use 0.01.
+*/
+.file-drop-input {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  opacity: 0.01;
+  font-size: 100px;
+  /* Cache-bust marker for digiafrik deploy verification: photo-hitfix-v4 */
+}
+.file-drop-input::-webkit-file-upload-button {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+.file-drop-input::file-selector-button {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+
 .h-13 {
   height: 3.25rem;
 }

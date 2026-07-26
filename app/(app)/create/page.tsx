@@ -388,31 +388,38 @@ export default function CreateForChildPage() {
             ou WebP · max 5 Mo. Optionnel.
           </p>
           {/*
-            Native file input covers the drop zone (opacity-0, full size).
-            Do NOT use display:none, sr-only clip, or programmatic input.click() —
-            Safari/iOS blocks those patterns.
+            Nuclear file picker: input sits ON TOP (z-20) covering 100% of the zone.
+            Visual children are pointer-events-none. No button, no label/htmlFor,
+            no input.click(), no sr-only/clip/display:none.
+            .file-drop-input expands the native Browse button hit area (see globals.css).
           */}
-          <div className="group relative">
-            <div
-              className="pointer-events-none flex w-full flex-col items-center gap-2 rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 px-4 py-6 text-sm text-ink-muted transition group-hover:border-sky-300 group-focus-within:border-sky-400 group-focus-within:ring-2 group-focus-within:ring-sky-400"
-              aria-hidden
-            >
-              <Upload className="h-5 w-5 text-sky-600" />
-              <span>{photoPreview ? "Changer la photo" : "Ajouter une photo"}</span>
-            </div>
+          <div
+            className="group relative min-h-[7.5rem] overflow-hidden rounded-2xl"
+            data-testid="child-photo-dropzone"
+          >
             <input
               id="child-photo"
               name="child-photo"
               type="file"
               accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
               aria-labelledby="child-photo-label"
-              className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
-              onClick={(e) => {
-                // Reset so choosing the same file again still fires onChange.
-                (e.currentTarget as HTMLInputElement).value = "";
+              data-testid="child-photo-input"
+              className="file-drop-input"
+              disabled={loading}
+              onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                onPhotoChange(file);
+                // Reset after read so the same file can be chosen again.
+                e.currentTarget.value = "";
               }}
-              onChange={(e) => onPhotoChange(e.target.files?.[0] ?? null)}
             />
+            <div
+              className="pointer-events-none relative z-0 flex w-full flex-col items-center gap-2 rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 px-4 py-6 text-sm text-ink-muted transition group-hover:border-sky-300 group-focus-within:border-sky-400 group-focus-within:ring-2 group-focus-within:ring-sky-400"
+              aria-hidden
+            >
+              <Upload className="h-5 w-5 text-sky-600" />
+              <span>{photoPreview ? "Changer la photo" : "Ajouter une photo"}</span>
+            </div>
           </div>
           {photoError ? (
             <p className="text-sm text-rose-700" role="alert">
@@ -425,6 +432,7 @@ export default function CreateForChildPage() {
               src={photoPreview}
               alt="Aperçu de la photo sélectionnée"
               className="mx-auto h-28 w-28 rounded-2xl object-cover shadow-soft"
+              data-testid="child-photo-preview"
             />
           ) : null}
         </Card>

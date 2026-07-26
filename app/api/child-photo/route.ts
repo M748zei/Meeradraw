@@ -59,12 +59,36 @@ async function readLimitedJson(request: Request): Promise<unknown> {
  */
 export async function POST(request: Request) {
   try {
-    const { user } = await requireUser();
-    await rateLimitAsync(`child-photo:${user.id}`, {
-      limit: 10,
-      windowMs: 60_000,
-      durable: true,
-    });
+    let user: Awaited<ReturnType<typeof requireUser>>["user"];
+    try {
+      ({ user } = await requireUser());
+    } catch (authErr) {
+      if (authErr instanceof AppError) return apiError(authErr);
+      return apiError(
+        new AppError("UNAUTHORIZED", "Connectez-vous pour envoyer la photo de l’enfant.", 401)
+      );
+    }
+
+    try {
+      await rateLimitAsync(`child-photo:${user.id}`, {
+        limit: 10,
+        windowMs: 60_000,
+        durable: true,
+      });
+    } catch (rlErr) {
+      if (rlErr instanceof AppError) {
+        return apiError(
+          new AppError(
+            "RATE_LIMITED",
+            "Trop d’envois de photos. Réessayez dans une minute.",
+            429
+          )
+        );
+      }
+      // Fail open if the durable limiter itself is unavailable.
+      console.error("[child-photo] rate limit store error", rlErr);
+    }
+
     const body = schema.parse(await readLimitedJson(request));
 
     let raw = body.imageBase64.trim();
