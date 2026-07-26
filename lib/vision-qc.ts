@@ -96,36 +96,37 @@ async function toSmallDataUrl(imageUrl: string): Promise<string | null> {
   }
 }
 
-/** Ask one JSON question about an image. Returns null on ANY failure (fail-open). */
-async function askVision<T>(imageUrl: string, question: string): Promise<T | null> {
+/** Ask one JSON question about one or more images. Returns null on ANY failure. */
+async function askVisionImages<T>(
+  imageUrls: string[],
+  question: string
+): Promise<T | null> {
   const backend = resolveVisionBackend();
-  if (!backend) return null;
-  const inlined = (await toSmallDataUrl(imageUrl)) || imageUrl;
+  if (!backend || !imageUrls.length) return null;
+  const inlined = await Promise.all(
+    imageUrls.map(async (url) => (await toSmallDataUrl(url)) || url)
+  );
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), VISION_TIMEOUT_MS);
   try {
+    const content: Array<Record<string, unknown>> = [
+      {
+        type: "text",
+        text: `${question}\n\nImages are ordered exactly as described. Answer with ONLY a single JSON object, no markdown, no extra prose after the JSON.`,
+      },
+      ...inlined.map((url) => ({
+        type: "image_url",
+        image_url: { url },
+      })),
+    ];
     const body: Record<string, unknown> = {
       model: backend.model,
       temperature: 0,
-      max_tokens: 400,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `${question}\n\nAnswer with ONLY a single JSON object, no markdown, no extra prose after the JSON.`,
-            },
-            { type: "image_url", image_url: { url: inlined } },
-          ],
-        },
-      ],
+      max_tokens: 500,
+      messages: [{ role: "user", content }],
     };
-    if (backend.groqThinking) {
-      // Thinking model: without this the <think> block eats the token budget.
-      body.reasoning_effort = "none";
-    }
+    if (backend.groqThinking) body.reasoning_effort = "none";
 
     const res = await fetch(backend.url, {
       method: "POST",
@@ -136,15 +137,14 @@ async function askVision<T>(imageUrl: string, question: string): Promise<T | nul
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-
-    // Fail-open immediately on 429 — never sleep 9–20s mid-pipeline (that
-    // stack of waits was a root cause of the Vercel 300s kill).
     if (res.status === 429) {
-      console.warn("[vision-qc] 429 rate limit; fail-open (no wait)");
+      console.warn("[vision-qc] 429 rate limit; no identity verdict");
       return null;
     }
     if (!res.ok) {
-      console.warn(`[vision-qc] provider ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      console.warn(
+        `[vision-qc] provider ${res.status}: ${(await res.text()).slice(0, 200)}`
+      );
       return null;
     }
     const data = (await res.json()) as {
@@ -158,11 +158,79 @@ async function askVision<T>(imageUrl: string, question: string): Promise<T | nul
     if (!match) return null;
     return JSON.parse(match[0]) as T;
   } catch (err) {
-    console.warn("[vision-qc] unavailable (fail-open)", err instanceof Error ? err.message : err);
+    console.warn(
+      "[vision-qc] unavailable",
+      err instanceof Error ? err.message : err
+    );
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Ask one JSON question about one image. */
+async function askVision<T>(imageUrl: string, question: string): Promise<T | null> {
+  return askVisionImages<T>([imageUrl], question);
+}
+
+export interface IdentityReference {
+  name: string;
+  kind: string;
+  visualLock?: string;
+  referenceImageUrl: string;
+}
+
+export interface IdentityCheck {
+  matches: boolean;
+  scores: Array<{ name: string; score: number; issue?: string }>;
+  issue?: string;
+}
+
+/**
+ * Compare a generated page directly with the ordered portrait references.
+ * Image 1 is the candidate page; images 2..N are the character sources of truth.
+ */
+export async function checkIdentityReferences(
+  imageUrl: string,
+  references: IdentityReference[]
+): Promise<IdentityCheck | null> {
+  if (!references.length) return null;
+  const referenceMap = references
+    .map(
+      (ref, index) =>
+        `Image ${index + 2}: ${ref.name} (${ref.kind}); locked traits: ${(
+          ref.visualLock || "preserve every visible identity trait"
+        ).slice(0, 400)}`
+    )
+    .join("\n");
+  const result = await askVisionImages<{
+    matches: boolean;
+    scores: Array<{ name: string; score: number; issue?: string }>;
+    issue?: string;
+  }>(
+    [imageUrl, ...references.map((ref) => ref.referenceImageUrl)],
+    `Image 1 is a generated coloring-book page. Compare every named character in Image 1 with their portrait source:
+${referenceMap}
+Judge identity, not just species: face/head shape, apparent age, hairstyle or fur markings, body proportions, outfit and signature accessory. Pose, camera angle and black-and-white conversion may change.
+A character passes only at score >= 85/100. Every expected reference must appear exactly once and no identity may be swapped.
+JSON schema: {"matches": <true only if every score is >=85 and every identity is present once>, "scores": [{"name":"...", "score":<0-100>, "issue":"..."}], "issue":"<overall mismatch>"}`
+  );
+  if (!result || typeof result.matches !== "boolean" || !Array.isArray(result.scores)) {
+    return null;
+  }
+  const scores = result.scores.map((item) => ({
+    name: String(item.name || "").slice(0, 80),
+    score: Math.max(0, Math.min(100, Number(item.score) || 0)),
+    issue: item.issue ? String(item.issue).slice(0, 180) : undefined,
+  }));
+  return {
+    matches:
+      result.matches &&
+      scores.length === references.length &&
+      scores.every((item) => item.score >= 85),
+    scores,
+    issue: result.issue ? String(result.issue).slice(0, 240) : undefined,
+  };
 }
 
 /**
