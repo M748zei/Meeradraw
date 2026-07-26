@@ -3,6 +3,10 @@ import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit-store";
 import { RECHARGE_PACKS } from "@/config/credits";
 import { safeRechargeReturnPath } from "@/lib/recharge-return";
+import {
+  CHECKOUT_PHONE_COUNTRIES,
+  normalizeCheckoutPhone,
+} from "@/lib/checkout-phone";
 import { z } from "zod";
 
 /**
@@ -16,7 +20,15 @@ import { z } from "zod";
 const schema = z.object({
   pack_id: z.string().refine((id) => RECHARGE_PACKS.some((pack) => pack.id === id)),
   phone: z
-    .object({ number: z.string().min(6).max(20), country_code: z.string().length(2) })
+    .object({
+      number: z.string().min(6).max(20),
+      country_code: z.enum(
+        Object.keys(CHECKOUT_PHONE_COUNTRIES) as [
+          keyof typeof CHECKOUT_PHONE_COUNTRIES,
+          ...(keyof typeof CHECKOUT_PHONE_COUNTRIES)[],
+        ]
+      ),
+    })
     .optional(),
   return_to: z.string().max(300).optional(),
 });
@@ -49,14 +61,14 @@ export async function POST(request: Request) {
 
     // Chariow requires a phone (Mobile Money). Use the one sent by the client,
     // else the profile one; without any, tell the client to collect it first.
-    const phone = body.phone ?? profile.phone ?? null;
+    const phone = normalizeCheckoutPhone(body.phone ?? profile.phone);
     if (!phone) {
       return apiSuccess({ need_phone: true });
     }
     if (body.phone) {
       // Remember for next time — the next recharge is one click.
       await db.collection("users").doc(user.id).set(
-        { phone: body.phone, updated_at: new Date().toISOString() },
+        { phone, updated_at: new Date().toISOString() },
         { merge: true }
       );
     }
@@ -74,10 +86,7 @@ export async function POST(request: Request) {
         email,
         first_name: firstName.slice(0, 50),
         last_name: lastName.slice(0, 50),
-        phone: {
-          number: phone.number.replace(/\D/g, ""),
-          country_code: phone.country_code.toUpperCase(),
-        },
+        phone,
         redirect_url: `${appUrl}/merci?sale={sale_id}${
           returnTo ? `&return_to=${encodeURIComponent(returnTo)}` : ""
         }`,
