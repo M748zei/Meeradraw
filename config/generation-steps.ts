@@ -32,7 +32,7 @@ export const GENERATION_TEAM = [
   {
     id: "illustrator",
     role: "L'Illustrateur",
-    message: "Je dessine chaque case BD : corps complets, traits nets, cast stable.",
+    message: "Je compose chaque grande page de coloriage : une scène unique, contours nets, personnage stable.",
     progress: 75,
   },
   {
