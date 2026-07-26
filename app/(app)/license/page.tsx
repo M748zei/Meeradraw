@@ -1,23 +1,23 @@
 "use client";
 
-import { PARENT_PROMISE } from "@/config/parent-create";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { CheckCircle2, KeyRound, ShieldCheck, Sparkles } from "lucide-react";
+import {
+  CheckCircle2,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 
 type Status = {
   configured: boolean;
   required: boolean;
   valid?: boolean;
   license?: {
-    status?: string;
     product?: string | null;
     expires_at?: string | null;
-    masked_key?: string | null;
     is_active?: boolean;
   } | null;
   message?: string;
@@ -27,46 +27,50 @@ type Status = {
 const STORE_URL = process.env.NEXT_PUBLIC_CHARIOW_STORE_URL;
 
 export default function AccessPage() {
-  const router = useRouter();
-  const [key, setKey] = useState("");
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  async function refresh() {
-    const res = await fetch("/api/license/status");
-    const json = await res.json();
-    if (json.success) setStatus(json.data);
-  }
-
-  useEffect(() => {
-    // Deferred so the effect body itself never sets state synchronously.
-    const t = setTimeout(() => void refresh().catch(() => undefined), 0);
-    return () => clearTimeout(t);
-     
-  }, []);
-
-  async function activate(e: React.FormEvent) {
-    e.preventDefault();
+  const refresh = useCallback(async (showFeedback = false) => {
     setLoading(true);
-    setError(null);
+    if (showFeedback) setNotice(null);
     try {
-      const res = await fetch("/api/license/activate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ license_key: key }),
-      });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error?.message || "Déblocage impossible");
-      await refresh();
-      router.push("/create");
-      router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur");
+      const reconcile = await fetch("/api/access/reconcile", { method: "POST" });
+      const reconcileJson = await reconcile.json().catch(() => null);
+
+      const response = await fetch("/api/license/status", { cache: "no-store" });
+      const json = await response.json();
+      if (!json.success) {
+        throw new Error(json.error?.message || "Vérification impossible");
+      }
+      setStatus(json.data);
+
+      if (showFeedback) {
+        if (json.data?.valid) {
+          setNotice("Ton achat est bien rattaché à ce compte.");
+        } else if (!reconcile.ok && reconcileJson?.error?.message) {
+          setNotice(reconcileJson.error.message);
+        } else {
+          setNotice(
+            "Aucun nouvel achat n’a encore été trouvé pour l’e-mail de ce compte."
+          );
+        }
+      }
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Nous n’arrivons pas à vérifier ton achat pour le moment."
+      );
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refresh(false), 0);
+    return () => window.clearTimeout(timer);
+  }, [refresh]);
 
   const valid = status?.valid;
   const configured = status?.configured;
@@ -79,26 +83,13 @@ export default function AccessPage() {
     <div className="mx-auto max-w-lg space-y-6">
       <div>
         <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-100 to-mint-100 text-sky-700">
-          <KeyRound className="h-6 w-6" />
+          <ShieldCheck className="h-6 w-6" />
         </div>
-        <h1 className="font-display text-3xl">Ton accès</h1>
+        <h1 className="font-display text-3xl">Mon accès Meeradraw</h1>
         <p className="mt-2 text-ink-muted">
-          {PARENT_PROMISE} Après ton achat, entre ici le code d&apos;accès reçu
-          par email pour débloquer ton studio.
+          Ton achat est retrouvé grâce à l’adresse e-mail de ton compte. Aucun
+          code d’accès n’est nécessaire.
         </p>
-        {STORE_URL ? (
-          <p className="mt-2 text-sm">
-            Pas encore d&apos;accès ?{" "}
-            <a
-              href={STORE_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="font-semibold text-sky-700 underline"
-            >
-              Prendre mon accès Meeradraw
-            </a>
-          </p>
-        ) : null}
       </div>
 
       {trialsExhausted ? (
@@ -107,13 +98,12 @@ export default function AccessPage() {
             <Sparkles className="h-5 w-5 text-sky-600" /> Tu as adoré ?
           </p>
           <p className="mt-1 text-sm text-ink-muted">
-            Tes {trials?.max} essais gratuits sont utilisés. Débloque ton accès
-            Meeradraw pour créer des livres complets (jusqu&apos;à 25 pages) et
-            recharger des crédits quand tu veux.
+            Tes {trials?.max} essais gratuits sont utilisés. L’accès Meeradraw
+            inclut 120 crédits, soit environ deux livres complets.
           </p>
           {STORE_URL ? (
             <a href={STORE_URL} target="_blank" rel="noreferrer" className="mt-3 inline-block">
-              <Button>Débloquer mon accès</Button>
+              <Button>Prendre mon accès</Button>
             </a>
           ) : null}
         </Card>
@@ -126,8 +116,7 @@ export default function AccessPage() {
               Il te reste {trials.remaining} essai{trials.remaining > 1 ? "s" : ""} gratuit
               {trials.remaining > 1 ? "s" : ""}
             </span>{" "}
-            ({trials.max_pages} pages max par livre) — tu peux créer sans accès
-            pour découvrir Meeradraw.{" "}
+            ({trials.max_pages} pages max par livre).{" "}
             <Link href="/create" className="font-semibold text-sky-700 underline">
               Créer pour mon enfant
             </Link>
@@ -135,73 +124,83 @@ export default function AccessPage() {
         </Card>
       ) : null}
 
-      <Card className="space-y-3">
+      <Card className="space-y-4">
         <p className="text-sm text-ink-muted">Statut</p>
         {!status ? (
-          <p className="text-sm">Vérification…</p>
+          <p className="text-sm">Vérification automatique…</p>
         ) : !configured ? (
           <div className="space-y-2 text-sm">
             <p className="font-semibold text-yellow-800">Mode développement</p>
             <p className="text-ink-muted">
-              {status.message ||
-                "Vérification d'accès désactivée. Les générations sont autorisées en local."}
+              {status.message || "La vérification d’accès est désactivée en local."}
             </p>
-            <Link href="/create" className="inline-block">
-              <Button size="sm" variant="secondary">
-                Créer pour mon enfant
-              </Button>
-            </Link>
           </div>
         ) : valid ? (
-          <div className="space-y-1 text-sm">
+          <div className="space-y-2 text-sm">
             <p className="flex items-center gap-2 font-semibold text-mint-800">
               <CheckCircle2 className="h-5 w-5" /> Accès actif
             </p>
-            {status.license?.product ? <p>Produit : {status.license.product}</p> : null}
-            {status.license?.masked_key ? <p>Code : {status.license.masked_key}</p> : null}
+            {status.license?.product ? <p>Offre : {status.license.product}</p> : null}
             {status.license?.expires_at ? (
-              <p>Expire : {new Date(status.license.expires_at).toLocaleDateString("fr-FR")}</p>
-            ) : (
-              <p>Durée : selon ton offre</p>
-            )}
-            <Link href="/create" className="mt-2 inline-block">
+              <p>
+                Valable jusqu’au{" "}
+                {new Date(status.license.expires_at).toLocaleDateString("fr-FR")}
+              </p>
+            ) : null}
+            <Link href="/create" className="inline-block pt-1">
               <Button size="sm">Créer pour mon enfant</Button>
             </Link>
           </div>
         ) : (
-          <p className="text-sm text-rose-700">
-            {status.message || "Aucun accès actif. Entre ton code d'accès ci-dessous."}
-          </p>
+          <div className="space-y-3 text-sm">
+            <p className="text-rose-700">
+              Aucun achat actif n’a encore été rattaché à l’e-mail de ce compte.
+            </p>
+            <p className="text-ink-muted">
+              Si tu viens de payer, vérifie que tu utilises exactement le même
+              e-mail que sur DigiAfrik, puis relance la vérification.
+            </p>
+          </div>
         )}
+
+        {notice ? (
+          <p className="rounded-xl bg-cream-50 px-3 py-2 text-sm text-ink-muted">
+            {notice}
+          </p>
+        ) : null}
+
+        {configured && !valid ? (
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            disabled={loading}
+            onClick={() => void refresh(true)}
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            {loading ? "Vérification…" : "Retrouver mon achat"}
+          </Button>
+        ) : null}
       </Card>
 
-      <Card>
-        <form onSubmit={activate} className="space-y-4">
-          <div>
-            <label className="mb-2 block text-sm font-semibold">Code d&apos;accès</label>
-            <Input
-              placeholder="ABC-123-XYZ-789"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              required
-              minLength={6}
-              disabled={!configured}
-            />
-          </div>
-          {error ? <p className="text-sm text-rose-700">{error}</p> : null}
-          <Button type="submit" className="w-full" disabled={loading || !configured}>
-            {loading
-              ? "Déblocage…"
-              : configured
-                ? "Débloquer mon accès"
-                : "Déblocage indisponible (API non configurée)"}
-          </Button>
-          <p className="flex items-center justify-center gap-1.5 text-xs text-ink-muted">
-            <ShieldCheck className="h-3.5 w-3.5 text-mint-400" />
-            Vérification sécurisée. Ton code d&apos;accès n&apos;est jamais partagé.
-          </p>
-        </form>
-      </Card>
+      {!valid && STORE_URL ? (
+        <p className="text-center text-sm text-ink-muted">
+          Pas encore d’accès ?{" "}
+          <a
+            href={STORE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="font-semibold text-sky-700 underline"
+          >
+            Découvrir l’offre Meeradraw
+          </a>
+        </p>
+      ) : null}
+
+      <p className="flex items-center justify-center gap-1.5 text-xs text-ink-muted">
+        <ShieldCheck className="h-3.5 w-3.5 text-mint-500" />
+        Rattachement sécurisé, limité à l’adresse e-mail vérifiée de l’achat.
+      </p>
     </div>
   );
 }
