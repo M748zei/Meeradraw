@@ -1064,7 +1064,49 @@ export class GenerationOrchestrator {
     isTrial = false
   ): Promise<void> {
     console.error("generation failed", err);
-    // Only clear the book lock if it still points at this generation.
+    // Compensation must succeed before this generation becomes terminal.
+    // Otherwise leave it queued+cancelled with an ancient heartbeat: polling
+    // and cron will retry the same idempotent refund through the reaper.
+    let compensated = isTrial || cost <= 0;
+    try {
+      if (!isTrial && cost > 0) {
+        await this.credits.refund(
+          userId,
+          cost,
+          "Remboursement — génération interrompue",
+          `gen:${generationId}:refund:full`
+        );
+        compensated = true;
+      }
+      if (isTrial) {
+        await this.releaseFreeTrialSlot(userId, generationId);
+      }
+    } catch (refundErr) {
+      console.error("refund after generation failure failed", refundErr);
+    }
+
+    if (!compensated) {
+      try {
+        await this.db.collection("generations").doc(generationId).set(
+          {
+            status: "queued",
+            cancelled: true,
+            refund_pending: true,
+            error_message:
+              "La création s’est interrompue. Le remboursement automatique est en cours.",
+            updated_at: new Date().toISOString(),
+            heartbeat_at: "1970-01-01T00:00:00.000Z",
+          },
+          { merge: true }
+        );
+      } catch (pendingErr) {
+        console.error("could not persist pending refund state", pendingErr);
+      }
+      return;
+    }
+
+    // Only clear the book lock after compensation is confirmed, and only if it
+    // still points at this generation.
     try {
       const bookRef = this.db.collection("books").doc(bookId);
       await this.db.runTransaction(async (tx) => {
@@ -1081,24 +1123,11 @@ export class GenerationOrchestrator {
     } catch (lockErr) {
       console.error("failRun book lock clear failed", lockErr);
     }
-    // Full refund — separate key from partial so a prior partial cannot block.
-    // Idempotent with the reaper (`gen:<id>:refund:full`).
-    try {
-      await this.credits.refund(
-        userId,
-        cost,
-        "Remboursement — génération interrompue",
-        `gen:${generationId}:refund:full`
-      );
-    } catch (refundErr) {
-      console.error("refund after generation failure failed", refundErr);
-    }
-    if (isTrial) {
-      await this.releaseFreeTrialSlot(userId, generationId);
-    }
+
     await this.updateGeneration(generationId, {
       status: "failed",
       cancelled: true,
+      refund_pending: false,
       credits_used: 0,
       error_message: userFacingGenerationError(err),
       duration_ms: Date.now() - started,
