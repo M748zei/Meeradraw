@@ -51,12 +51,12 @@ const features = [
   {
     icon: BookOpen,
     title: "Niveau librairie",
-    text: "Une vraie progression narrative, une couverture, une variété de scènes. Prêt pour Amazon KDP.",
+    text: "Une vraie progression narrative, une couverture et des scènes variées, mises en page pour une impression simple.",
   },
   {
     icon: Clock,
     title: "En quelques minutes",
-    text: "De l'idée au PDF fini en moins de cinq minutes. Sans prompt, sans logiciel compliqué.",
+    text: "De l'idée au PDF fini en quelques minutes, selon le nombre de pages. Sans prompt, sans logiciel compliqué.",
   },
 ];
 
@@ -148,7 +148,7 @@ export default function LandingPage() {
                 <Check className="h-4 w-4 text-mint-400" /> Personnages cohérents
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <Check className="h-4 w-4 text-mint-400" /> En moins de 5 min
+                <Check className="h-4 w-4 text-mint-400" /> Création en quelques minutes
               </span>
             </div>
           </div>
