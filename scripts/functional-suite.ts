@@ -52,6 +52,7 @@ async function runLogicTests() {
   const { rateLimit, clientIp } = await import("../lib/rate-limit-store");
   const { AppError, apiError, apiSuccess } = await import("../lib/errors");
   const { extractSale } = await import("../services/chariow-sale");
+  const { hasVerifiedEmailOwnership } = await import("../lib/email-ownership");
 
   await test("estimateBookCost colorbook 12 pages", () => {
     // cover 5 + 12*2 + pdf 1 = 30
@@ -263,6 +264,21 @@ async function runLogicTests() {
     const msg = `Pour protéger votre achat, connectez-vous avec l’adresse utilisée lors du paiement : ${masked}.`;
     assert(msg.includes("p***@digiafrik.com"), msg);
     assert(!msg.includes("parent@"), "no full email");
+  });
+
+  await test("pending purchases require verified email ownership", () => {
+    assert(
+      hasVerifiedEmailOwnership(false, ["password"]) === false,
+      "unverified password account must not claim a purchase"
+    );
+    assert(
+      hasVerifiedEmailOwnership(true, ["password"]) === true,
+      "verified password account owns its email"
+    );
+    assert(
+      hasVerifiedEmailOwnership(false, ["google.com"]) === true,
+      "Google provider proves email ownership"
+    );
   });
 }
 
