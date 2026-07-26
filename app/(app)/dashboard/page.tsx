@@ -69,7 +69,7 @@ export default async function DashboardPage() {
             vérification.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <Link href="/license">
+            <Link href="/license" prefetch={false}>
               <Button size="sm">Retrouver mon achat</Button>
             </Link>
             {STORE_URL ? (
@@ -94,10 +94,10 @@ export default async function DashboardPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link href="/create">
+          <Link href="/create" prefetch={false}>
             <Button size="lg">Créer pour mon enfant</Button>
           </Link>
-          <Link href="/universes/new">
+          <Link href="/universes/new" prefetch={false}>
             <Button size="lg" variant="secondary">
               Studio avancé
             </Button>
@@ -138,7 +138,13 @@ export default async function DashboardPage() {
       <section>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-display text-2xl">Vos univers</h2>
-          <Link href="/universes/new" className="text-sm font-semibold text-sky-600">Nouveau</Link>
+          <Link
+            href="/universes/new"
+            prefetch={false}
+            className="text-sm font-semibold text-sky-600"
+          >
+            Nouveau
+          </Link>
         </div>
         {universes.length === 0 ? (
           <EmptyState
@@ -150,7 +156,7 @@ export default async function DashboardPage() {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {universes.map((u) => (
-              <Link key={u.id} href={`/universes/${u.id}`}>
+              <Link key={u.id} href={`/universes/${u.id}`} prefetch={false}>
                 <Card className="h-full transition hover:-translate-y-1 hover:shadow-lift">
                   <div className="mb-4 aspect-[4/3] overflow-hidden rounded-2xl bg-gradient-to-br from-sky-100 to-lavender-100">
                     {u.cover_image ? (
@@ -179,14 +185,14 @@ export default async function DashboardPage() {
             <p className="text-sm text-ink-muted">
               Aucun livre pour le moment. Commencez par le parcours parent.
             </p>
-            <Link href="/create">
+            <Link href="/create" prefetch={false}>
               <Button>Créer pour mon enfant</Button>
             </Link>
           </div>
         ) : (
           <div className="grid gap-3">
             {books.map((b) => (
-              <Link key={b.id} href={`/books/${b.id}`}>
+              <Link key={b.id} href={`/books/${b.id}`} prefetch={false}>
                 <Card className="flex items-center gap-4 transition hover:-translate-y-0.5 hover:shadow-lift">
                   <div className="h-16 w-12 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-mint-100 to-sky-100">
                     {b.cover_image ? (

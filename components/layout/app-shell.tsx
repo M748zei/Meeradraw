@@ -31,6 +31,7 @@ export function AppShell({
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch={false}
                 className="rounded-xl px-3 py-2 text-sm font-medium text-ink-muted transition hover:bg-white hover:text-ink"
               >
                 {item.label}
@@ -40,6 +41,7 @@ export function AppShell({
           <div className="flex items-center gap-3">
             <Link
               href="/credits"
+              prefetch={false}
               className="rounded-full bg-white px-3 py-1.5 text-sm font-semibold text-sky-700 shadow-soft transition hover:bg-sky-50 hover:shadow-lift"
               title="Voir et recharger vos crédits"
             >
@@ -60,6 +62,7 @@ export function AppShell({
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch={false}
                 className="flex flex-col items-center gap-1 rounded-xl px-3 py-2 text-[10px] font-medium text-ink-muted"
               >
                 <Icon className="h-5 w-5" />
