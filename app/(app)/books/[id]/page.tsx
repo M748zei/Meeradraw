@@ -43,7 +43,9 @@ export default async function BookPage({ params }: Props) {
   const missingPages = pages.filter(
     (p) => !p.illustration_url || p.generation_status === "failed"
   );
+  const hasActivePageRetry = pages.some((p) => p.generation_status === "generating");
   const canExportPdf =
+    !hasActivePageRetry &&
     (book.status === "completed" || book.status === "partial" || Boolean(book.pdf_url)) &&
     missingPages.length < pages.length;
 

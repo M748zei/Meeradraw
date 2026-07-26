@@ -87,6 +87,15 @@ export async function POST(request: Request) {
         });
         ids.push(doc.id);
       }
+      // Any claimed page can change the printable output. Invalidate the
+      // previously generated PDF in the same atomic commit as the page locks,
+      // so another tab can never download a stale export after a retry starts.
+      if (ids.length > 0) {
+        tx.update(bookSnap.ref, {
+          pdf_url: null,
+          updated_at: now,
+        });
+      }
       return ids;
     });
 
