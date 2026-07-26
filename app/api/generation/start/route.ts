@@ -246,20 +246,98 @@ export async function POST(request: Request) {
       }
     }
 
-    // Durable pipeline — survives >300s (12–25 page books).
-    const run = await start(generateBookWorkflow, [
-      {
-        userId: user.id,
-        bookId: body.book_id,
-        generationId,
-        cost,
-        isTrial,
-        startedAt,
-      },
-    ]);
+    // Durable pipeline — survives >300s (12–25 page books). Starting the
+    // workflow is the last fallible hand-off after the reservation. Compensate
+    // immediately if that hand-off fails so the parent never waits for the
+    // stale-generation reaper to recover their balance.
+    let workflowRunId: string;
+    try {
+      const run = await start(generateBookWorkflow, [
+        {
+          userId: user.id,
+          bookId: body.book_id,
+          generationId,
+          cost,
+          isTrial,
+          startedAt,
+        },
+      ]);
+      workflowRunId = run.runId;
+    } catch (launchError) {
+      const failedAt = new Date().toISOString();
+      let compensated = isTrial;
+      console.error(`[gen ${generationId}] workflow launch failed`, launchError);
+
+      try {
+        if (isTrial) {
+          await releaseTrialSlot(db, user.id, true);
+        } else {
+          await credits.refund(
+            user.id,
+            cost,
+            "Remboursement — lancement de génération impossible",
+            `gen:${generationId}:refund:full`
+          );
+          compensated = true;
+        }
+      } catch (compensationError) {
+        console.error(
+          `[gen ${generationId}] launch compensation failed`,
+          compensationError
+        );
+      }
+
+      await db.runTransaction(async (tx) => {
+        const currentBook = await tx.get(bookRef);
+        if (
+          compensated &&
+          currentBook.exists &&
+          currentBook.data()?.active_generation_id === generationId
+        ) {
+          tx.update(bookRef, {
+            status: "draft",
+            active_generation_id: null,
+            updated_at: failedAt,
+          });
+        }
+        tx.set(
+          genRef,
+          compensated
+            ? {
+                status: "failed",
+                cancelled: true,
+                credits_used: 0,
+                error_message:
+                  "La génération n’a pas pu démarrer. Tes crédits ont été remboursés.",
+                updated_at: failedAt,
+                heartbeat_at: failedAt,
+              }
+            : {
+                // Keep it reapable. A retry sees this ancient heartbeat and
+                // completes the same idempotent refund before starting again.
+                status: "queued",
+                launch_failed: true,
+                error_message:
+                  "La génération n’a pas pu démarrer. Le remboursement automatique est en cours.",
+                updated_at: failedAt,
+                heartbeat_at: "1970-01-01T00:00:00.000Z",
+              },
+          { merge: true }
+        );
+      });
+
+      throw new AppError(
+        "GENERATION_FAILED",
+        compensated
+          ? "La génération n’a pas pu démarrer. Tes crédits ont été remboursés — tu peux réessayer."
+          : "La génération n’a pas pu démarrer. Réessaie : le remboursement sera finalisé automatiquement.",
+        503,
+        "Réessayer"
+      );
+    }
 
     await genRef.set(
-      { workflow_run_id: run.runId, updated_at: new Date().toISOString() },
+      { workflow_run_id: workflowRunId, updated_at: new Date().toISOString() },
       { merge: true }
     );
 
@@ -268,7 +346,7 @@ export async function POST(request: Request) {
         generation_id: generationId,
         id: generationId,
         is_trial: isTrial,
-        workflow_run_id: run.runId,
+        workflow_run_id: workflowRunId,
         user_id: user.id,
         book_id: body.book_id,
         generation_type: "full_book",
