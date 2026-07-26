@@ -45,8 +45,16 @@ idée → enrichIdea → buildResearchBrief → generateStoryPlan (concept + bib
      → model sheet (fal) → cover → pages (fal, ref-guided) → PDF
 ```
 
+Chaque page reçoit aussi un gabarit déterministe de composition
+(`composition-templates.ts`) : profondeur premier/moyen/arrière-plan, position du
+héros, taille dans la page et géométrie d'action. Ce gabarit contraint la mise en
+scène sans figer l'histoire.
+
 ## Réglages fal (env)
 
 - `FAL_IMAGE_ENDPOINT` (défaut `flux/dev`), `FAL_REF_ENDPOINT` (Kontext, cohérence perso)
+- Pipeline contrôlé optionnel : `FAL_CONTROLLED_COLORING_ENABLED=true`,
+  `FAL_COLORING_LORA_URL` (poids LoRA sous licence commerciale),
+  `FAL_COLORING_LORA_SCALE`, `FAL_IDENTITY_REFERENCE_STRENGTH`
 - `FAL_SEND_NEGATIVE=true|false` — forcer/désactiver l'envoi du `negative_prompt` réel
 - `FAL_INFERENCE_STEPS`, `FAL_GUIDANCE_SCALE`, `FAL_REF_STRENGTH`, `PAGE_GEN_CONCURRENCY`
