@@ -6,10 +6,13 @@ import { buildWorldNegative } from "@/services/ai/prompts";
 import {
   buildCompactScene,
   buildPageScene,
+  charactersForPage,
+  expectedCastFor,
   formatPageCharacterLock,
   settingElementsForScene,
 } from "@/services/ai/character-bible";
-import type { SettingBible, StoryPlan } from "@/services/ai/types";
+import type { ImageQcStats, SettingBible, StoryPlan } from "@/services/ai/types";
+import { pageStyleSeed } from "@/lib/book-style-seed";
 import { LicenseService } from "@/services/license-service";
 import { CreditService } from "@/services/credit-service";
 import { StorageService } from "@/services/storage-service";
@@ -43,6 +46,9 @@ export async function POST(request: Request) {
     }
     const book = bookSnap.data()!;
     const credits = new CreditService(db);
+    const strictDelivery =
+      book.source === "parent_create" || book.type === "colorbook";
+    const storyPlan = strictDelivery ? storyPlanFromBook(book) : null;
     const pagesCol = db.collection("books").doc(body.book_id).collection("pages");
     const retryToken = randomUUID();
     const now = new Date().toISOString();
@@ -98,18 +104,8 @@ export async function POST(request: Request) {
         });
         ids.push(doc.id);
       }
-      // Any claimed page can change the printable output. Invalidate the
-      // previously generated PDF in the same atomic commit as the page locks,
-      // so another tab can never download a stale export after a retry starts.
-      if (ids.length > 0) {
-        tx.update(bookSnap.ref, {
-          pdf_url: null,
-          pdf_path: null,
-          pdf_export_token: null,
-          pdf_export_started_at: null,
-          updated_at: now,
-        });
-      }
+      // Keep the previous PDF and illustration until a replacement has passed
+      // the complete premium gate. A rejected retry must be lossless.
       return ids;
     });
 
@@ -222,6 +218,21 @@ export async function POST(request: Request) {
             characterBible;
           const scene =
             page.illustration_prompt || page.story_text || book.idea || book.title;
+          const planPage = storyPlan?.pages.find(
+            (candidate) => candidate.pageNumber === page.page_number
+          );
+          const expectedCast = planPage && storyPlan
+            ? expectedCastFor(charactersForPage(storyPlan, planPage))
+            : undefined;
+          const referenceImageUrl =
+            (Array.isArray(page.character_ids) &&
+              page.character_ids.length === 1 &&
+              sheetCrops[page.character_ids[0]]?.url) ||
+            characterSheetUrl;
+          if (strictDelivery && !referenceImageUrl) {
+            throw new Error("Premium retry requires a character reference");
+          }
+          const qcStats: ImageQcStats = {};
           const image = await imageProvider.generateImage({
             prompt: [
               scene,
@@ -237,11 +248,7 @@ export async function POST(request: Request) {
               undefined,
             worldSetting,
             isColoringPage: true,
-            referenceImageUrl:
-              (Array.isArray(page.character_ids) &&
-                page.character_ids.length === 1 &&
-                sheetCrops[page.character_ids[0]]?.url) ||
-              characterSheetUrl,
+            referenceImageUrl,
             shotType: page.shot_type,
             comicBeat: page.comic_beat,
             action: (typeof page.action === "string" && page.action) || undefined,
@@ -252,17 +259,47 @@ export async function POST(request: Request) {
               `${scene} ${page.story_text || ""}`
             ),
             worldNegative,
+            expectedCast,
+            qcStats,
+            strictQuality: strictDelivery,
+            ...(strictDelivery
+              ? {
+                  maxVisionRerolls: 2,
+                  maxQualityRerolls: 2,
+                  maxProviderAttempts: 2,
+                  skipRecovery: false,
+                  seed: pageStyleSeed(body.book_id, Number(page.page_number) || 1),
+                  stylePreset: "COLORING_BOOK_I",
+                  heroGender:
+                    typeof book.child_gender === "string"
+                      ? book.child_gender
+                      : undefined,
+                  consistencyMode: true,
+                }
+              : {}),
           });
           if (!image?.url) throw new Error("Empty image URL");
           const persisted = await storage.persistImageFromUrl(
             image.url,
-            `books/${body.book_id}/pages/${page.page_number}.png`
+            `books/${body.book_id}/retries/${retryToken}/pages/${page.page_number}-${pageDoc.id}.png`
           );
+          if (strictDelivery && !persisted.path) {
+            throw new Error("Premium retry image was not persisted");
+          }
           await pageDoc.ref.update({
             illustration_url: persisted.url,
             illustration_path: persisted.path,
             generation_status: "completed",
+            qc_stats: qcStats,
             retry_token: null,
+            updated_at: new Date().toISOString(),
+          });
+          await bookSnap.ref.update({
+            pdf_url: null,
+            pdf_path: null,
+            pdf_export_token: null,
+            pdf_export_started_at: null,
+            status: strictDelivery ? "draft" : book.status,
             updated_at: new Date().toISOString(),
           });
           recovered += 1;
@@ -271,9 +308,16 @@ export async function POST(request: Request) {
             { merge: true }
           );
         } catch {
+          const hadPrevious =
+            typeof page.illustration_url === "string" &&
+            Boolean(page.illustration_url) &&
+            (!strictDelivery ||
+              (typeof page.illustration_path === "string" &&
+                Boolean(page.illustration_path)));
           await pageDoc.ref.update({
-            generation_status: "failed",
-            illustration_url: null,
+            generation_status: hadPrevious ? "completed" : "failed",
+            illustration_url: hadPrevious ? page.illustration_url : null,
+            illustration_path: hadPrevious ? page.illustration_path || null : null,
             retry_token: null,
             updated_at: new Date().toISOString(),
           });
@@ -309,7 +353,7 @@ export async function POST(request: Request) {
 
     if (afterSnap.size > 0 && missing === 0) {
       await bookSnap.ref.update({
-        status: "completed",
+        status: strictDelivery && recovered > 0 ? "draft" : "completed",
         updated_at: new Date().toISOString(),
       });
     } else if (missing > 0 && book.status !== "generating") {
@@ -323,7 +367,7 @@ export async function POST(request: Request) {
       retried: claimedIds.length,
       recovered,
       still_failed: stillFailed,
-      book_status: missing === 0 ? "completed" : "partial",
+      book_status: missing === 0 ? (strictDelivery && recovered > 0 ? "draft" : "completed") : "partial",
     });
   } catch (e) {
     if (e instanceof z.ZodError) {
@@ -451,4 +495,27 @@ async function loadCharacterBibleFromUniverse(
   } catch {
     return undefined;
   }
+}
+
+
+function storyPlanFromBook(book: Record<string, unknown>): StoryPlan {
+  const raw = book.story_plan as Record<string, unknown> | null | undefined;
+  if (!raw || !Array.isArray(raw.pages) || !Array.isArray(raw.characters)) {
+    throw new AppError(
+      "CONFLICT",
+      "La bible visuelle de ce cahier est incomplète. Créez un nouveau cahier.",
+      409
+    );
+  }
+  return {
+    title: typeof book.title === "string" ? book.title : "",
+    subtitle: typeof book.subtitle === "string" ? book.subtitle : undefined,
+    concept: typeof raw.concept === "string" ? raw.concept : undefined,
+    summary: typeof raw.summary === "string" ? raw.summary : "",
+    moral: typeof raw.moral === "string" ? raw.moral : undefined,
+    audienceAge: typeof raw.audience_age === "string" ? raw.audience_age : "",
+    world: (raw.world || { setting: "", palette: "", mood: "" }) as StoryPlan["world"],
+    characters: raw.characters as StoryPlan["characters"],
+    pages: raw.pages as StoryPlan["pages"],
+  };
 }
