@@ -62,6 +62,11 @@ export type CreditPack = (typeof CREDIT_PACKS)[number] & {
   unlocksAccess?: boolean;
 };
 
+/** Packs offered to an already authenticated user on the recharge screen. */
+export const RECHARGE_PACKS = CREDIT_PACKS.filter(
+  (pack) => !("unlocksAccess" in pack && pack.unlocksAccess)
+);
+
 export function packForChariowProduct(productId: string | null | undefined) {
   if (!productId) return null;
   return CREDIT_PACKS.find((p) => p.chariowProductId === String(productId)) ?? null;
