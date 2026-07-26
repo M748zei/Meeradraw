@@ -514,7 +514,13 @@ export class GenerationOrchestrator {
     }
 
     if (strictVisual && !characterSheetUrl) {
-      throw new Error("Premium colorbook cast sheet failed strict visual quality");
+      // The collective cast sheet is a helpful visual overview, but it is not the
+      // identity source used by pages. Do not cancel a paid parent book here:
+      // the immutable per-character portraits below are generated independently
+      // and remain protected by the strict visual-quality gate.
+      console.warn(
+        "collective cast sheet unavailable; continuing with strict individual references"
+      );
     }
 
     // Generate and validate one immutable portrait per character. Composite-sheet
