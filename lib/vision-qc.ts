@@ -60,6 +60,8 @@ export interface PageCheck {
   lineup: boolean;
   /** True = the requested action is actually visible in the image. */
   actionVisible: boolean;
+  /** True = one continuous full-page scene, with no comic panels, gutters, bubbles or text boxes. */
+  singleFullPage: boolean;
   /** Foreground + midground + background contain enough large closed shapes to color. */
   environmentRich: boolean;
   /** No malformed, duplicated or missing limbs/facial features. */
@@ -276,6 +278,7 @@ export async function checkPageAction(
   const result = await askVision<{
     lineup: boolean;
     action_visible: boolean;
+    single_full_page: boolean;
     environment_rich: boolean;
     anatomy_valid: boolean;
     professional_line_art: boolean;
@@ -283,18 +286,20 @@ export async function checkPageAction(
   }>(
     imageUrl,
     `This is a premium printable children's coloring-book page. Requested action: "${action || "a clear story action"}".
-Check ALL five product requirements:
+Check ALL six product requirements:
 1. LINEUP: characters must not merely stand front-facing in a static row.
 2. ACTION: the requested story action must be physically visible.
-3. COLORING VALUE: the scene must have a coherent foreground, midground and background with at least 6 large CLOSED colorable objects/zones (for example trees, plants, path, houses, clouds, furniture or scene-specific props). Tiny grass marks do not count. Large blank sky/ground and portrait-only compositions fail.
-4. ANATOMY: faces, eyes, hands, arms, legs and bodies must be coherent; no missing, extra, fused or duplicated parts.
-5. PROFESSIONAL LINE ART: clean organic children's-book ink drawing with controlled varied line weight and readable forms; generic emoji/clipart look, huge glossy eyes, malformed shapes or careless tangencies fail.
-JSON schema: {"lineup": <boolean>, "action_visible": <boolean>, "environment_rich": <boolean>, "anatomy_valid": <boolean>, "professional_line_art": <boolean>, "issue": "<brief list of every failed requirement>"}`
+3. TRUE COLORING-PAGE FORMAT: exactly ONE continuous full-page scene. Any comic strip, multiple panels, split frame, panel border, gutter, storyboard grid, speech bubble, dialogue balloon, caption box or text box FAILS.
+4. COLORING VALUE: the scene must have a coherent foreground, midground and background with at least 6 large CLOSED colorable objects/zones (for example trees, plants, path, houses, clouds, furniture or scene-specific props). Tiny grass marks do not count. Large blank sky/ground and portrait-only compositions fail.
+5. ANATOMY: faces, eyes, hands, arms, legs and bodies must be coherent; no missing, extra, fused or duplicated parts.
+6. PROFESSIONAL LINE ART: clean organic children's-book ink drawing with controlled varied line weight and readable forms; generic emoji/clipart look, huge glossy eyes, malformed shapes or careless tangencies fail.
+JSON schema: {"lineup": <boolean>, "action_visible": <boolean>, "single_full_page": <boolean>, "environment_rich": <boolean>, "anatomy_valid": <boolean>, "professional_line_art": <boolean>, "issue": "<brief list of every failed requirement>"}`
   );
   if (
     !result ||
     typeof result.lineup !== "boolean" ||
     typeof result.action_visible !== "boolean" ||
+    typeof result.single_full_page !== "boolean" ||
     typeof result.environment_rich !== "boolean" ||
     typeof result.anatomy_valid !== "boolean" ||
     typeof result.professional_line_art !== "boolean"
@@ -304,6 +309,7 @@ JSON schema: {"lineup": <boolean>, "action_visible": <boolean>, "environment_ric
   return {
     lineup: result.lineup,
     actionVisible: result.action_visible,
+    singleFullPage: result.single_full_page,
     environmentRich: result.environment_rich,
     anatomyValid: result.anatomy_valid,
     professionalLineArt: result.professional_line_art,
