@@ -63,15 +63,15 @@ const features = [
 const accessSteps = [
   {
     title: "Prenez votre accès",
-    text: "L'accès Meeradraw se prend sur la boutique DigiAfrik — paiement Mobile Money ou carte.",
+    text: "Payez sur DigiAfrik par Mobile Money ou carte. L’accès inclut 120 crédits, soit environ 2 livres complets.",
   },
   {
-    title: "Connectez-vous ici",
-    text: "Créez votre compte Meeradraw (ou reconnectez-vous).",
+    title: "Ouvrez votre lien personnel",
+    text: "Après le paiement, ouvrez le lien reçu par e-mail. Aucun code n’est à copier.",
   },
   {
-    title: "Débloquez votre studio",
-    text: "Entrez le code d'accès reçu par e-mail sur la page Accès — le studio se débloque aussitôt.",
+    title: "Connectez-vous et créez",
+    text: "Utilisez l’e-mail de l’achat : votre accès et vos 120 crédits sont ajoutés automatiquement.",
   },
 ];
 
@@ -97,8 +97,6 @@ function PrimaryCta({ label }: { label: string }) {
 }
 
 export default function LandingPage() {
-  const primaryHref = STORE_URL || "/signup";
-
   return (
     <div className="overflow-hidden">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-4 py-6">
@@ -136,9 +134,9 @@ export default function LandingPage() {
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <PrimaryCta label={STORE_URL ? "Prendre mon accès" : "Ouvrir le studio"} />
-              <Link href={STORE_URL ? "/login?next=/license" : "#how"}>
+              <Link href={STORE_URL ? "/login" : "#how"}>
                 <Button size="lg" variant="secondary">
-                  {STORE_URL ? "J’ai déjà mon accès" : "Voir comment ça marche"}
+                  {STORE_URL ? "J’ai déjà un compte" : "Voir comment ça marche"}
                 </Button>
               </Link>
             </div>
@@ -268,8 +266,8 @@ export default function LandingPage() {
             </div>
             <div className="mt-8 flex flex-wrap gap-3">
               <PrimaryCta label={STORE_URL ? "Prendre mon accès" : "Créer un compte"} />
-              <Link href="/login?next=/license">
-                <Button variant="ghost">Se connecter &amp; débloquer</Button>
+              <Link href="/login">
+                <Button variant="ghost">Retrouver automatiquement mon accès</Button>
               </Link>
             </div>
           </div>
@@ -302,7 +300,7 @@ export default function LandingPage() {
                     </Button>
                   </Link>
                 )}
-                <Link href={primaryHref === "/signup" ? "/login" : "/login?next=/license"}>
+                <Link href="/login">
                   <Button
                     size="lg"
                     className="border border-white/40 bg-white/10 text-white hover:bg-white/20"
