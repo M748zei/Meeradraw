@@ -84,8 +84,8 @@ const PAGE_GEN_CONCURRENCY = envInt(process.env.PAGE_GEN_CONCURRENCY, 3);
 const PARENT_PAGE_WAVE = envInt(process.env.PARENT_PAGE_GEN_CONCURRENCY, 5);
 /** How many times to (re)generate the character model sheet if it comes back blank/poor. */
 const SHEET_MAX_ATTEMPTS = envInt(process.env.SHEET_MAX_ATTEMPTS, 3);
-/** Parent + photo: single sheet attempt (no fal storm). Without photo: sheet skipped. */
-const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 1);
+/** Paid parent books always build a validated cast sheet before any page. */
+const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 2);
 /** Studio heal passes (failed-page re-gen). Capped to avoid fal retry storms. */
 const STUDIO_HEAL_PASSES = envInt(process.env.STUDIO_HEAL_PASSES, 2);
 /** Parent promise: retry missing pages automatically before declaring no delivery. */
@@ -96,8 +96,8 @@ const PARENT_HEAL_PASSES = envInt(process.env.PARENT_HEAL_PASSES, 3);
  * so every image gets QC and provider recovery before page-level heal passes.
  */
 const PARENT_FAL_CAPS = {
-  maxVisionRerolls: envInt(process.env.PARENT_VISION_QC_REROLLS, 1),
-  maxQualityRerolls: envInt(process.env.PARENT_FAL_QUALITY_REROLLS, 1),
+  maxVisionRerolls: envInt(process.env.PARENT_VISION_QC_REROLLS, 2),
+  maxQualityRerolls: envInt(process.env.PARENT_FAL_QUALITY_REROLLS, 2),
   maxProviderAttempts: envInt(process.env.PARENT_FAL_RETRY_ATTEMPTS, 2),
   skipRecovery: false,
 } as const;
@@ -436,18 +436,9 @@ export class GenerationOrchestrator {
       .doc(universeId)
       .collection("characters");
 
-    // Parent pages are text-only Ideogram — a model sheet is pure fal waste unless
-    // we have a child photo (identity). Skip sheet = save 1–N billed fal images.
-    if (parentMode && !photoUrl) {
-      console.log(
-        `[parent] skip model sheet gen=${generationId} (text-only path, 0 fal sheet $)`
-      );
-      await this.books.update(userId, bookId, { character_sheet_url: null });
-      return;
-    }
-
-    // Hero cast portrait first (identity reference when FAL_REF_ENDPOINT is set).
-    // Parent + photo: single attempt, lean fal budget.
+    // Build one colored cast sheet for EVERY paid parent book, with or without a
+    // child photo. It is the visual source of truth for faces, outfits and species.
+    // Pages are not allowed to invent the cast independently anymore.
     let characterSheetUrl: string | null = null;
     const sheetCast = expectedCastFor(plan.characters);
     const sheetAttempts = parentMode ? PARENT_SHEET_MAX_ATTEMPTS : SHEET_MAX_ATTEMPTS;
@@ -466,6 +457,7 @@ export class GenerationOrchestrator {
           identityFromPhoto: Boolean(photoUrl),
           expectedCast: sheetCast,
           qcStats: sheetStats,
+          strictQuality: parentMode,
           ...(parentMode ? PARENT_FAL_CAPS : STUDIO_FAL_CAPS),
         });
         await this.setQcImage(generationId, "model_sheet", sheetStats);
@@ -489,13 +481,17 @@ export class GenerationOrchestrator {
           `hero portrait attempt ${attempt}/${sheetAttempts} failed`,
           sheetErr
         );
-        // Parent lean: do not burn a second fal call after a hard provider error.
-        if (parentMode) break;
+        // Continue through the bounded sheet attempts; no page may start without
+        // a usable visual identity reference for the paid parent flow.
       }
     }
 
-    // Per-character crops (benchmark winner): SOLO pages guided by the FULL
-    // lineup leak the absent character back in — a crop removes the leak.
+    if (parentMode && !characterSheetUrl) {
+      throw new Error("Parent cast sheet failed strict visual quality");
+    }
+
+    // Per-character crops: solo pages use the exact character crop; multi-cast
+    // pages use the full validated sheet so animals/adults cannot mutate.
     if (characterSheetUrl) {
       const sheetCrops = await buildSheetCrops(
         characterSheetUrl,
@@ -584,8 +580,7 @@ export class GenerationOrchestrator {
       worldSetting,
       isCover: true,
       referenceImageUrl: characterSheetUrl || undefined,
-      // Parent: always text-only Ideogram with shared seed/preset so cover matches pages.
-      forceTextOnly: parentMode ? true : !characterSheetUrl,
+      forceTextOnly: !characterSheetUrl,
       coverTitle: useOverlayTitle ? undefined : plan.title,
       action: coverAction,
       refScene: `${coverAction}. Draw ONLY the one hero child in action — no crowd of extra children.`,
@@ -597,6 +592,7 @@ export class GenerationOrchestrator {
       worldNegative,
       expectedCast: expectedCastFor(coverHero),
       qcStats: coverStats,
+      strictQuality: parentMode,
       ...(parentMode
         ? {
             ...PARENT_FAL_CAPS,
@@ -735,21 +731,19 @@ export class GenerationOrchestrator {
         page.shot_type ? `Shot: ${page.shot_type}.` : "",
         page.comic_beat ? `Beat: ${page.comic_beat}.` : "",
         parentMode ? genderBits.positive : "",
-        "Wide full-scene coloring page: rich environment with many large props matching the caption. Hero child is part of the scene, not a portrait. No empty white void. Eyes with dark pupils. Simplified mitten hands. Max 2 characters. EXACTLY the named cast — no clone twins, no background children.",
+        "PREMIUM full-scene coloring page, not a portrait: foreground, midground and background with 6–10 LARGE CLOSED scene-specific shapes to color. Hero occupies at most 35% of the page. Clean organic children's-book ink with gently varied line weight, natural modest eyes and coherent anatomy. No empty sky or ground, no generic clipart, no giant glossy emoji eyes. Max 2 characters on this page. EXACTLY the named cast with correct species — no clones or background children.",
       ]
         .filter(Boolean)
         .join(" ");
 
       const pageStats: ImageQcStats = {};
-      // Parent books: NEVER feed the white-background photo sheet into Kontext for
-      // pages — it bleeds empty voids. Likeness comes from visualLock text + Ideogram
-      // with a shared book seed + COLORING_BOOK preset (cross-page style lock).
-      // Studio: solo crop only; duo+ text-only.
+      // Paid parent pages must inherit the validated visual cast. A solo scene
+      // uses that character's crop; a multi-character scene uses the full sheet.
+      const soloCrop =
+        characterIds.length === 1 ? sheetCrops[characterIds[0]]?.url : undefined;
       const pageReference = parentMode
-        ? undefined
-        : characterIds.length === 1 && sheetCrops[characterIds[0]]?.url
-          ? sheetCrops[characterIds[0]].url
-          : undefined;
+        ? soloCrop || book.character_sheet_url || undefined
+        : soloCrop;
       const expectedCast = planPage
         ? expectedCastFor(charactersForPage(plan, planPage))
         : expectedCastFor(
@@ -780,7 +774,7 @@ export class GenerationOrchestrator {
         worldSetting,
         isColoringPage: true,
         referenceImageUrl: pageReference,
-        forceTextOnly: parentMode,
+        forceTextOnly: !pageReference,
         refScene: (page.ref_scene as string) || undefined,
         shotType,
         comicBeat: (page.comic_beat as string) || undefined,
@@ -789,6 +783,7 @@ export class GenerationOrchestrator {
         worldNegative,
         expectedCast,
         qcStats: pageStats,
+        strictQuality: parentMode,
         ...(parentMode
           ? {
               ...PARENT_FAL_CAPS,
