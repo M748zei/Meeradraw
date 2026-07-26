@@ -122,6 +122,20 @@ export class FalImageProvider implements ImageAIProvider {
       DEFAULT_PAGE_ENDPOINT;
     const refEndpoint = process.env.FAL_REF_ENDPOINT?.trim() || "";
 
+    // A paid strict interior must never silently lose its visual identity reference.
+    // Fail before calling a text-only image model so credits can be protected upstream.
+    if (
+      input.strictQuality &&
+      !input.isCharacterSheet &&
+      !input.isCover &&
+      input.referenceImageUrl &&
+      !refEndpoint
+    ) {
+      throw new NonRetryableFalError(
+        "Missing FAL_REF_ENDPOINT for strict reference-guided generation"
+      );
+    }
+
     // Cover WITH lettered title always goes text-only Ideogram: Kontext cannot
     // render reliable lettering, and Ideogram's is the whole point (audit T6).
     // Character sheets normally text-only, except photo-identity sheets.
