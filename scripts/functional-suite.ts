@@ -164,6 +164,49 @@ async function runLogicTests() {
     assert(rejected, "multi-reference endpoint requires at least two portraits");
   });
 
+  await test("fal controlled coloring combines LoRA and identity reference", async () => {
+    const { buildFalBody } = await import("../services/ai/fal-provider");
+    const body = buildFalBody({
+      prompt: "Coloring Book, one continuous garden scene",
+      endpoint: "https://fal.run/fal-ai/flux-general",
+      isCharacterSheet: false,
+      referenceImageUrl: "https://storage.googleapis.com/test/leo.png",
+      coloringLoraUrl:
+        "https://huggingface.co/example/coloring/resolve/main/model.safetensors",
+      coloringLoraScale: 0.78,
+      seed: 7,
+    });
+    assert(body.image_size === "portrait_4_3", "controlled output is portrait");
+    assert(
+      body.reference_image_url === "https://storage.googleapis.com/test/leo.png",
+      "identity uses reference-only guidance"
+    );
+    const loras = body.loras as Array<{ path: string; scale: number }>;
+    assert(loras?.[0]?.scale === 0.78, "LoRA scale preserved");
+    assert(!("image_url" in body), "must not copy portrait composition via img2img");
+    assert(
+      typeof body.negative_prompt === "string" &&
+        body.negative_prompt.includes("comic"),
+      "negative prompt protects against comic layouts"
+    );
+  });
+
+  await test("composition blueprint always forbids comic framing", async () => {
+    const { buildCompositionBlueprint } = await import(
+      "../services/ai/composition-templates"
+    );
+    const prompt = buildCompositionBlueprint({
+      comicBeat: "action",
+      shotType: "wide",
+      action: "Léo jumps over a stream",
+      settingElements: ["stream", "baobab", "stepping stones"],
+    });
+    assert(prompt.includes("one uninterrupted portrait page"), "single page lock");
+    assert(prompt.includes("no internal borders"), "panel border lock");
+    assert(prompt.includes("Léo jumps over a stream"), "action anchor");
+    assert(prompt.includes("foreground"), "depth plan");
+  });
+
   await test("estimateBookCost colorbook 12 pages", () => {
     // cover 5 + 12*2 + pdf 1 = 30
     assert(estimateBookCost(12, "colorbook") === 30, `got ${estimateBookCost(12)}`);

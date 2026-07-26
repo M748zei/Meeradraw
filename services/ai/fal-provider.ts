@@ -10,6 +10,7 @@ import {
   heroGenderPromptBits,
 } from "@/services/ai/prompts";
 import { styleImageCraftLine } from "@/services/ai/style-contracts";
+import { buildCompositionBlueprint } from "@/services/ai/composition-templates";
 import { withRetry } from "@/lib/async";
 import { isBlankOrTooFaint, hasPoorEnvironment, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
@@ -47,6 +48,7 @@ const DEFAULT_PAGE_ENDPOINT = "https://fal.run/fal-ai/ideogram/v3";
 /** Legacy flux/dev endpoint — kept available for override/fallback experiments. */
 const DEFAULT_IMAGE_ENDPOINT = "https://fal.run/fal-ai/flux/dev";
 const DEFAULT_MULTI_REF_ENDPOINT = "https://fal.run/fal-ai/flux-2-pro/edit";
+const DEFAULT_CONTROLLED_PAGE_ENDPOINT = "https://fal.run/fal-ai/flux-general";
 const FAL_TIMEOUT_MS = Number(process.env.FAL_TIMEOUT_MS || 90_000);
 const FAL_RETRY_ATTEMPTS = Number(process.env.FAL_RETRY_ATTEMPTS || 2);
 /** Default guidance raised for stronger prompt adherence (environment + line weight). */
@@ -122,6 +124,12 @@ export class FalImageProvider implements ImageAIProvider {
       process.env.FAL_IMAGE_ENDPOINT?.trim() ||
       DEFAULT_PAGE_ENDPOINT;
     const refEndpoint = process.env.FAL_REF_ENDPOINT?.trim() || "";
+    const controlledColoring =
+      process.env.FAL_CONTROLLED_COLORING_ENABLED === "true" &&
+      Boolean(process.env.FAL_COLORING_LORA_URL?.trim());
+    const controlledEndpoint =
+      process.env.FAL_CONTROLLED_PAGE_ENDPOINT?.trim() ||
+      DEFAULT_CONTROLLED_PAGE_ENDPOINT;
     const multiRefEndpoint =
       process.env.FAL_MULTI_REF_ENDPOINT?.trim() || DEFAULT_MULTI_REF_ENDPOINT;
     const orderedReferenceUrls = Array.from(
@@ -141,7 +149,12 @@ export class FalImageProvider implements ImageAIProvider {
         "Strict coloring page requires ordered character references"
       );
     }
-    if (strictInterior && orderedReferenceUrls.length === 1 && !refEndpoint) {
+    if (
+      strictInterior &&
+      orderedReferenceUrls.length === 1 &&
+      !refEndpoint &&
+      !controlledColoring
+    ) {
       throw new NonRetryableFalError(
         "Missing FAL_REF_ENDPOINT for strict single-reference generation"
       );
@@ -161,13 +174,15 @@ export class FalImageProvider implements ImageAIProvider {
     const useReference =
       referenceAllowed &&
       orderedReferenceUrls.length > 0 &&
-      (useMultiReference || Boolean(refEndpoint));
+      (useMultiReference || Boolean(refEndpoint) || controlledColoring);
 
     const prompt = buildPrompt(input, useReference);
     const endpoint = useMultiReference
       ? multiRefEndpoint
       : useReference
-        ? refEndpoint
+        ? controlledColoring && orderedReferenceUrls.length === 1
+          ? controlledEndpoint
+          : refEndpoint
         : textEndpoint;
     const visionCap =
       typeof input.maxVisionRerolls === "number" && input.maxVisionRerolls >= 0
@@ -213,6 +228,9 @@ export class FalImageProvider implements ImageAIProvider {
       stylePreset: input.stylePreset,
       heroGender: input.heroGender,
       consistencyMode: input.consistencyMode,
+      coloringLoraUrl:
+        !input.isCharacterSheet ? process.env.FAL_COLORING_LORA_URL?.trim() : undefined,
+      coloringLoraScale: Number(process.env.FAL_COLORING_LORA_SCALE || 0.8),
     });
 
     try {
@@ -690,7 +708,9 @@ export class FalImageProvider implements ImageAIProvider {
             background: { r: 255, g: 255, b: 255, alpha: 1 },
           })
           .grayscale()
-          .linear(1.08, -8)
+          .normalize()
+          .sharpen({ sigma: 0.7, m1: 0.7, m2: 1.5 })
+          .threshold(Number(process.env.PRINT_LINE_THRESHOLD || 205))
           .png({ compressionLevel: 9 })
           .toBuffer();
         const url = await this.storage.uploadBytes(
@@ -758,6 +778,8 @@ export function buildFalBody(params: {
   stylePreset?: string;
   heroGender?: string;
   consistencyMode?: boolean;
+  coloringLoraUrl?: string;
+  coloringLoraScale?: number;
 }): Record<string, unknown> {
   const {
     prompt,
@@ -771,10 +793,13 @@ export function buildFalBody(params: {
     stylePreset,
     heroGender,
     consistencyMode,
+    coloringLoraUrl,
+    coloringLoraScale,
   } = params;
   const isKontext = /kontext/i.test(endpoint);
   const isMultiReferenceEdit = /flux-2(?:-pro)?\/edit/i.test(endpoint);
   const isIdeogram = /ideogram/i.test(endpoint);
+  const isFluxGeneral = /fal-ai\/flux-general(?:\/?$)/i.test(endpoint);
   const useReference =
     Boolean(referenceImageUrl) || Boolean(referenceImageUrls?.length);
   const pageNegative = isCharacterSheet
@@ -807,6 +832,43 @@ export function buildFalBody(params: {
       );
     }
     return multiBody;
+  }
+
+  if (isFluxGeneral) {
+    const controlledBody: Record<string, unknown> = {
+      prompt,
+      image_size: "portrait_4_3",
+      num_images: 1,
+      num_inference_steps: Number(process.env.FAL_CONTROLLED_STEPS || 30),
+      guidance_scale: Number(process.env.FAL_CONTROLLED_GUIDANCE || 3.5),
+      output_format: "png",
+      enable_safety_checker: true,
+      negative_prompt: pageNegative,
+      scheduler: "dpmpp_2m",
+    };
+    if (coloringLoraUrl) {
+      controlledBody.loras = [{
+        path: coloringLoraUrl,
+        scale:
+          typeof coloringLoraScale === "number" && Number.isFinite(coloringLoraScale)
+            ? coloringLoraScale
+            : 0.8,
+      }];
+    }
+    if (referenceImageUrl) {
+      controlledBody.reference_image_url = referenceImageUrl;
+      controlledBody.reference_strength = Number(
+        process.env.FAL_IDENTITY_REFERENCE_STRENGTH || 0.55
+      );
+      controlledBody.reference_start = 0;
+      controlledBody.reference_end = Number(
+        process.env.FAL_IDENTITY_REFERENCE_END || 0.8
+      );
+    }
+    if (typeof seed === "number" && Number.isFinite(seed)) {
+      controlledBody.seed = seed % 2147483647;
+    }
+    return controlledBody;
   }
 
   // Ideogram V3: expand_prompt:false (disables MagicPrompt so OUR exact prompt is used)
@@ -905,6 +967,14 @@ function buildRecoveryPrompt(input: ImageGenerationInput): string {
 }
 
 function buildPrompt(input: ImageGenerationInput, useReference: boolean): string {
+  const composition = input.isColoringPage
+    ? buildCompositionBlueprint({
+        comicBeat: input.comicBeat,
+        shotType: input.shotType,
+        action: input.action,
+        settingElements: input.settingElements,
+      })
+    : "";
   const referenceMap = (input.referenceImageUrls || [])
     .map((_, index) => {
       const character = input.expectedCast?.[index];
@@ -948,6 +1018,7 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
   if (useReference) {
     return [
       referenceMap,
+      composition,
       buildReferenceGuidedScenePrompt({
         // Compact scene for reference editing: identity maps stay explicit while
         // the scene remains short enough to avoid copying portrait composition.
@@ -963,7 +1034,7 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
       .join(" ");
   }
   return buildColoringPagePrompt({
-    scene: input.prompt,
+    scene: `${composition} ${input.prompt}`.trim(),
     characters: input.characterBible || "",
     style: input.style,
     world: input.worldSetting || "",
