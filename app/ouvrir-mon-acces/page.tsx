@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
@@ -21,7 +21,6 @@ type VerifyReady = {
   state: "ready";
   saleId: string;
   emailMasked: string;
-  emailPrefill: string;
   accountExists: boolean;
   unlocksAccess: boolean;
   credits: number | null;
@@ -57,6 +56,10 @@ async function establishSession() {
   });
   const json = await res.json();
   if (!json.success) throw new Error(json.error?.message || "Session impossible");
+}
+
+async function clearSession() {
+  await fetch("/api/auth/session", { method: "DELETE" }).catch(() => undefined);
 }
 
 async function attachAccess(saleId: string) {
@@ -101,12 +104,10 @@ function OpenAccessFlow() {
   const [errorText, setErrorText] = useState("");
   const [mode, setMode] = useState<"signup" | "login">("signup");
   const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("");
   const [fullname, setFullname] = useState("");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const retryRef = useRef(0);
-  const verifiedOnce = useRef(false);
-
   useEffect(() => {
     let cancelled = false;
     async function verify(attempt = 0) {
@@ -129,7 +130,6 @@ function OpenAccessFlow() {
           return;
         }
         if (data.state === "ready") {
-          verifiedOnce.current = true;
           setReady(data);
           setMode(data.accountExists ? "login" : "signup");
           setScreen(data.accountExists ? "returning" : "new_buyer");
@@ -137,7 +137,6 @@ function OpenAccessFlow() {
         }
         if (data.state === "pending_payment") {
           if (attempt < 5) {
-            retryRef.current = attempt + 1;
             window.setTimeout(() => verify(attempt + 1), 2000 * (attempt + 1));
             setErrorTitle("Votre paiement est en cours de confirmation");
             setErrorText(
@@ -231,19 +230,15 @@ function OpenAccessFlow() {
         setFormError("Connexion indisponible pour le moment.");
         return;
       }
-      const cred = await signInWithPopup(getClientAuth(), new GoogleAuthProvider());
-      const googleEmail = (cred.user.email || "").toLowerCase();
-      if (googleEmail !== ready.emailPrefill.toLowerCase()) {
-        await getClientAuth().signOut().catch(() => undefined);
-        setFormError(
-          `Pour protéger votre achat, connectez-vous avec l’adresse utilisée lors du paiement : ${ready.emailMasked}.`
-        );
-        return;
-      }
+      await signInWithPopup(getClientAuth(), new GoogleAuthProvider());
       await establishSession();
       await finishAttach(ready.saleId);
     } catch (err) {
       const e = err as Error & { details?: { email_mismatch?: boolean } };
+      if (e.details?.email_mismatch || /Pour protéger votre achat/i.test(e.message)) {
+        await getClientAuth().signOut().catch(() => undefined);
+        await clearSession();
+      }
       setFormError(e.message || "Connexion Google impossible");
     } finally {
       setBusy(false);
@@ -261,9 +256,13 @@ function OpenAccessFlow() {
         return;
       }
       const auth = getClientAuth();
-      const email = ready.emailPrefill;
+      const normalizedEmail = email.trim().toLowerCase();
+      if (!normalizedEmail) {
+        setFormError("Saisissez l’adresse e-mail utilisée lors du paiement.");
+        return;
+      }
       if (mode === "signup") {
-        const cred = await createUserWithEmailAndPassword(auth, email, password);
+        const cred = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
         if (fullname.trim()) {
           await updateProfile(cred.user, { displayName: fullname.trim() });
         }
@@ -281,7 +280,7 @@ function OpenAccessFlow() {
           throw attachErr;
         }
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        await signInWithEmailAndPassword(auth, normalizedEmail, password);
         await establishSession();
         try {
           await finishAttach(ready.saleId);
@@ -334,13 +333,14 @@ function OpenAccessFlow() {
       <div className="relative z-10 w-full max-w-md">
         {screen === "loading" ? (
           <section className="rounded-3xl bg-white/90 p-7 shadow-soft backdrop-blur sm:p-8">
-            <p className="text-center text-sm font-semibold text-mint-800">Achat confirmé ✓</p>
+            <p className="text-center text-sm font-semibold text-sky-700">
+              Vérification sécurisée
+            </p>
             <h1 className="mt-3 text-center font-display text-3xl leading-tight text-ink">
-              🎉 Votre achat est confirmé !
+              Nous retrouvons votre achat…
             </h1>
             <p className="mt-3 text-center text-sm leading-relaxed text-ink-muted">
-              Plus qu&apos;une petite étape pour ouvrir votre espace Meeradraw et commencer à créer
-              des livres magiques pour votre enfant.
+              Cette étape protège votre accès et ne prendra que quelques instants.
             </p>
             <div className="mt-8 flex flex-col items-center gap-3">
               <div className="h-10 w-10 animate-spin rounded-full border-2 border-sky-200 border-t-sky-600" />
@@ -400,9 +400,12 @@ function OpenAccessFlow() {
               />
               <Input
                 type="email"
-                value={ready.emailPrefill}
-                readOnly
-                className="h-12 bg-cream-100 text-base"
+                placeholder="E-mail utilisé lors du paiement"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                className="h-12 text-base"
                 aria-label="E-mail de l’achat"
               />
               <Input
@@ -462,9 +465,12 @@ function OpenAccessFlow() {
             <form onSubmit={onPasswordSubmit} className="mt-5 space-y-3">
               <Input
                 type="email"
-                value={ready.emailPrefill}
-                readOnly
-                className="h-12 bg-cream-100 text-base"
+                placeholder="E-mail utilisé lors du paiement"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                className="h-12 text-base"
               />
               <Input
                 type="password"
@@ -533,7 +539,6 @@ function OpenAccessFlow() {
                 <Button
                   className="h-12 w-full"
                   onClick={() => window.location.reload()}
-                  disabled={retryRef.current >= 5 && verifiedOnce.current}
                 >
                   Réessayer
                 </Button>
