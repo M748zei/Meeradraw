@@ -767,6 +767,52 @@ async function runFirestoreIntegration() {
     );
   });
 
+  await test("reaper retries a transient refund failure before going terminal", async () => {
+    const genId = randomUUID();
+    const bookId = randomUUID();
+    const missingUserId = randomUUID();
+    const stale = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await db.collection("books").doc(bookId).set({
+      user_id: missingUserId,
+      status: "generating",
+      active_generation_id: genId,
+    });
+    await db.collection("generations").doc(genId).set({
+      user_id: missingUserId,
+      book_id: bookId,
+      status: "running",
+      credits_used: 20,
+      heartbeat_at: stale,
+      updated_at: stale,
+    });
+
+    const firstSnap = await db.collection("generations").doc(genId).get();
+    assert(
+      (await reapIfStale(db, genId, firstSnap.data())) === false,
+      "first reap should report refund failure"
+    );
+    const pending = (await db.collection("generations").doc(genId).get()).data()!;
+    assert(pending.status === "running", "must remain retryable");
+    assert(pending.cancelled === true, "worker must be fenced");
+    assert(pending.refund_pending === true, "refund must remain pending");
+
+    await db.collection("users").doc(missingUserId).set({
+      email: `${missingUserId}@example.com`,
+      credits: 50,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    const retrySnap = await db.collection("generations").doc(genId).get();
+    assert(
+      (await reapIfStale(db, genId, retrySnap.data())) === true,
+      "second reap should complete"
+    );
+    const done = (await db.collection("generations").doc(genId).get()).data()!;
+    assert(done.status === "failed", "terminal only after refund");
+    assert(done.refund_pending === false, "refund no longer pending");
+    assert((await credits.getBalance(missingUserId)) === 70, "refund applied once");
+  });
+
   await test("GenerationOrchestrator full mock pipeline (trial)", async () => {
     process.env.MOCK_AI = "true";
     const { GenerationOrchestrator } = await import("../services/generation-orchestrator");
