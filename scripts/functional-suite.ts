@@ -43,7 +43,7 @@ function assert(cond: unknown, msg: string): asserts cond {
 async function runLogicTests() {
   console.log("\n═══ 1. Logique pure ═══");
 
-  const { estimateBookCost, refundForFailedPages, packForChariowProduct, FREE_TRIALS_MAX, FREE_TRIAL_MAX_PAGES } =
+  const { estimateBookCost, refundForFailedPages, packForChariowProduct, FREE_TRIALS_MAX, FREE_TRIAL_MAX_PAGES, RECHARGE_PACKS } =
     await import("../config/credits");
   const { safeInternalPath } = await import("../lib/safe-redirect");
   const { assertSafeImageUrl, fetchSafeImageBytes, isAllowedImageHost } =
@@ -53,6 +53,7 @@ async function runLogicTests() {
   const { AppError, apiError, apiSuccess } = await import("../lib/errors");
   const { extractSale } = await import("../services/chariow-sale");
   const { hasVerifiedEmailOwnership } = await import("../lib/email-ownership");
+  const { safeRechargeReturnPath } = await import("../lib/recharge-return");
 
   await test("estimateBookCost colorbook 12 pages", () => {
     // cover 5 + 12*2 + pdf 1 = 30
@@ -74,6 +75,19 @@ async function runLogicTests() {
     assert(packForChariowProduct("prd_d2ik58za")?.id === "entry", "entry");
     assert(packForChariowProduct("prd_0658xmlt")?.credits === 150, "recharge");
     assert(packForChariowProduct("unknown") === null, "unknown");
+  });
+
+  await test("recharge screen excludes the initial access product", () => {
+    assert(!RECHARGE_PACKS.some((pack) => pack.id === "entry"), "entry hidden");
+    assert(RECHARGE_PACKS.length === 4, `got ${RECHARGE_PACKS.length}`);
+  });
+
+  await test("post-payment return accepts only known local paths", () => {
+    assert(safeRechargeReturnPath("/books/book_123") === "/books/book_123", "book");
+    assert(safeRechargeReturnPath("/create") === "/create", "create");
+    assert(safeRechargeReturnPath("https://evil.example") === null, "absolute URL");
+    assert(safeRechargeReturnPath("//evil.example") === null, "protocol relative");
+    assert(safeRechargeReturnPath("/books/a/../../admin") === null, "traversal");
   });
 
   await test("free trial constants", () => {
@@ -935,6 +949,11 @@ async function runHttpSmoke() {
 
   await test("GET /api/credits without auth → 401", async () => {
     const res = await get("/api/credits");
+    assert(res.status === 401, `status=${res.status}`);
+  });
+
+  await test("GET /api/credits/purchase-status without auth → 401", async () => {
+    const res = await get("/api/credits/purchase-status?sale=SALE_TEST");
     assert(res.status === 401, `status=${res.status}`);
   });
 
