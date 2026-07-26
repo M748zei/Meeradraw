@@ -13,6 +13,8 @@ export class PDFService {
     title: string;
     subtitle?: string | null;
     coverUrl?: string | null;
+    /** Strict delivery rejects any missing/unembeddable promised image. */
+    strict?: boolean;
     pages: Array<{
       pageNumber: number;
       title?: string | null;
@@ -40,6 +42,9 @@ export class PDFService {
 
     if (input.coverUrl) {
       const embedded = await embedRemoteImage(pdf, input.coverUrl);
+      if (!embedded && input.strict) {
+        throw new Error("Strict PDF export could not embed the cover");
+      }
       if (embedded) {
         const { image } = embedded;
         const scale = Math.min(
@@ -53,6 +58,8 @@ export class PDFService {
         cover.drawImage(image, { x, y, width: w, height: h });
         coverImgBottom = y - 28;
       }
+    } else if (input.strict) {
+      throw new Error("Strict PDF export requires a cover");
     }
 
     const titleLines = wrapText(pdfSafeText(input.title, bold).slice(0, 72), 28);
@@ -137,6 +144,10 @@ export class PDFService {
             width: w,
             height: h,
           });
+        } else if (input.strict) {
+          throw new Error(
+            `Strict PDF export could not embed illustration for page ${page.pageNumber}`
+          );
         } else {
           p.drawRectangle({
             x: MARGIN,
@@ -147,6 +158,10 @@ export class PDFService {
             borderWidth: 1,
           });
         }
+      } else if (input.strict) {
+        throw new Error(
+          `Strict PDF export requires illustration for page ${page.pageNumber}`
+        );
       }
 
       if (page.storyText) {

@@ -424,7 +424,6 @@ export class GenerationOrchestrator {
     const plan = this.loadStoryPlan(book);
     const style = book.style || "cute";
     const universeId = book.universe_id;
-    const parentMode = isParentBook(book);
     const fullCharacterBible =
       book.character_bible || formatCharacterLock(plan.characters);
     const worldSetting = [plan.world?.setting, plan.world?.mood]
@@ -445,7 +444,8 @@ export class GenerationOrchestrator {
     // Pages are not allowed to invent the cast independently anymore.
     let characterSheetUrl: string | null = null;
     const sheetCast = expectedCastFor(plan.characters);
-    const sheetAttempts = parentMode ? PARENT_SHEET_MAX_ATTEMPTS : SHEET_MAX_ATTEMPTS;
+    const strictVisual = requiresPremiumVisualQuality(book);
+    const sheetAttempts = strictVisual ? PARENT_SHEET_MAX_ATTEMPTS : SHEET_MAX_ATTEMPTS;
     for (let attempt = 1; attempt <= sheetAttempts; attempt++) {
       try {
         const sheetStats: ImageQcStats = {};
@@ -461,8 +461,14 @@ export class GenerationOrchestrator {
           identityFromPhoto: Boolean(photoUrl),
           expectedCast: sheetCast,
           qcStats: sheetStats,
-          strictQuality: requiresPremiumVisualQuality(book),
-          ...(parentMode ? PARENT_FAL_CAPS : STUDIO_FAL_CAPS),
+          strictQuality: strictVisual,
+          ...(strictVisual
+            ? {
+                ...PARENT_FAL_CAPS,
+                seed: pageStyleSeed(bookId, 900 + attempt),
+                consistencyMode: true,
+              }
+            : STUDIO_FAL_CAPS),
         });
         await this.setQcImage(generationId, "model_sheet", sheetStats);
         if (await this.isImplausibleHero(sheet.url)) {
@@ -473,7 +479,7 @@ export class GenerationOrchestrator {
         }
         const persisted = await this.storage.persistImageFromUrl(
           sheet.url,
-          `universes/${universeId}/model_sheet.png`
+          `universes/${universeId}/books/${bookId}/generations/${generationId}/model_sheet.png`
         );
         characterSheetUrl = persisted.url;
         console.log(
@@ -490,8 +496,8 @@ export class GenerationOrchestrator {
       }
     }
 
-    if (parentMode && !characterSheetUrl) {
-      throw new Error("Parent cast sheet failed strict visual quality");
+    if (strictVisual && !characterSheetUrl) {
+      throw new Error("Premium colorbook cast sheet failed strict visual quality");
     }
 
     // Per-character crops: solo pages use the exact character crop; multi-cast
@@ -500,7 +506,7 @@ export class GenerationOrchestrator {
       const sheetCrops = await buildSheetCrops(
         characterSheetUrl,
         plan.characters,
-        universeId,
+        `${universeId}/books/${bookId}/generations/${generationId}`,
         this.storage
       );
       await this.db.collection("universes").doc(universeId).update({
@@ -608,11 +614,17 @@ export class GenerationOrchestrator {
         : STUDIO_FAL_CAPS),
     });
     await this.setQcImage(generationId, "cover", coverStats);
+    await this.ensureActive(userId, bookId, generationId);
     const persistedCover = await this.persistCover(
       cover.url,
       bookId,
+      generationId,
       useOverlayTitle ? plan.title : null
     );
+    if (requiresPremiumVisualQuality(book) && !persistedCover.path) {
+      throw new Error("Premium cover was not persisted");
+    }
+    await this.ensureActive(userId, bookId, generationId);
     await this.books.update(userId, bookId, {
       cover_image: persistedCover.url,
       cover_image_path: persistedCover.path,
@@ -787,7 +799,7 @@ export class GenerationOrchestrator {
         expectedCast,
         qcStats: pageStats,
         strictQuality: requiresPremiumVisualQuality(book),
-        ...(parentMode
+        ...(requiresPremiumVisualQuality(book)
           ? {
               ...PARENT_FAL_CAPS,
               seed: pageStyleSeed(bookId, pageNumber),
@@ -801,13 +813,18 @@ export class GenerationOrchestrator {
       if (!image?.url) {
         throw new Error("Image provider returned empty URL");
       }
+      await this.ensureActive(userId, bookId, generationId);
 
       // Persist to Storage (audit T7): never leave an ephemeral fal URL
       // as the page's source of truth.
       const persisted = await this.storage.persistImageFromUrl(
         image.url,
-        `books/${bookId}/pages/${pageNumber}.png`
+        `books/${bookId}/generations/${generationId}/pages/${pageNumber}-${pageId}.png`
       );
+      if (requiresPremiumVisualQuality(book) && !persisted.path) {
+        throw new Error("Premium page was not persisted");
+      }
+      await this.ensureActive(userId, bookId, generationId);
 
       await pagesCol.doc(pageId).update({
         illustration_url: persisted.url,
@@ -820,6 +837,10 @@ export class GenerationOrchestrator {
       await this.updatePageProgress(generationId, bookId);
       return "ok";
     } catch (err) {
+      if (err instanceof GenerationCancelledError) {
+        console.warn(`page ${pageNumber} discarded after generation cancellation`);
+        return "fail";
+      }
       console.error(`page ${pageNumber} generation failed`, err);
       await pagesCol.doc(pageId).update({
         illustration_url: null,
@@ -859,7 +880,13 @@ export class GenerationOrchestrator {
     const parentMode = isParentBook(book);
     const strictDelivery = requiresPremiumVisualQuality(book);
     const completedCount = pageDocs.filter(
-      (p) => p.generation_status === "completed"
+      (p) =>
+        p.generation_status === "completed" &&
+        (!strictDelivery ||
+          (typeof p.illustration_url === "string" &&
+            Boolean(p.illustration_url) &&
+            typeof p.illustration_path === "string" &&
+            Boolean(p.illustration_path)))
     ).length;
     const failedCount = pageDocs.filter(
       (p) => p.generation_status === "failed"
@@ -932,6 +959,7 @@ export class GenerationOrchestrator {
       title: full.title,
       subtitle: full.subtitle,
       coverUrl: full.cover_image,
+      strict: strictDelivery,
       pages: full.pages.map((p) => ({
         pageNumber: p.page_number,
         title: p.title,
@@ -952,6 +980,11 @@ export class GenerationOrchestrator {
       );
     } catch (uploadErr) {
       pdfPath = null;
+      if (strictDelivery) {
+        throw new Error(
+          `Strict PDF storage upload failed: ${uploadErr instanceof Error ? uploadErr.message : String(uploadErr)}`
+        );
+      }
       console.error("PDF storage upload failed; trying inline data URL", uploadErr);
       const dataUrl = `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`;
       const firestoreSafeLimit = 800_000;
@@ -962,6 +995,10 @@ export class GenerationOrchestrator {
           "PDF data URL exceeds Firestore-safe size; pdf_url left null — use /api/pdf/export"
         );
       }
+    }
+
+    if (strictDelivery && (!pdfUrl || !pdfPath)) {
+      throw new Error("Strict delivery requires a persisted PDF artifact");
     }
 
     // QC telemetry: studio only (parent path never writes/displays a quality score).
@@ -1308,10 +1345,11 @@ export class GenerationOrchestrator {
   private async persistCover(
     coverUrl: string,
     bookId: string,
+    generationId: string,
     overlayTitle: string | null
   ): Promise<{ url: string; path: string | null }> {
     if (!overlayTitle) {
-      return this.storage.persistImageFromUrl(coverUrl, `books/${bookId}/cover.png`);
+      return this.storage.persistImageFromUrl(coverUrl, `books/${bookId}/generations/${generationId}/cover.png`);
     }
     try {
       const res = await fetch(coverUrl);
@@ -1320,12 +1358,12 @@ export class GenerationOrchestrator {
       const png =
         detectImageFormat(raw) === "png" ? Buffer.from(raw) : await toPngBuffer(raw);
       const titled = await overlayCoverTitle(png, overlayTitle);
-      const path = `books/${bookId}/cover.png`;
+      const path = `books/${bookId}/generations/${generationId}/cover.png`;
       const url = await this.storage.uploadBytes(path, titled, "image/png");
       return { url, path };
     } catch (err) {
       console.warn("cover title overlay failed; persisting untitled cover", err);
-      return this.storage.persistImageFromUrl(coverUrl, `books/${bookId}/cover.png`);
+      return this.storage.persistImageFromUrl(coverUrl, `books/${bookId}/generations/${generationId}/cover.png`);
     }
   }
 

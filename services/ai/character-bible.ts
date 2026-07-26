@@ -640,7 +640,7 @@ const ANIMAL_WORDS: Array<[RegExp, string]> = [
   [/\b(dog|chien)\b/i, "dog"],
   [/\b(cat|chat)\b/i, "cat"],
   [/\b(rabbit|lapin|hare)\b/i, "rabbit"],
-  [/\b(lion)\b/i, "lion"],
+  [/\b(lion|lioness|lionne|lionceau|lion cub)\b/i, "lion"],
   [/\b(tiger|tigre)\b/i, "tiger"],
   [/\b(bear|ours)\b/i, "bear"],
   [/\b(monkey|singe)\b/i, "monkey"],
@@ -667,6 +667,10 @@ const ANIMAL_WORDS: Array<[RegExp, string]> = [
  * Derived from the locked descriptors; defaults to "human".
  */
 export function characterKind(c: StoryCharacter): string {
+  const explicit = typeof c.kind === "string" ? c.kind.trim().toLowerCase() : "";
+  if (explicit && explicit !== "person" && explicit !== "child") {
+    return explicit === "person" ? "human" : explicit;
+  }
   const hay = `${c.visualLock || ""} ${c.appearance || ""} ${c.description || ""}`;
   for (const [re, kind] of ANIMAL_WORDS) {
     if (re.test(hay)) return kind;
@@ -677,8 +681,12 @@ export function characterKind(c: StoryCharacter): string {
 /** Vision-QC expected cast for a set of characters. */
 export function expectedCastFor(
   characters: StoryCharacter[]
-): Array<{ name: string; kind: string }> {
-  return characters.map((c) => ({ name: c.name, kind: characterKind(c) }));
+): Array<{ name: string; kind: string; visualLock?: string }> {
+  return characters.map((c) => ({
+    name: c.name,
+    kind: characterKind(c),
+    visualLock: (c.visualLock || c.appearance || "").slice(0, 600),
+  }));
 }
 
 /**

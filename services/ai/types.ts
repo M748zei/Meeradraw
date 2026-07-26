@@ -31,6 +31,8 @@ export interface StoryCharacter {
    */
   visualLock: string;
   personality: string;
+  /** Explicit semantic species/kind; never infer an animal as human from its name. */
+  kind?: string;
   ageBand?: string;
   skinTone?: string;
   hair?: string;
@@ -120,8 +122,14 @@ export interface ImageGenerationInput {
   worldSetting?: string;
   isCover?: boolean;
   isColoringPage?: boolean;
-  /** Character model / reference sheet URL for img2img / Kontext. */
+  /** Primary character reference URL for single-reference image-to-image. */
   referenceImageUrl?: string;
+  /**
+   * Ordered per-character references for multi-reference generation and identity QC.
+   * The order MUST match expectedCast. Multi-character pages must prefer these
+   * individual portraits over a composite lineup sheet.
+   */
+  referenceImageUrls?: string[];
   /** When true, generate a character model sheet (not a story page). */
   isCharacterSheet?: boolean;
   shotType?: ShotType | string;
@@ -147,7 +155,7 @@ export interface ImageGenerationInput {
   /** Negative derived from the universe's setting bible (forbidden elements). */
   worldNegative?: string;
   /** Expected characters IN THIS IMAGE for the vision cast QC (name + species/kind). */
-  expectedCast?: Array<{ name: string; kind: string }>;
+  expectedCast?: Array<{ name: string; kind: string; visualLock?: string }>;
   /** Collector for QC/re-roll stats (mutated by the provider; optional). */
   qcStats?: ImageQcStats;
   /** Force Ideogram text-only (no Kontext) — parent covers. */
@@ -196,6 +204,8 @@ export interface ImageQcStats {
   visionVerdicts?: string[];
   /** True when vision QC confirmed lineup syndrome at least once. */
   lineupDetected?: boolean;
+  /** True when a delivered candidate diverged from its visual reference. */
+  identityMismatchDetected?: boolean;
 }
 
 /** Short creative brief shown on the new-book step (before full generation). */

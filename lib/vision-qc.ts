@@ -171,16 +171,23 @@ async function askVision<T>(imageUrl: string, question: string): Promise<T | nul
  */
 export async function checkCast(
   imageUrl: string,
-  expected: Array<{ name: string; kind: string }>
+  expected: Array<{ name: string; kind: string; visualLock?: string }>
 ): Promise<CastCheck | null> {
   if (!expected.length) return null;
-  const castDesc = expected.map((c) => `${c.name} (${c.kind})`).join(", ");
+  const castDesc = expected
+    .map(
+      (c) =>
+        `${c.name} (${c.kind}); locked appearance: ${(c.visualLock || "distinct stable identity").slice(0, 500)}`
+    )
+    .join("\n");
   const result = await askVision<{ count: number; matches: boolean; issue?: string }>(
     imageUrl,
     `This image should contain EXACTLY ${expected.length} character(s): ${castDesc} — and NOBODY else (no extra people, no extra animals).
-For each expected character, verify its KIND is correct (a turtle must be drawn as a real turtle, not a human; an elephant as an elephant, etc.).
-Any ANIMAL character must be a REAL animal in its natural stance — a quadruped stands/walks on ALL FOUR legs, is NOT upright on two legs like a person, wears NO clothes.
-JSON schema: {"count": <number of distinct characters you see>, "matches": <true only if count is exactly ${expected.length} AND every character's kind is correct AND animals are in natural non-anthropomorphic stance>, "issue": "<short reason when matches is false>"}`
+For each expected character, verify BOTH:
+- KIND: a turtle is a real turtle, a lion cub is a real young lion, never a human.
+- LOCKED IDENTITY: apparent age, gender, head/face shape, hairstyle or fur markings, body proportions, outfit and signature accessory match the written lock. A generic character of the right kind is NOT enough.
+Any ANIMAL character must keep the exact species and age stage in a natural stance — a quadruped stands/walks on ALL FOUR legs, is NOT upright on two legs like a person, and wears NO human clothes unless the locked appearance explicitly requires one simple accessory.
+JSON schema: {"count": <number of distinct characters you see>, "matches": <true only if count is exactly ${expected.length} AND every kind and locked identity trait matches>, "issue": "<short list of exact identity/species mismatches when false>"}`
   );
   if (!result || typeof result.matches !== "boolean") return null;
   return {
@@ -216,13 +223,22 @@ Check ALL five product requirements:
 5. PROFESSIONAL LINE ART: clean organic children's-book ink drawing with controlled varied line weight and readable forms; generic emoji/clipart look, huge glossy eyes, malformed shapes or careless tangencies fail.
 JSON schema: {"lineup": <boolean>, "action_visible": <boolean>, "environment_rich": <boolean>, "anatomy_valid": <boolean>, "professional_line_art": <boolean>, "issue": "<brief list of every failed requirement>"}`
   );
-  if (!result || typeof result.lineup !== "boolean") return null;
+  if (
+    !result ||
+    typeof result.lineup !== "boolean" ||
+    typeof result.action_visible !== "boolean" ||
+    typeof result.environment_rich !== "boolean" ||
+    typeof result.anatomy_valid !== "boolean" ||
+    typeof result.professional_line_art !== "boolean"
+  ) {
+    return null;
+  }
   return {
     lineup: result.lineup,
-    actionVisible: Boolean(result.action_visible),
-    environmentRich: Boolean(result.environment_rich),
-    anatomyValid: Boolean(result.anatomy_valid),
-    professionalLineArt: Boolean(result.professional_line_art),
+    actionVisible: result.action_visible,
+    environmentRich: result.environment_rich,
+    anatomyValid: result.anatomy_valid,
+    professionalLineArt: result.professional_line_art,
     issue: result.issue ? String(result.issue).slice(0, 240) : undefined,
   };
 }

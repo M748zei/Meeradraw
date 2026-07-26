@@ -66,6 +66,8 @@ const FAL_QUALITY_REROLLS = Number(process.env.FAL_QUALITY_REROLLS ?? 1);
  * Default 1 to avoid retry storms; override with VISION_QC_REROLLS.
  */
 const VISION_QC_REROLLS = Number(process.env.VISION_QC_REROLLS ?? 1);
+const PRINT_PAGE_WIDTH_PX = Number(process.env.PRINT_PAGE_WIDTH_PX || 2400);
+const PRINT_PAGE_HEIGHT_PX = Number(process.env.PRINT_PAGE_HEIGHT_PX || 3200);
 
 /** Permanent fal failures — never retry (wastes wall-clock; some may still bill). */
 export class NonRetryableFalError extends Error {
@@ -119,6 +121,20 @@ export class FalImageProvider implements ImageAIProvider {
       process.env.FAL_IMAGE_ENDPOINT?.trim() ||
       DEFAULT_PAGE_ENDPOINT;
     const refEndpoint = process.env.FAL_REF_ENDPOINT?.trim() || "";
+
+    // A paid strict interior must never silently lose its visual identity reference.
+    // Fail before calling a text-only image model so credits can be protected upstream.
+    if (
+      input.strictQuality &&
+      !input.isCharacterSheet &&
+      !input.isCover &&
+      input.referenceImageUrl &&
+      !refEndpoint
+    ) {
+      throw new NonRetryableFalError(
+        "Missing FAL_REF_ENDPOINT for strict reference-guided generation"
+      );
+    }
 
     // Cover WITH lettered title always goes text-only Ideogram: Kontext cannot
     // render reliable lettering, and Ideogram's is the whole point (audit T6).
@@ -212,7 +228,7 @@ export class FalImageProvider implements ImageAIProvider {
       return result;
     } catch (err) {
       // If reference path fails after retries, fall back to text-only with same locked prompt.
-      if (useReference) {
+      if (useReference && !input.strictQuality) {
         console.warn("fal reference generation failed; falling back to text-only", err);
         const fallbackPrompt = buildPrompt(input, false);
         const fallbackBody = buildFalBody({
@@ -386,7 +402,9 @@ export class FalImageProvider implements ImageAIProvider {
         requireColored && current.bytes && !blank ? !isColored(current.bytes) : false;
       // Blank / empty-void pages are severe; poor environment is almost as bad for
       // a coloring book (nothing to color). Weight it high so we re-roll hard.
+      const analysisUnavailable = wantsQualityCheck && !current.bytes;
       const score =
+        (analysisUnavailable ? 5 : 0) +
         (blank ? 3 : 0) +
         (colored ? 2 : 0) +
         (notColored ? 2 : 0) +
@@ -415,7 +433,11 @@ export class FalImageProvider implements ImageAIProvider {
         } else if (input.isCover) {
           if (input.coverTitle) {
             const title = await checkCoverTitle(current.url, input.coverTitle);
-            if (title && !title.titleLegible) {
+            if (!title && input.strictQuality) {
+              visionScore += 4;
+              prevVisionNudges.push(TITLE_FIX_BOOST);
+              verdicts.push("title:vision-unavailable");
+            } else if (title && !title.titleLegible) {
               visionScore += 2;
               prevVisionNudges.push(TITLE_FIX_BOOST);
               verdicts.push(`title:${title.issue || "illegible"}`);
@@ -533,7 +555,7 @@ export class FalImageProvider implements ImageAIProvider {
     // Last-resort rescue: if the best attempt is STILL blank, flux likely choked on the
     // long descriptive prompt. Retry with a short, high-adherence prompt a couple times —
     // short prompts render far more reliably. Keep the first non-blank result.
-    if (best && best.blank && recoveryPrompt) {
+    if (best && best.blank && recoveryPrompt && !input?.strictQuality) {
       for (let r = 0; r < 2 && best.blank; r++) {
         body.prompt = recoveryPrompt;
         try {
@@ -557,6 +579,8 @@ export class FalImageProvider implements ImageAIProvider {
       }
     }
 
+    // Strict delivery never lets a short-prompt rescue or uninspected provider
+    // response bypass the complete pixel + semantic quality gate.
     // Only a total inability to produce ANY image is a real failure.
     if (!best) {
       throw lastError instanceof Error
@@ -582,6 +606,39 @@ export class FalImageProvider implements ImageAIProvider {
     }
     if (best.score > 0) {
       console.warn(`[${label}] keeping best available image after re-rolls (score ${best.score})`);
+    }
+
+    // Normalize strict interior pages to a real print canvas (3:4 portrait,
+    // 2400×3200 by default). This preserves aspect ratio with white padding,
+    // removes residual chroma, and avoids stretching a 1024px square in the PDF.
+    if (input?.isColoringPage && best.pngBuffer) {
+      try {
+        const sharp = (await import("sharp")).default;
+        const printPng = await sharp(best.pngBuffer)
+          .resize({
+            width: PRINT_PAGE_WIDTH_PX,
+            height: PRINT_PAGE_HEIGHT_PX,
+            fit: "contain",
+            background: { r: 255, g: 255, b: 255, alpha: 1 },
+          })
+          .grayscale()
+          .linear(1.08, -8)
+          .png({ compressionLevel: 9 })
+          .toBuffer();
+        const url = await this.storage.uploadBytes(
+          `generated/${randomUUID()}-print.png`,
+          printPng,
+          "image/png"
+        );
+        return { url, provider: best.provider };
+      } catch (err) {
+        if (input.strictQuality) {
+          throw new Error(
+            `Print normalization failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        console.warn(`[${label}] print normalization failed`, err);
+      }
     }
 
     // The raw fal URL for webp/other formats is unusable by pdf-lib and is short-lived;
@@ -877,7 +934,13 @@ async function callFal(
       const raw = new Uint8Array((await fetch(url).then((r) => r.arrayBuffer())) as ArrayBuffer);
       const fmt = detectImageFormat(raw);
       if (fmt === "png") {
-        return { url, provider: "fal.ai", bytes: raw, needsUpload: false };
+        return {
+          url,
+          provider: "fal.ai",
+          bytes: raw,
+          needsUpload: false,
+          pngBuffer: Buffer.from(raw),
+        };
       }
       const pngBuffer = await toPngBuffer(raw);
       const bytes = new Uint8Array(pngBuffer);
