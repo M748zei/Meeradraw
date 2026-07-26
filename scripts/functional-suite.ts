@@ -62,6 +62,65 @@ async function runLogicTests() {
   const { normalizeCheckoutPhone } = await import("../lib/checkout-phone");
   const { isCustomerVisibleBook } = await import("../lib/book-visibility");
 
+  await test("explicit species keeps a lion cub non-human", async () => {
+    const { characterKind, expectedCastFor } = await import(
+      "../services/ai/character-bible"
+    );
+    const lion = {
+      id: "char_2",
+      name: "Léo",
+      description: "un lionceau",
+      appearance: "young lion cub",
+      visualLock: "real four-legged young lion cub with round ears and a tail tuft",
+      personality: "gentil",
+      kind: "lion",
+    };
+    assert(characterKind(lion) === "lion", `kind=${characterKind(lion)}`);
+    const cast = expectedCastFor([lion]);
+    assert(cast[0]?.kind === "lion", "expected lion");
+    assert(
+      cast[0]?.visualLock?.includes("four-legged"),
+      "vision QC receives the locked appearance"
+    );
+  });
+
+  await test("French lionceau fallback is recognized as lion", async () => {
+    const { characterKind } = await import("../services/ai/character-bible");
+    const kind = characterKind({
+      id: "char_2",
+      name: "Léo",
+      description: "lionceau fidèle",
+      appearance: "",
+      visualLock: "",
+      personality: "gentil",
+    });
+    assert(kind === "lion", `kind=${kind}`);
+  });
+
+  await test("strict PDF refuses missing printable assets", async () => {
+    const { PDFService } = await import("../services/pdf-service");
+    let rejected = false;
+    try {
+      await new PDFService().buildBookPdf({
+        title: "Livre strict",
+        strict: true,
+        coverUrl: null,
+        pages: [
+          {
+            pageNumber: 1,
+            title: "Page 1",
+            storyText: "Une aventure.",
+            illustrationUrl: null,
+          },
+        ],
+      });
+    } catch (error) {
+      rejected =
+        error instanceof Error && /strict pdf export/i.test(error.message);
+    }
+    assert(rejected, "strict PDF must reject a missing cover/page");
+  });
+
   await test("estimateBookCost colorbook 12 pages", () => {
     // cover 5 + 12*2 + pdf 1 = 30
     assert(estimateBookCost(12, "colorbook") === 30, `got ${estimateBookCost(12)}`);
