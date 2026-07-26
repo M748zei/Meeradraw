@@ -46,9 +46,6 @@ export async function POST(request: Request) {
         state: outcome.state,
         saleId: outcome.saleId,
         emailMasked: outcome.emailMasked,
-        // Full email only used to prefill the locked field on the same browser
-        // that just verified — still not a secret; ownership is enforced at attach.
-        emailPrefill: outcome.email,
         accountExists: outcome.accountExists,
         unlocksAccess: outcome.unlocksAccess,
         credits: outcome.credits,
