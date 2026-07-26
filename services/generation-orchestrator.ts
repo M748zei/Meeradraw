@@ -292,6 +292,48 @@ export class GenerationOrchestrator {
       );
     }
 
+    // Parent identity is the source of truth. Text models may invent a local
+    // name/outfit (for example "Kofi" in a tunic) even when the parent supplied
+    // Léo + a photo. Normalize the hero before any prompt or visual reference is
+    // persisted so every later phase follows the parent's child, not the model.
+    if (parentMode && childName && plan.characters.length > 0) {
+      const generatedName = String(plan.characters[0]?.name || "").trim();
+      const replaceHeroName = (value: string | undefined) => {
+        if (!value || !generatedName || generatedName === childName) return value;
+        return value.split(generatedName).join(childName);
+      };
+      plan.title = replaceHeroName(plan.title) || plan.title;
+      plan.subtitle = replaceHeroName(plan.subtitle);
+      plan.concept = replaceHeroName(plan.concept);
+      plan.summary = replaceHeroName(plan.summary) || plan.summary;
+      plan.moral = replaceHeroName(plan.moral);
+      plan.pages = plan.pages.map((page) => ({
+        ...page,
+        title: replaceHeroName(page.title) || page.title,
+        storyText: replaceHeroName(page.storyText) || page.storyText,
+        action: replaceHeroName(page.action) || page.action,
+        illustrationDescription:
+          replaceHeroName(page.illustrationDescription) || page.illustrationDescription,
+      }));
+      const hero = plan.characters[0];
+      const genderLock =
+        childGender === "girl"
+          ? "young girl child"
+          : childGender === "boy"
+            ? "young boy child"
+            : "young child";
+      plan.characters[0] = {
+        ...hero,
+        name: childName,
+        description: `${childName}, the parent-provided hero child`,
+        appearance:
+          "same child as the provided reference photo; preserve face, skin tone, hair, age, gender and clothing",
+        visualLock:
+          `${genderLock} named ${childName}; exact same face, skin tone, hairstyle, age, child proportions and outfit as the provided child reference photo on every page`,
+        outfit: "exact outfit from the provided child reference photo",
+      };
+    }
+
     // firestoreSafe: LLM output may contain nested arrays / undefined that
     // Firestore rejects (a single bad field kills the whole generation).
     await this.db.collection("prompts").add(
@@ -532,17 +574,26 @@ export class GenerationOrchestrator {
           const portraitStats: ImageQcStats = {};
           const photoReference =
             character.id === "char_1" || characterIndex === 0 ? photoUrl : undefined;
+          const photoIdentityLock = photoReference
+            ? `ONE young child hero named ${String(book.child_name || character.name)}. The reference photo is the absolute source of truth: preserve the same face, skin tone, hair, age, gender, body proportions and exact outfit; do not replace or redesign the clothing.`
+            : null;
           const portrait = await imageProvider.generateImage({
             prompt: photoReference
-              ? "single premium cartoon character portrait matching the child reference"
+              ? "single premium cartoon portrait of the exact child in the reference photo; preserve the child's name and exact outfit"
               : "single premium cartoon character portrait",
             style,
-            characterBible: formatCharacterLock([character]),
+            characterBible: photoIdentityLock || formatCharacterLock([character]),
             worldSetting,
             isCharacterSheet: true,
             referenceImageUrl: photoReference,
             identityFromPhoto: Boolean(photoReference),
-            expectedCast: expectedCastFor([character]),
+            expectedCast: photoReference
+              ? [{
+                  name: String(book.child_name || character.name),
+                  kind: "human",
+                  visualLock: "same child identity, age and gender as the provided reference photo; outfit comes from the photo",
+                }]
+              : expectedCastFor([character]),
             qcStats: portraitStats,
             strictQuality: strictVisual,
             ...(strictVisual
