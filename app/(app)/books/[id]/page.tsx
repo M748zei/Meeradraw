@@ -40,13 +40,13 @@ export default async function BookPage({ params }: Props) {
     notFound();
   }
 
-  // A refunded parent attempt is not a deliverable. Keep technical recovery
-  // states out of the parent experience even when an old direct link is used.
+  // A failed or incomplete attempt is not a deliverable. Keep technical
+  // recovery states out of the customer experience even for legacy books that
+  // predate the `parent_create` source marker and are opened by an old link.
   if (
-    book.source === "parent_create" &&
-    (book.status === "draft" ||
-      book.status === "failed" ||
-      book.status === "partial")
+    book.status === "failed" ||
+    book.status === "partial" ||
+    (book.source === "parent_create" && book.status === "draft")
   ) {
     redirect("/create");
   }
@@ -64,7 +64,7 @@ export default async function BookPage({ params }: Props) {
   const canExportPdf =
     !hasActivePageRetry &&
     missingDocumentCount === 0 &&
-    (book.status === "completed" || book.status === "partial" || Boolean(book.pdf_url)) &&
+    (book.status === "completed" || Boolean(book.pdf_url)) &&
     missingPages.length < pages.length;
 
   let generateHref = `/books/${id}/generate`;
@@ -120,13 +120,7 @@ export default async function BookPage({ params }: Props) {
               On termine encore votre cahier — quelques pages arrivent.
             </div>
           ) : null}
-          {book.status === "failed" ? (
-            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-ink">
-              La création n&apos;a pas abouti. Vos crédits ont été remboursés — réessayez
-              depuis « Créer pour mon enfant ».
-            </div>
-          ) : null}
-          {totalMissingCount > 0 && book.status !== "generating" && book.status !== "failed" ? (
+          {totalMissingCount > 0 && book.status !== "generating" ? (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-ink">
               {totalMissingCount} page{totalMissingCount > 1 ? "s manquent" : " manque"} encore.
               Reprenez-les avant l&apos;impression pour obtenir le cahier complet.
