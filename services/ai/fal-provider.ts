@@ -102,7 +102,7 @@ const LINEART_BOOST =
 const STYLE_PRESERVE_BOOST =
   "CRITICAL STYLE PRESERVE: keep the EXACT same organic ink hand, character identities, proportions and coloring-book aesthetic as the rest of this book — do not switch artists or line styles.";
 const PREMIUM_PAGE_BOOST =
-  "PREMIUM PRODUCT GATE: coherent foreground, midground and background with at least 6 LARGE CLOSED scene-specific colorable objects; correct anatomy with no missing/extra/fused limbs; professional organic children's-book ink with gently varied line weight; no generic clipart and no giant glossy emoji eyes.";
+  "PREMIUM PRODUCT GATE: ONE SINGLE FULL-PAGE CONTINUOUS COLORING SCENE — absolutely NO comic panels, split frames, grids, gutters, panel borders, speech bubbles, captions or text boxes. Coherent foreground, midground and background with at least 6 LARGE CLOSED scene-specific colorable objects; correct anatomy with no missing/extra/fused limbs; professional organic children's-book ink with gently varied line weight; no generic clipart and no giant glossy emoji eyes.";
 /** Re-roll nudge when the hero cast portrait came back B&W (degenerate) instead of colored. */
 const COLOR_SHEET_BOOST =
   "IMPORTANT: render the characters in soft flat COLORS (colored skin, hair, outfits and fur) with bold cartoon outlines — this reference portrait must NOT be black-and-white line art.";
@@ -515,6 +515,11 @@ export class FalImageProvider implements ImageAIProvider {
             prevVisionNudges.push(PREMIUM_PAGE_BOOST);
             verdicts.push("page-quality:vision-unavailable");
           } else if (page) {
+            if (!page.singleFullPage) {
+              visionScore += 5;
+              prevVisionNudges.push(PREMIUM_PAGE_BOOST);
+              verdicts.push(`comic-layout:${page.issue || "panels, bubbles or split frames detected"}`);
+            }
             if (page.lineup || !page.actionVisible) {
               visionScore += page.lineup ? 3 : 1;
               prevVisionNudges.push(ANTI_LINEUP_BOOST);
