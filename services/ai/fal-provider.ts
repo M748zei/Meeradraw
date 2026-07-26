@@ -66,6 +66,8 @@ const FAL_QUALITY_REROLLS = Number(process.env.FAL_QUALITY_REROLLS ?? 1);
  * Default 1 to avoid retry storms; override with VISION_QC_REROLLS.
  */
 const VISION_QC_REROLLS = Number(process.env.VISION_QC_REROLLS ?? 1);
+const PRINT_PAGE_WIDTH_PX = Number(process.env.PRINT_PAGE_WIDTH_PX || 2400);
+const PRINT_PAGE_HEIGHT_PX = Number(process.env.PRINT_PAGE_HEIGHT_PX || 3200);
 
 /** Permanent fal failures — never retry (wastes wall-clock; some may still bill). */
 export class NonRetryableFalError extends Error {
@@ -592,6 +594,39 @@ export class FalImageProvider implements ImageAIProvider {
       console.warn(`[${label}] keeping best available image after re-rolls (score ${best.score})`);
     }
 
+    // Normalize strict interior pages to a real print canvas (3:4 portrait,
+    // 2400×3200 by default). This preserves aspect ratio with white padding,
+    // removes residual chroma, and avoids stretching a 1024px square in the PDF.
+    if (input?.isColoringPage && best.pngBuffer) {
+      try {
+        const sharp = (await import("sharp")).default;
+        const printPng = await sharp(best.pngBuffer)
+          .resize({
+            width: PRINT_PAGE_WIDTH_PX,
+            height: PRINT_PAGE_HEIGHT_PX,
+            fit: "contain",
+            background: { r: 255, g: 255, b: 255, alpha: 1 },
+          })
+          .grayscale()
+          .linear(1.08, -8)
+          .png({ compressionLevel: 9 })
+          .toBuffer();
+        const url = await this.storage.uploadBytes(
+          `generated/${randomUUID()}-print.png`,
+          printPng,
+          "image/png"
+        );
+        return { url, provider: best.provider };
+      } catch (err) {
+        if (input.strictQuality) {
+          throw new Error(
+            `Print normalization failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        console.warn(`[${label}] print normalization failed`, err);
+      }
+    }
+
     // The raw fal URL for webp/other formats is unusable by pdf-lib and is short-lived;
     // persist the converted PNG to Storage and return that stable URL instead.
     if (best.needsUpload && best.pngBuffer) {
@@ -885,7 +920,13 @@ async function callFal(
       const raw = new Uint8Array((await fetch(url).then((r) => r.arrayBuffer())) as ArrayBuffer);
       const fmt = detectImageFormat(raw);
       if (fmt === "png") {
-        return { url, provider: "fal.ai", bytes: raw, needsUpload: false };
+        return {
+          url,
+          provider: "fal.ai",
+          bytes: raw,
+          needsUpload: false,
+          pngBuffer: Buffer.from(raw),
+        };
       }
       const pngBuffer = await toPngBuffer(raw);
       const bytes = new Uint8Array(pngBuffer);
