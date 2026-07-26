@@ -403,8 +403,12 @@ export class FalImageProvider implements ImageAIProvider {
         const verdicts: string[] = [];
         if (input.isCharacterSheet && input.expectedCast?.length) {
           const cast = await checkCast(current.url, input.expectedCast);
-          if (cast && !cast.matches) {
-            visionScore += 3;
+          if (!cast && input.strictQuality) {
+            visionScore += 4;
+            prevVisionNudges.push(CAST_FIX_BOOST);
+            verdicts.push("cast:vision-unavailable");
+          } else if (cast && !cast.matches) {
+            visionScore += 4;
             prevVisionNudges.push(CAST_FIX_BOOST);
             verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
           }
@@ -419,8 +423,12 @@ export class FalImageProvider implements ImageAIProvider {
           }
           if (input.expectedCast?.length) {
             const cast = await checkCast(current.url, input.expectedCast);
-            if (cast && !cast.matches) {
-              visionScore += 3;
+            if (!cast && input.strictQuality) {
+              visionScore += 4;
+              prevVisionNudges.push(CAST_FIX_BOOST);
+              verdicts.push("cast:vision-unavailable");
+            } else if (cast && !cast.matches) {
+              visionScore += 4;
               prevVisionNudges.push(CAST_FIX_BOOST);
               verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
             }
@@ -430,7 +438,11 @@ export class FalImageProvider implements ImageAIProvider {
           // reference lineup when this check is missing).
           if (input.action) {
             const poster = await checkPageAction(current.url, input.action);
-            if (poster && (poster.lineup || !poster.actionVisible)) {
+            if (!poster && input.strictQuality) {
+              visionScore += 4;
+              prevVisionNudges.push(PREMIUM_PAGE_BOOST);
+              verdicts.push("cover-quality:vision-unavailable");
+            } else if (poster && (poster.lineup || !poster.actionVisible)) {
               visionScore += poster.lineup ? 2 : 1;
               prevVisionNudges.push(ANTI_LINEUP_BOOST);
               verdicts.push(
