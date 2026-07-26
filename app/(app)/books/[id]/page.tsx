@@ -40,12 +40,30 @@ export default async function BookPage({ params }: Props) {
     notFound();
   }
 
+  // A refunded parent attempt is not a deliverable. Keep technical recovery
+  // states out of the parent experience even when an old direct link is used.
+  if (
+    book.source === "parent_create" &&
+    (book.status === "draft" ||
+      book.status === "failed" ||
+      book.status === "partial")
+  ) {
+    redirect("/create");
+  }
+
   const missingPages = pages.filter(
     (p) => !p.illustration_url || p.generation_status === "failed"
   );
+  const expectedPageCount =
+    typeof book.page_count === "number" && book.page_count > 0
+      ? Math.floor(book.page_count)
+      : pages.length;
+  const missingDocumentCount = Math.max(0, expectedPageCount - pages.length);
+  const totalMissingCount = missingPages.length + missingDocumentCount;
   const hasActivePageRetry = pages.some((p) => p.generation_status === "generating");
   const canExportPdf =
     !hasActivePageRetry &&
+    missingDocumentCount === 0 &&
     (book.status === "completed" || book.status === "partial" || Boolean(book.pdf_url)) &&
     missingPages.length < pages.length;
 
@@ -108,10 +126,10 @@ export default async function BookPage({ params }: Props) {
               depuis « Créer pour mon enfant ».
             </div>
           ) : null}
-          {missingPages.length > 0 && book.status !== "generating" && book.status !== "failed" ? (
+          {totalMissingCount > 0 && book.status !== "generating" && book.status !== "failed" ? (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-ink">
-              Quelques pages manquent encore. Utilisez « Régénérer cette page » ci-dessous —
-              on vise un cahier complet avant impression.
+              {totalMissingCount} page{totalMissingCount > 1 ? "s manquent" : " manque"} encore.
+              Reprenez-les avant l&apos;impression pour obtenir le cahier complet.
             </div>
           ) : null}
           <div className="mt-6 flex flex-wrap gap-3">
@@ -156,7 +174,11 @@ export default async function BookPage({ params }: Props) {
                       <p className="text-sm font-medium text-ink-muted">
                         Illustration manquante
                       </p>
-                      <RegeneratePageButton bookId={id} pageId={page.id} />
+                      <RegeneratePageButton
+                        bookId={id}
+                        pageId={page.id}
+                        costCredits={2}
+                      />
                     </div>
                   )}
                 </div>
@@ -167,7 +189,11 @@ export default async function BookPage({ params }: Props) {
                     <p className="mt-1 text-sm text-ink-muted">{page.story_text}</p>
                   </div>
                   {page.illustration_url ? (
-                    <RegeneratePageButton bookId={id} pageId={page.id} />
+                    <RegeneratePageButton
+                      bookId={id}
+                      pageId={page.id}
+                      costCredits={2}
+                    />
                   ) : null}
                 </div>
               </Card>

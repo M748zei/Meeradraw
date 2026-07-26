@@ -53,13 +53,14 @@ async function runLogicTests() {
   const { AppError, apiError, apiSuccess } = await import("../lib/errors");
   const { extractSale } = await import("../services/chariow-sale");
   const { hasVerifiedEmailOwnership } = await import("../lib/email-ownership");
-    const { safeRechargeReturnPath } = await import("../lib/recharge-return");
-    const {
-      isPdfExportLeaseActive,
-      validatePdfExportState,
-      PDF_EXPORT_LEASE_MS,
-    } = await import("../lib/pdf-export-state");
+  const { safeRechargeReturnPath } = await import("../lib/recharge-return");
+  const {
+    isPdfExportLeaseActive,
+    validatePdfExportState,
+    PDF_EXPORT_LEASE_MS,
+  } = await import("../lib/pdf-export-state");
   const { normalizeCheckoutPhone } = await import("../lib/checkout-phone");
+  const { isCustomerVisibleBook } = await import("../lib/book-visibility");
 
   await test("estimateBookCost colorbook 12 pages", () => {
     // cover 5 + 12*2 + pdf 1 = 30
@@ -88,6 +89,20 @@ async function runLogicTests() {
     assert(RECHARGE_PACKS.length === 4, `got ${RECHARGE_PACKS.length}`);
   });
 
+  await test("customer library hides broken deliveries", () => {
+    assert(!isCustomerVisibleBook({ status: "failed" }), "failed hidden");
+    assert(!isCustomerVisibleBook({ status: "partial" }), "partial hidden");
+    assert(
+      !isCustomerVisibleBook({ status: "draft", source: "parent_create" }),
+      "interrupted parent draft hidden"
+    );
+    assert(
+      isCustomerVisibleBook({ status: "generating", source: "parent_create" }),
+      "active parent creation visible"
+    );
+    assert(isCustomerVisibleBook({ status: "completed" }), "delivery visible");
+  });
+
   await test("post-payment return accepts only known local paths", () => {
     assert(safeRechargeReturnPath("/books/book_123") === "/books/book_123", "book");
     assert(safeRechargeReturnPath("/create") === "/create", "create");
@@ -97,8 +112,14 @@ async function runLogicTests() {
     assert(
       validatePdfExportState("completed", [
         { illustration_path: "books/u/b/pages/1.png", generation_status: "completed" },
-      ]) === "ok",
+      ], 1) === "ok",
       "completed illustrated book exports"
+    );
+    assert(
+      validatePdfExportState("partial", [
+        { illustration_path: "books/u/b/pages/1.png", generation_status: "completed" },
+      ], 8) === "incomplete_book",
+      "missing page documents block export"
     );
     assert(
       validatePdfExportState("partial", [

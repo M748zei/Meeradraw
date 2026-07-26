@@ -10,13 +10,27 @@ export type PdfExportPageState = {
 
 export function validatePdfExportState(
   bookStatus: string | null | undefined,
-  pages: PdfExportPageState[]
-): "ok" | "book_not_ready" | "page_retry_active" | "no_printable_pages" {
+  pages: PdfExportPageState[],
+  expectedPageCount?: number | null
+):
+  | "ok"
+  | "book_not_ready"
+  | "page_retry_active"
+  | "incomplete_book"
+  | "no_printable_pages" {
   if (!PDF_EXPORTABLE_STATUSES.has(String(bookStatus ?? ""))) {
     return "book_not_ready";
   }
   if (pages.some((page) => page.generation_status === "generating")) {
     return "page_retry_active";
+  }
+  if (
+    typeof expectedPageCount === "number" &&
+    Number.isFinite(expectedPageCount) &&
+    expectedPageCount > 0 &&
+    pages.length < Math.floor(expectedPageCount)
+  ) {
+    return "incomplete_book";
   }
   if (
     pages.length === 0 ||

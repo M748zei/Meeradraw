@@ -43,9 +43,11 @@ export async function generateBookWorkflow(args: GenerateBookArgs) {
       await Promise.all(wave.map((pageId) => stepOnePage(args, pageId)));
     }
 
-    // Studio heal (capped in orchestrator). Parent skips.
+    // Automatic delivery repair. Studio stops after its configured cap;
+    // parent books receive the extra third pass before finalization.
     await stepHealFailedPages(args, 1);
     await stepHealFailedPages(args, 2);
+    await stepHealFailedPages(args, 3);
 
     await stepFinalize(args);
     console.log(`[workflow] generateBook done gen=${args.generationId}`);

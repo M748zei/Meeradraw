@@ -114,7 +114,8 @@ async function reapOne(
         tx.set(
           bookRef,
           {
-            status: "failed",
+            status:
+              book.data()?.source === "parent_create" ? "draft" : "failed",
             active_generation_id: null,
             updated_at: new Date().toISOString(),
           },

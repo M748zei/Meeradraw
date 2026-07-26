@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebase/admin";
+import { isCustomerVisibleBook } from "@/lib/book-visibility";
 import { docData, docsData } from "@/lib/firebase/docs";
 import { getSessionUser } from "@/lib/firebase/session";
 import type { Book, Universe } from "@/types/database";
@@ -37,7 +38,9 @@ export default async function UniversePage({ params }: Props) {
 
   const booksSnap = await db.collection("books").where("universe_id", "==", id).get();
   // Filter by owner in memory (avoids a composite index; volume per universe is small).
-  const books = docsData<Book>(booksSnap.docs).filter((b) => b.user_id === session.uid);
+  const books = docsData<Book>(booksSnap.docs).filter(
+    (b) => b.user_id === session.uid && isCustomerVisibleBook(b)
+  );
 
   const ideaSeed = (universe.description?.trim() || universe.title).slice(0, 4000);
   const newBookHref = ideaSeed

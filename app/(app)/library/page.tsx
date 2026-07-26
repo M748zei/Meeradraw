@@ -4,6 +4,7 @@ import { StatusBadge } from "@/components/books/status-badge";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebase/admin";
+import { isCustomerVisibleBook } from "@/lib/book-visibility";
 import { docsData } from "@/lib/firebase/docs";
 import { getSessionUser } from "@/lib/firebase/session";
 import type { Book } from "@/types/database";
@@ -24,7 +25,9 @@ export default async function LibraryPage() {
   const booksSnap = session
     ? await getAdminDb().collection("books").where("user_id", "==", session.uid).get()
     : null;
-  const books = booksSnap ? docsData<Book>(booksSnap.docs) : [];
+  const books = booksSnap
+    ? docsData<Book>(booksSnap.docs).filter(isCustomerVisibleBook)
+    : [];
 
   return (
     <div className="space-y-6">

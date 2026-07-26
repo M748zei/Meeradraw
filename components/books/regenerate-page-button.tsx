@@ -7,8 +7,10 @@ import { RefreshCw } from "lucide-react";
 
 type Props = {
   bookId: string;
-  pageId: string;
+  pageId?: string;
   size?: "sm" | "md";
+  label?: string;
+  costCredits?: number;
   onSuccess?: () => void;
 };
 
@@ -16,6 +18,8 @@ export function RegeneratePageButton({
   bookId,
   pageId,
   size = "sm",
+  label,
+  costCredits = 0,
   onSuccess,
 }: Props) {
   const router = useRouter();
@@ -23,13 +27,24 @@ export function RegeneratePageButton({
   const [error, setError] = useState<string | null>(null);
 
   async function onRegen() {
+    if (
+      costCredits > 0 &&
+      !window.confirm(
+        `Cette régénération coûtera au maximum ${costCredits} crédit${costCredits > 1 ? "s" : ""}. Continuer ?`
+      )
+    ) {
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/generation/retry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ book_id: bookId, page_id: pageId }),
+        body: JSON.stringify({
+          book_id: bookId,
+          ...(pageId ? { page_id: pageId } : {}),
+        }),
       });
       const json = await res.json();
       if (!json.success) {
@@ -54,7 +69,7 @@ export function RegeneratePageButton({
         disabled={loading}
       >
         <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-        {loading ? "Régénération…" : "Régénérer cette page"}
+        {loading ? "Régénération…" : label || "Régénérer cette page"}
       </Button>
       {error ? (
         <p className="text-xs text-rose-700" role="alert">

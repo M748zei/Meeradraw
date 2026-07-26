@@ -3,13 +3,23 @@ import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit-store";
 import { getImageProvider } from "@/services/ai";
 import { buildWorldNegative } from "@/services/ai/prompts";
-import { settingElementsForScene } from "@/services/ai/character-bible";
-import type { SettingBible } from "@/services/ai/types";
+import {
+  buildCompactScene,
+  buildPageScene,
+  formatPageCharacterLock,
+  settingElementsForScene,
+} from "@/services/ai/character-bible";
+import type { SettingBible, StoryPlan } from "@/services/ai/types";
 import { LicenseService } from "@/services/license-service";
 import { CreditService } from "@/services/credit-service";
 import { StorageService } from "@/services/storage-service";
 import { CREDIT_COSTS } from "@/config/credits";
-import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
+import { firestoreSafe } from "@/lib/firestore-sanitize";
+import type {
+  CollectionReference,
+  Firestore,
+  QueryDocumentSnapshot,
+} from "firebase-admin/firestore";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 
@@ -47,6 +57,7 @@ export async function POST(request: Request) {
       }
       candidates = [one as QueryDocumentSnapshot];
     } else {
+      await restoreMissingPageDocuments(db, pagesCol, book);
       const allSnap = await pagesCol.get();
       candidates = allSnap.docs.filter((d) => {
         const p = d.data();
@@ -320,6 +331,103 @@ export async function POST(request: Request) {
     }
     return apiError(e);
   }
+}
+
+async function restoreMissingPageDocuments(
+  db: Firestore,
+  pagesCol: CollectionReference,
+  book: Record<string, unknown>
+) {
+  const expected =
+    typeof book.page_count === "number" && book.page_count > 0
+      ? Math.floor(book.page_count)
+      : 0;
+  if (expected === 0) return;
+
+  const raw = book.story_plan as Record<string, unknown> | null | undefined;
+  if (!raw || !Array.isArray(raw.pages)) {
+    throw new AppError(
+      "CONFLICT",
+      "Le plan source de ce livre est incomplet. Créez un nouveau cahier.",
+      409
+    );
+  }
+
+  const plan: StoryPlan = {
+    title: typeof book.title === "string" ? book.title : "",
+    subtitle: typeof book.subtitle === "string" ? book.subtitle : undefined,
+    concept: typeof raw.concept === "string" ? raw.concept : undefined,
+    summary: typeof raw.summary === "string" ? raw.summary : "",
+    moral: typeof raw.moral === "string" ? raw.moral : undefined,
+    audienceAge:
+      typeof raw.audience_age === "string" ? raw.audience_age : "",
+    world: (raw.world || {
+      setting: "",
+      palette: "",
+      mood: "",
+    }) as StoryPlan["world"],
+    characters: Array.isArray(raw.characters)
+      ? (raw.characters as StoryPlan["characters"])
+      : [],
+    pages: raw.pages as StoryPlan["pages"],
+  };
+
+  const existing = await pagesCol.get();
+  const existingNumbers = new Set(
+    existing.docs
+      .map((doc) => doc.data().page_number)
+      .filter((value): value is number => Number.isInteger(value))
+  );
+  const missingPlanPages = plan.pages
+    .filter(
+      (page) =>
+        Number.isInteger(page.pageNumber) &&
+        page.pageNumber >= 1 &&
+        page.pageNumber <= expected &&
+        !existingNumbers.has(page.pageNumber)
+    )
+    .sort((a, b) => a.pageNumber - b.pageNumber);
+
+  if (missingPlanPages.length === 0) return;
+  const now = new Date().toISOString();
+
+  await db.runTransaction(async (tx) => {
+    const pending = await Promise.all(
+      missingPlanPages.map(async (page) => {
+        const ref = pagesCol.doc(`recovered-page-${page.pageNumber}`);
+        const snap = await tx.get(ref);
+        return { page, ref, exists: snap.exists };
+      })
+    );
+    for (const { page, ref, exists } of pending) {
+      if (exists) continue;
+      tx.set(
+        ref,
+        firestoreSafe({
+          page_number: page.pageNumber,
+          title: page.title,
+          story_text: page.storyText,
+          illustration_prompt: buildPageScene(plan, page),
+          ref_scene: buildCompactScene(plan, page),
+          action: page.action ?? null,
+          camera: page.camera ?? null,
+          page_setting: page.pageSetting ?? null,
+          focal_point: page.focalPoint ?? null,
+          negative_prompt: page.negativePrompt ?? null,
+          illustration_url: null,
+          illustration_path: null,
+          activity_type: null,
+          generation_status: "pending",
+          character_ids: page.characterIds || [],
+          comic_beat: page.comicBeat ?? null,
+          shot_type: page.shotType ?? null,
+          character_lock: formatPageCharacterLock(plan, page),
+          created_at: now,
+          updated_at: now,
+        })
+      );
+    }
+  });
 }
 
 async function loadCharacterBibleFromUniverse(

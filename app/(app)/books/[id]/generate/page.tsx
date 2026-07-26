@@ -187,8 +187,8 @@ function GenerateInner() {
           <p className="mt-1 text-sm text-ink-muted">
             {parentFacingError || "Essayons à nouveau."}
           </p>
-          <Link href={`/books/${bookId}`} className="mt-4 inline-block">
-            <Button variant="secondary">Retour au livre</Button>
+          <Link href="/create" className="mt-4 inline-block">
+            <Button variant="secondary">Recommencer sans frais</Button>
           </Link>
         </Card>
       ) : null}

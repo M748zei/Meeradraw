@@ -26,6 +26,19 @@ export async function POST(request: Request) {
     const exportToken = randomUUID();
     const startedAt = new Date().toISOString();
 
+    // Validate even when a cached PDF URL exists. Historical books may have a
+    // stale export despite missing page documents, and returning it here would
+    // bypass every later consistency check.
+    const preflightBook = await books.getWithPages(user.id, book_id);
+    const preflightState = validatePdfExportState(
+      preflightBook.status,
+      preflightBook.pages,
+      preflightBook.page_count
+    );
+    if (preflightState !== "ok") {
+      throw pdfStateError(preflightState);
+    }
+
     const lease = await db.runTransaction(async (tx) => {
       const snap = await tx.get(bookRef);
       if (!snap.exists || snap.data()?.user_id !== user.id) {
@@ -61,19 +74,13 @@ export async function POST(request: Request) {
 
     try {
       const book = await books.getWithPages(user.id, book_id);
-      const exportState = validatePdfExportState(book.status, book.pages);
+      const exportState = validatePdfExportState(
+        book.status,
+        book.pages,
+        book.page_count
+      );
       if (exportState !== "ok") {
-        const messages = {
-          book_not_ready: "Ce livre n'est pas encore prêt pour l'export.",
-          page_retry_active:
-            "Une page est en cours de régénération. Attendez sa fin avant l'export.",
-          no_printable_pages: "Aucune page illustrée n'est prête à imprimer.",
-        } as const;
-        throw new AppError(
-          "CONFLICT",
-          messages[exportState],
-          409
-        );
+        throw pdfStateError(exportState);
       }
 
       const bytes = await new PDFService().buildBookPdf({
@@ -158,4 +165,18 @@ export async function POST(request: Request) {
     }
     return apiError(e);
   }
+}
+
+function pdfStateError(
+  state: Exclude<ReturnType<typeof validatePdfExportState>, "ok">
+) {
+  const messages = {
+    book_not_ready: "Ce livre n'est pas encore prêt pour l'export.",
+    page_retry_active:
+      "Une page est en cours de régénération. Attendez sa fin avant l'export.",
+    incomplete_book:
+      "Ce livre contient moins de pages que prévu. Reprenez les pages manquantes avant l'export.",
+    no_printable_pages: "Aucune page illustrée n'est prête à imprimer.",
+  } as const;
+  return new AppError("CONFLICT", messages[state], 409);
 }

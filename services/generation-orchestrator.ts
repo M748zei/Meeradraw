@@ -88,16 +88,18 @@ const SHEET_MAX_ATTEMPTS = envInt(process.env.SHEET_MAX_ATTEMPTS, 3);
 const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 1);
 /** Studio heal passes (failed-page re-gen). Capped to avoid fal retry storms. */
 const STUDIO_HEAL_PASSES = envInt(process.env.STUDIO_HEAL_PASSES, 2);
+/** Parent promise: retry missing pages automatically before declaring no delivery. */
+const PARENT_HEAL_PASSES = envInt(process.env.PARENT_HEAL_PASSES, 3);
 
 /**
- * Parent fal budget — real $ on FAL_KEY. Target ≈ cover + N pages (1 shot each).
- * No vision QC re-rolls, at most one blank rescue, one provider attempt, no recovery storm.
+ * Parent quality budget. Parents never receive a knowingly incomplete cahier,
+ * so every image gets QC and provider recovery before page-level heal passes.
  */
-const PARENT_FAL_LEAN = {
-  maxVisionRerolls: 0,
-  maxQualityRerolls: 1,
-  maxProviderAttempts: 1,
-  skipRecovery: true,
+const PARENT_FAL_CAPS = {
+  maxVisionRerolls: envInt(process.env.PARENT_VISION_QC_REROLLS, 1),
+  maxQualityRerolls: envInt(process.env.PARENT_FAL_QUALITY_REROLLS, 1),
+  maxProviderAttempts: envInt(process.env.PARENT_FAL_RETRY_ATTEMPTS, 2),
+  skipRecovery: false,
 } as const;
 
 /**
@@ -166,7 +168,7 @@ export class GenerationOrchestrator {
       await mapWithConcurrency(pageIds, PAGE_GEN_CONCURRENCY, (pageId) =>
         this.runOnePagePhase(userId, bookId, generationId, pageId)
       );
-      for (let pass = 1; pass <= STUDIO_HEAL_PASSES; pass++) {
+      for (let pass = 1; pass <= PARENT_HEAL_PASSES; pass++) {
         await this.runHealFailedPagesPhase(userId, bookId, generationId, pass);
       }
       await this.runFinalizePhase(
@@ -371,16 +373,12 @@ export class GenerationOrchestrator {
   ): Promise<void> {
     await this.ensureActive(userId, bookId, generationId);
     const book = await this.books.get(userId, bookId);
-    // Parent: never re-spend fal on heal/lineup storms. Incomplete → fail + refund.
-    if (isParentBook(book)) {
+    const maxPasses = isParentBook(book)
+      ? PARENT_HEAL_PASSES
+      : STUDIO_HEAL_PASSES;
+    if (pass > maxPasses) {
       console.log(
-        `[parent] skip heal pass=${pass} gen=${generationId} (fal spend guard)`
-      );
-      return;
-    }
-    if (pass > STUDIO_HEAL_PASSES) {
-      console.log(
-        `[studio] skip heal pass=${pass} gen=${generationId} (cap=${STUDIO_HEAL_PASSES})`
+        `[generation] skip heal pass=${pass} gen=${generationId} (cap=${maxPasses})`
       );
       return;
     }
@@ -468,7 +466,7 @@ export class GenerationOrchestrator {
           identityFromPhoto: Boolean(photoUrl),
           expectedCast: sheetCast,
           qcStats: sheetStats,
-          ...(parentMode ? PARENT_FAL_LEAN : STUDIO_FAL_CAPS),
+          ...(parentMode ? PARENT_FAL_CAPS : STUDIO_FAL_CAPS),
         });
         await this.setQcImage(generationId, "model_sheet", sheetStats);
         if (await this.isImplausibleHero(sheet.url)) {
@@ -601,7 +599,7 @@ export class GenerationOrchestrator {
       qcStats: coverStats,
       ...(parentMode
         ? {
-            ...PARENT_FAL_LEAN,
+            ...PARENT_FAL_CAPS,
             seed: pageStyleSeed(bookId, 0),
             stylePreset: "COLORING_BOOK_I",
             heroGender: coverGender,
@@ -793,7 +791,7 @@ export class GenerationOrchestrator {
         qcStats: pageStats,
         ...(parentMode
           ? {
-              ...PARENT_FAL_LEAN,
+              ...PARENT_FAL_CAPS,
               seed: pageStyleSeed(bookId, pageNumber),
               stylePreset: "COLORING_BOOK_I",
               heroGender: childGender,
@@ -860,6 +858,7 @@ export class GenerationOrchestrator {
         id: d.id,
         ...(d.data() as Record<string, unknown>),
       }));
+    const parentMode = isParentBook(book);
     const completedCount = pageDocs.filter(
       (p) => p.generation_status === "completed"
     ).length;
@@ -870,7 +869,7 @@ export class GenerationOrchestrator {
     // Never mark a book "completed" with blank pages
     if (completedCount === 0) {
       await this.books.update(userId, bookId, {
-        status: "failed",
+        status: parentMode ? "draft" : "failed",
         active_generation_id: null,
       });
       await this.credits.refund(
@@ -896,11 +895,10 @@ export class GenerationOrchestrator {
     }
 
     const plannedPages = book.page_count || pageDocs.length;
-    const parentMode = isParentBook(book);
     // Parent promise: never ship an incomplete book as "ready".
     if (parentMode && completedCount < plannedPages) {
       await this.books.update(userId, bookId, {
-        status: "failed",
+        status: "draft",
         active_generation_id: null,
       });
       await this.credits.refund(
@@ -1120,7 +1118,8 @@ export class GenerationOrchestrator {
         const active = snap.data()?.active_generation_id;
         if (active != null && active !== generationId) return;
         tx.update(bookRef, {
-          status: "failed",
+          status:
+            snap.data()?.source === "parent_create" ? "draft" : "failed",
           active_generation_id: null,
           updated_at: new Date().toISOString(),
         });
