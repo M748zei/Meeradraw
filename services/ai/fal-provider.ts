@@ -355,6 +355,7 @@ export class FalImageProvider implements ImageAIProvider {
           provider: string;
           score: number;
           blank: boolean;
+          colored: boolean;
           needsUpload: boolean;
           pngBuffer?: Buffer;
         }
@@ -580,6 +581,7 @@ export class FalImageProvider implements ImageAIProvider {
           provider: current.provider,
           score: totalScore,
           blank,
+          colored,
           needsUpload: Boolean(current.needsUpload),
           pngBuffer: current.pngBuffer,
         };
@@ -620,6 +622,7 @@ export class FalImageProvider implements ImageAIProvider {
               provider: rescue.provider,
               score: 0,
               blank: false,
+              colored: false,
               needsUpload: Boolean(rescue.needsUpload),
               pngBuffer: rescue.pngBuffer,
             };
@@ -651,7 +654,15 @@ export class FalImageProvider implements ImageAIProvider {
     ) {
       throw new Error("lineup after vision re-rolls");
     }
-    if (input?.strictQuality && best.score > 0) {
+    // Color leakage on an otherwise clean page/cover is mechanically repairable:
+    // the print normalization below converts it to high-contrast grayscale. Do not
+    // discard a valid composition or fail the whole paid book for that one defect.
+    const repairableColorOnly =
+      best.colored &&
+      !best.blank &&
+      best.score === 2 &&
+      !(qcStats.visionVerdicts || []).length;
+    if (input?.strictQuality && best.score > 0 && !repairableColorOnly) {
       throw new Error(
         `strict visual quality gate rejected image (score ${best.score}): ${(qcStats.visionVerdicts || []).slice(-4).join("; ") || "pixel quality defect"}`
       );
@@ -663,7 +674,7 @@ export class FalImageProvider implements ImageAIProvider {
     // Normalize strict interior pages to a real print canvas (3:4 portrait,
     // 2400×3200 by default). This preserves aspect ratio with white padding,
     // removes residual chroma, and avoids stretching a 1024px square in the PDF.
-    if (input?.isColoringPage && best.pngBuffer) {
+    if ((input?.isColoringPage || input?.isCover) && best.pngBuffer) {
       try {
         const sharp = (await import("sharp")).default;
         const printPng = await sharp(best.pngBuffer)
