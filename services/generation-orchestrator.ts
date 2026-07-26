@@ -944,13 +944,17 @@ export class GenerationOrchestrator {
     });
 
     let pdfUrl: string | null = null;
+    let pdfPath: string | null = null;
     try {
+      pdfPath = `exports/${userId}/${bookId}.pdf`;
       pdfUrl = await this.storage.uploadBytes(
-        `exports/${userId}/${bookId}.pdf`,
+        pdfPath,
         pdfBytes,
-        "application/pdf"
+        "application/pdf",
+        "export"
       );
     } catch (uploadErr) {
+      pdfPath = null;
       console.error("PDF storage upload failed; trying inline data URL", uploadErr);
       const dataUrl = `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`;
       const firestoreSafeLimit = 800_000;
@@ -990,6 +994,7 @@ export class GenerationOrchestrator {
     await this.books.update(userId, bookId, {
       status: bookStatus === "failed" ? "failed" : bookStatus,
       pdf_url: bookStatus === "failed" ? null : pdfUrl,
+      pdf_path: bookStatus === "failed" ? null : pdfPath,
       active_generation_id: null,
       ...(parentMode
         ? { quality_summary: null }

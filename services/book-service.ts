@@ -67,6 +67,10 @@ export class BookService {
       const url = await this.storage.signPath(book.child_photo_path, "sensitive");
       if (url) next.child_photo_url = url;
     }
+    if (book.pdf_path) {
+      const url = await this.storage.signPath(book.pdf_path, "export");
+      if (url) next.pdf_url = url;
+    }
     return next;
   }
 
@@ -120,6 +124,7 @@ export class BookService {
       cover_image_path: null,
       active_generation_id: null,
       pdf_url: null,
+      pdf_path: null,
       audience: input.audience ?? null,
       audience_age: input.audience_age ?? null,
       child_name: input.child_name?.trim() || null,

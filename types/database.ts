@@ -72,6 +72,8 @@ export interface Book {
     beats?: string[];
   } | null;
   pdf_url: string | null;
+  /** Canonical Storage object path used to refresh the expiring signed PDF URL. */
+  pdf_path?: string | null;
   /** Storage object path of the persisted cover (signed URL in cover_image). */
   cover_image_path?: string | null;
   /** In-flight generation id while status === generating (progress deep-link). */

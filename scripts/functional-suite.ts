@@ -53,7 +53,12 @@ async function runLogicTests() {
   const { AppError, apiError, apiSuccess } = await import("../lib/errors");
   const { extractSale } = await import("../services/chariow-sale");
   const { hasVerifiedEmailOwnership } = await import("../lib/email-ownership");
-  const { safeRechargeReturnPath } = await import("../lib/recharge-return");
+    const { safeRechargeReturnPath } = await import("../lib/recharge-return");
+    const {
+      isPdfExportLeaseActive,
+      validatePdfExportState,
+      PDF_EXPORT_LEASE_MS,
+    } = await import("../lib/pdf-export-state");
   const { normalizeCheckoutPhone } = await import("../lib/checkout-phone");
 
   await test("estimateBookCost colorbook 12 pages", () => {
@@ -89,6 +94,37 @@ async function runLogicTests() {
     assert(safeRechargeReturnPath("https://evil.example") === null, "absolute URL");
     assert(safeRechargeReturnPath("//evil.example") === null, "protocol relative");
     assert(safeRechargeReturnPath("/books/a/../../admin") === null, "traversal");
+    assert(
+      validatePdfExportState("completed", [
+        { illustration_path: "books/u/b/pages/1.png", generation_status: "completed" },
+      ]) === "ok",
+      "completed illustrated book exports"
+    );
+    assert(
+      validatePdfExportState("partial", [
+        { illustration_path: "books/u/b/pages/1.png", generation_status: "generating" },
+      ]) === "page_retry_active",
+      "active retry blocks export"
+    );
+    assert(
+      validatePdfExportState("draft", [
+        { illustration_path: "books/u/b/pages/1.png", generation_status: "completed" },
+      ]) === "book_not_ready",
+      "draft blocks export"
+    );
+    const leaseNow = Date.now();
+    assert(
+      isPdfExportLeaseActive("token", new Date(leaseNow - 1_000).toISOString(), leaseNow),
+      "fresh export lease active"
+    );
+    assert(
+      !isPdfExportLeaseActive(
+        "token",
+        new Date(leaseNow - PDF_EXPORT_LEASE_MS - 1).toISOString(),
+        leaseNow
+      ),
+      "stale export lease recoverable"
+    );
   });
 
   await test("checkout phone uses international number and supported country", () => {

@@ -93,6 +93,9 @@ export async function POST(request: Request) {
       if (ids.length > 0) {
         tx.update(bookSnap.ref, {
           pdf_url: null,
+          pdf_path: null,
+          pdf_export_token: null,
+          pdf_export_started_at: null,
           updated_at: now,
         });
       }
