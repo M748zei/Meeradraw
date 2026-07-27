@@ -132,15 +132,26 @@ function GenerateInner() {
     confirmPaid?: boolean;
   }) {
     if (retryLock.current) return;
-    if (
-      !opts.requireFreeRetry &&
-      opts.confirmPaid &&
-      typeof window !== "undefined" &&
-      !window.confirm(
-        "Recréer ce livre va réserver 18 crédits. Continuer ?"
-      )
-    ) {
-      return;
+    const recreateCost =
+      typeof progress?.recreate_cost === "number" &&
+      Number.isFinite(progress.recreate_cost)
+        ? progress.recreate_cost
+        : null;
+    if (!opts.requireFreeRetry && opts.confirmPaid) {
+      if (recreateCost == null) {
+        setError(
+          "Le coût de recréation est indisponible. Actualise la page puis réessaie."
+        );
+        return;
+      }
+      if (
+        typeof window !== "undefined" &&
+        !window.confirm(
+          `Recréer ce livre va réserver ${recreateCost} crédits. Continuer ?`
+        )
+      ) {
+        return;
+      }
     }
     retryLock.current = true;
     setRetrying(true);
@@ -151,15 +162,21 @@ function GenerateInner() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           book_id: bookId,
-          ...(opts.requireFreeRetry ? { require_free_retry: true } : {}),
+          ...(opts.requireFreeRetry
+            ? { require_free_retry: true }
+            : recreateCost != null
+              ? { expected_cost: recreateCost }
+              : {}),
         }),
       });
       const json = await res.json();
       if (!json.success) {
-        if (res.status === 409 && opts.requireFreeRetry) {
+        if (res.status === 409) {
           throw new Error(
             json.error?.message ||
-              "La tentative gratuite n’est plus disponible. Recrée le livre avec des crédits."
+              (opts.requireFreeRetry
+                ? "La tentative gratuite n’est plus disponible. Recrée le livre avec des crédits."
+                : "Le coût de recréation a changé. Actualise la page puis réessaie.")
           );
         }
         throw new Error(json.error?.message || "Impossible de recommencer");
@@ -178,7 +195,11 @@ function GenerateInner() {
   }
 
   const freeRetryAvailable = progress?.free_retry_available === true;
-  const paidRecreateCredits = 18;
+  const paidRecreateCredits =
+    typeof progress?.recreate_cost === "number" &&
+    Number.isFinite(progress.recreate_cost)
+      ? progress.recreate_cost
+      : null;
 
   const step =
     GENERATION_TEAM.find((s) => s.id === progress?.current_step) ||
@@ -307,7 +328,7 @@ function GenerateInner() {
             ) : (
               <Button
                 variant="secondary"
-                disabled={retrying}
+                disabled={retrying || paidRecreateCredits == null}
                 onClick={() =>
                   void retryGeneration({
                     requireFreeRetry: false,
@@ -317,7 +338,9 @@ function GenerateInner() {
               >
                 {retrying
                   ? "Relance…"
-                  : `Recréer le livre — ${paidRecreateCredits} crédits`}
+                  : paidRecreateCredits == null
+                    ? "Recréer le livre"
+                    : `Recréer le livre — ${paidRecreateCredits} crédits`}
               </Button>
             )}
             <Link href={`/books/${bookId}`}>

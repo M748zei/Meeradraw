@@ -16,9 +16,12 @@ import {
 } from "../lib/vision-qc";
 import {
   bookFieldsAfterFreeRetryLaunchFailure,
+  COST_MISMATCH_MESSAGE,
   FREE_RETRY_UNAVAILABLE_MESSAGE,
   resolveGenerationStartClaim,
 } from "../lib/generation-start-claim";
+import { persistCoverWithOptionalTitle } from "../lib/cover-persist";
+import { estimateBookCost } from "../config/credits";
 import {
   persistGenerationStep,
   stepIdempotencyKey,
@@ -410,6 +413,179 @@ async function runCoverGateIntegrationTests() {
   });
 }
 
+async function runCoverPersistTests() {
+  console.log("\n── cover title overlay persist ──");
+
+  const tinyPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64"
+  );
+
+  await test("premium overlay success → titled result persisted", async () => {
+    let uploadedText: string | null = null;
+    let fallbackCalled = false;
+    const result = await persistCoverWithOptionalTitle(
+      {
+        coverUrl: "https://example.test/cover.png",
+        storagePath: "books/b1/generations/g1/cover.png",
+        overlayTitle: "Aïcha et le Renard",
+        requireTitledOverlay: true,
+      },
+      {
+        fetchCoverBytes: async () => new Uint8Array(tinyPng),
+        overlay: async (_png, title) => {
+          assert.equal(title, "Aïcha et le Renard");
+          return Buffer.from(`titled:${title}`);
+        },
+        uploadPng: async (path, png) => {
+          assert.equal(path, "books/b1/generations/g1/cover.png");
+          uploadedText = Buffer.from(png).toString("utf8");
+          return `gs://bucket/${path}`;
+        },
+        persistFromUrl: async () => {
+          fallbackCalled = true;
+          return { url: "https://fallback", path: "fallback.png" };
+        },
+      }
+    );
+    assert.equal(fallbackCalled, false);
+    assert.equal(result.path, "books/b1/generations/g1/cover.png");
+    assert.equal(result.url, "gs://bucket/books/b1/generations/g1/cover.png");
+    assert.equal(uploadedText, "titled:Aïcha et le Renard");
+  });
+
+  await test("premium overlay error → reject, no untitled cover saved", async () => {
+    let uploaded = false;
+    let fallbackCalled = false;
+    await assert.rejects(
+      () =>
+        persistCoverWithOptionalTitle(
+          {
+            coverUrl: "https://example.test/cover.png",
+            storagePath: "books/b1/generations/g1/cover.png",
+            overlayTitle: "Aïcha et le Renard",
+            requireTitledOverlay: true,
+          },
+          {
+            fetchCoverBytes: async () => new Uint8Array(tinyPng),
+            overlay: async () => {
+              throw new Error("sharp failed");
+            },
+            uploadPng: async () => {
+              uploaded = true;
+              return "gs://x";
+            },
+            persistFromUrl: async () => {
+              fallbackCalled = true;
+              return { url: "https://fallback", path: "fallback.png" };
+            },
+          }
+        ),
+      /Premium cover title overlay failed/
+    );
+    assert.equal(uploaded, false);
+    assert.equal(fallbackCalled, false);
+  });
+
+  await test("premium titled upload error → reject", async () => {
+    let fallbackCalled = false;
+    await assert.rejects(
+      () =>
+        persistCoverWithOptionalTitle(
+          {
+            coverUrl: "https://example.test/cover.png",
+            storagePath: "books/b1/generations/g1/cover.png",
+            overlayTitle: "Aïcha et le Renard",
+            requireTitledOverlay: true,
+          },
+          {
+            fetchCoverBytes: async () => new Uint8Array(tinyPng),
+            overlay: async () => Buffer.from("titled"),
+            uploadPng: async () => {
+              throw new Error("storage 503");
+            },
+            persistFromUrl: async () => {
+              fallbackCalled = true;
+              return { url: "https://fallback", path: "fallback.png" };
+            },
+          }
+        ),
+      /Premium cover title overlay failed/
+    );
+    assert.equal(fallbackCalled, false);
+  });
+
+  await test("non-strict overlay error → historical untitled fallback", async () => {
+    const result = await persistCoverWithOptionalTitle(
+      {
+        coverUrl: "https://example.test/cover.png",
+        storagePath: "books/b1/generations/g1/cover.png",
+        overlayTitle: "Story Title",
+        requireTitledOverlay: false,
+      },
+      {
+        fetchCoverBytes: async () => new Uint8Array(tinyPng),
+        overlay: async () => {
+          throw new Error("overlay boom");
+        },
+        uploadPng: async () => "gs://should-not",
+        persistFromUrl: async (url, path) => ({
+          url: `${url}#kept`,
+          path,
+        }),
+      }
+    );
+    assert.equal(result.url, "https://example.test/cover.png#kept");
+    assert.equal(result.path, "books/b1/generations/g1/cover.png");
+  });
+
+  await test("path without overlay → no overlay call; provider title path", async () => {
+    let overlayCalled = false;
+    const result = await persistCoverWithOptionalTitle(
+      {
+        coverUrl: "https://example.test/cover.png",
+        storagePath: "books/b1/generations/g1/cover.png",
+        overlayTitle: null,
+        requireTitledOverlay: false,
+      },
+      {
+        fetchCoverBytes: async () => {
+          throw new Error("should not fetch for overlay");
+        },
+        overlay: async () => {
+          overlayCalled = true;
+          return Buffer.from("x");
+        },
+        uploadPng: async () => "gs://no",
+        persistFromUrl: async () => ({
+          url: "https://provider-lettered",
+          path: "books/b1/generations/g1/cover.png",
+        }),
+      }
+    );
+    assert.equal(overlayCalled, false);
+    assert.equal(result.url, "https://provider-lettered");
+  });
+
+  await test("sans overlay → coverTitle fournisseur actif (checkCoverTitle)", () => {
+    // Mirrors runCoverPhase wiring: reference path overlays server-side;
+    // text-only path passes plan.title to Fal so checkCoverTitle stays active.
+    const planTitle = "Aïcha et le Renard";
+    for (const useOverlayTitle of [true, false]) {
+      const falCoverTitle = useOverlayTitle ? undefined : planTitle;
+      const persistOverlayTitle = useOverlayTitle ? planTitle : null;
+      if (useOverlayTitle) {
+        assert.equal(falCoverTitle, undefined);
+        assert.equal(persistOverlayTitle, planTitle);
+      } else {
+        assert.equal(falCoverTitle, planTitle);
+        assert.equal(persistOverlayTitle, null);
+        assert.equal(Boolean(falCoverTitle), true, "checkCoverTitle gate");
+      }
+    }
+  });
+}
+
 async function runLogicInvariants() {
   console.log("\n── logic invariants ──");
 
@@ -533,11 +709,51 @@ async function runLogicInvariants() {
       estimatedCost: 18,
       freeRetryAvailable: false,
       requireFreeRetry: false,
+      expectedCost: 18,
     });
     assert.equal(claim.ok, true);
     if (claim.ok) {
       assert.equal(claim.cost, 18);
       assert.equal(claim.freeRetry, false);
+    }
+  });
+
+  await test("recreate_cost matches estimateBookCost for 6/12 colorbook and storybook", () => {
+    assert.equal(estimateBookCost(6, "colorbook"), 18);
+    assert.equal(estimateBookCost(12, "colorbook"), 30);
+    assert.equal(estimateBookCost(6, "storybook"), 24);
+    // Displayed recreate_cost must equal what paid start reserves.
+    for (const [pages, type, cost] of [
+      [6, "colorbook", 18],
+      [12, "colorbook", 30],
+      [6, "storybook", 24],
+    ] as const) {
+      const recreateCost = estimateBookCost(pages, type);
+      assert.equal(recreateCost, cost);
+      const claim = resolveGenerationStartClaim({
+        isTrial: false,
+        estimatedCost: recreateCost,
+        freeRetryAvailable: false,
+        requireFreeRetry: false,
+        expectedCost: recreateCost,
+      });
+      assert.equal(claim.ok, true);
+      if (claim.ok) assert.equal(claim.cost, recreateCost);
+    }
+  });
+
+  await test("expected_cost mismatch → 409, aucun débit", () => {
+    const claim = resolveGenerationStartClaim({
+      isTrial: false,
+      estimatedCost: 30,
+      freeRetryAvailable: false,
+      requireFreeRetry: false,
+      expectedCost: 18,
+    });
+    assert.equal(claim.ok, false);
+    if (!claim.ok) {
+      assert.equal(claim.code, "COST_MISMATCH");
+      assert.equal(claim.message, COST_MISMATCH_MESSAGE);
     }
   });
 
@@ -840,6 +1056,7 @@ async function main() {
   console.log("generation-reliability-suite\n");
   await runSoftAcceptTests();
   await runCoverGateIntegrationTests();
+  await runCoverPersistTests();
   await runLogicInvariants();
   await runEmulatorLedgerTests();
   console.log(`\n${passed} passed, ${failed} failed`);

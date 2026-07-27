@@ -13,7 +13,7 @@ import {
 import { buildWorldNegative } from "@/services/ai/prompts";
 import { firestoreSafe } from "@/lib/firestore-sanitize";
 import { buildSheetCrops } from "@/services/ai/sheet-crops";
-import { overlayCoverTitle } from "@/lib/cover-title";
+import { persistCoverWithOptionalTitle } from "@/lib/cover-persist";
 import type { ImageQcStats, SettingBible, StoryPlan } from "@/services/ai/types";
 import { getImageProvider, getTextProvider } from "@/services/ai";
 import { MockTextProvider } from "@/services/ai/mock-provider";
@@ -30,7 +30,7 @@ import {
   assertGenerationActive,
   GenerationCancelledError,
 } from "@/lib/generation-lifecycle";
-import { refundForFailedPages } from "@/config/credits";
+import { estimateBookCost, refundForFailedPages } from "@/config/credits";
 import type { Book } from "@/types/database";
 import type { Firestore } from "firebase-admin/firestore";
 import { randomUUID } from "crypto";
@@ -798,7 +798,11 @@ export class GenerationOrchestrator {
       cover.url,
       bookId,
       generationId,
-      useOverlayTitle ? plan.title : null
+      useOverlayTitle ? plan.title : null,
+      {
+        requireTitledOverlay:
+          requiresPremiumVisualQuality(book) && useOverlayTitle,
+      }
     );
     if (requiresPremiumVisualQuality(book) && !persistedCover.path) {
       throw new Error("Premium cover was not persisted");
@@ -1609,31 +1613,36 @@ export class GenerationOrchestrator {
   /**
    * Persist the cover to Storage, compositing the lettered title band first
    * when the cover came from the reference path (benchmark winner strategy).
-   * Fail-open: overlay/persist failures keep the un-titled or source image.
+   * Premium + overlay: fail closed — never store an untitled cover.
+   * Non-strict: historical fail-open fallback to the source image.
    */
   private async persistCover(
     coverUrl: string,
     bookId: string,
     generationId: string,
-    overlayTitle: string | null
+    overlayTitle: string | null,
+    options?: { requireTitledOverlay?: boolean }
   ): Promise<{ url: string; path: string | null }> {
-    if (!overlayTitle) {
-      return this.storage.persistImageFromUrl(coverUrl, `books/${bookId}/generations/${generationId}/cover.png`);
-    }
-    try {
-      const res = await fetch(coverUrl);
-      if (!res.ok) throw new Error(`fetch cover ${res.status}`);
-      const raw = new Uint8Array(await res.arrayBuffer());
-      const png =
-        detectImageFormat(raw) === "png" ? Buffer.from(raw) : await toPngBuffer(raw);
-      const titled = await overlayCoverTitle(png, overlayTitle);
-      const path = `books/${bookId}/generations/${generationId}/cover.png`;
-      const url = await this.storage.uploadBytes(path, titled, "image/png");
-      return { url, path };
-    } catch (err) {
-      console.warn("cover title overlay failed; persisting untitled cover", err);
-      return this.storage.persistImageFromUrl(coverUrl, `books/${bookId}/generations/${generationId}/cover.png`);
-    }
+    const storagePath = `books/${bookId}/generations/${generationId}/cover.png`;
+    return persistCoverWithOptionalTitle(
+      {
+        coverUrl,
+        storagePath,
+        overlayTitle,
+        requireTitledOverlay: Boolean(options?.requireTitledOverlay),
+      },
+      {
+        fetchCoverBytes: async (url) => {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`fetch cover ${res.status}`);
+          return new Uint8Array(await res.arrayBuffer());
+        },
+        uploadPng: (path, png) =>
+          this.storage.uploadBytes(path, png, "image/png"),
+        persistFromUrl: (url, path) =>
+          this.storage.persistImageFromUrl(url, path),
+      }
+    );
   }
 
   /**
@@ -1764,6 +1773,11 @@ export class GenerationOrchestrator {
             : "reserved",
       support_id: supportId,
       free_retry_available: Boolean(book.free_retry_available),
+      /** Exact credit cost /api/generation/start will reserve for a paid recreate. */
+      recreate_cost: estimateBookCost(
+        Number(book.page_count) || pagesTotal || 0,
+        (book.type as string) || "colorbook"
+      ),
       error_message: generation.error_message,
       book,
     };

@@ -259,5 +259,7 @@ export interface GenerationProgress {
   credits_state?: "reserved" | "captured" | "released";
   support_id?: string;
   free_retry_available?: boolean;
+  /** Exact credits /api/generation/start reserves for a paid recreate. */
+  recreate_cost?: number;
   error_message: string | null;
 }

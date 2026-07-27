@@ -12,18 +12,27 @@ export type GenerationStartClaimInput = {
   freeRetryAvailable: boolean;
   /** Client explicitly requested the compensated free restart button. */
   requireFreeRetry: boolean;
+  /**
+   * Client-displayed paid recreate cost. When set on a paid (non-trial,
+   * non-free-retry) start, must equal estimatedCost or the claim is rejected
+   * with no debit.
+   */
+  expectedCost?: number | null;
 };
 
 export type GenerationStartClaim =
   | { ok: true; cost: number; freeRetry: boolean }
   | {
       ok: false;
-      code: "FREE_RETRY_UNAVAILABLE";
+      code: "FREE_RETRY_UNAVAILABLE" | "COST_MISMATCH";
       message: string;
     };
 
 export const FREE_RETRY_UNAVAILABLE_MESSAGE =
   "La tentative gratuite n’est plus disponible. Recrée le livre avec des crédits, ou retourne au livre.";
+
+export const COST_MISMATCH_MESSAGE =
+  "Le coût de recréation a changé. Actualise la page puis réessaie — aucun crédit n’a été réservé.";
 
 /**
  * Decide reservation cost for a new generation claim.
@@ -47,9 +56,22 @@ export function resolveGenerationStartClaim(
     return { ok: true, cost: 0, freeRetry: true };
   }
 
+  const cost = Math.max(0, Math.floor(input.estimatedCost));
+  if (
+    input.expectedCost != null &&
+    Number.isFinite(input.expectedCost) &&
+    Math.floor(input.expectedCost) !== cost
+  ) {
+    return {
+      ok: false,
+      code: "COST_MISMATCH",
+      message: COST_MISMATCH_MESSAGE,
+    };
+  }
+
   return {
     ok: true,
-    cost: Math.max(0, Math.floor(input.estimatedCost)),
+    cost,
     freeRetry: false,
   };
 }

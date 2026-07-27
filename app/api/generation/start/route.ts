@@ -23,6 +23,8 @@ const schema = z.object({
   book_id: z.string().uuid(),
   /** Explicit free-retry button — never inferred from UI copy alone. */
   require_free_retry: z.boolean().optional().default(false),
+  /** Paid recreate: must match server estimateBookCost or start is rejected. */
+  expected_cost: z.number().int().nonnegative().optional(),
 });
 
 export async function POST(request: Request) {
@@ -191,6 +193,8 @@ export async function POST(request: Request) {
         estimatedCost,
         freeRetryAvailable: Boolean(bookData.free_retry_available),
         requireFreeRetry: Boolean(body.require_free_retry),
+        expectedCost:
+          body.expected_cost === undefined ? null : body.expected_cost,
       });
       if (!claimDecision.ok) {
         throw new AppError(
