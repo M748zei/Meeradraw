@@ -52,6 +52,11 @@ export function stepIdempotencyKey(
 /**
  * Persist durable per-step status under generations/{id}/steps/{stepKey}.
  * Safe to call repeatedly — last write wins for the same step key.
+ *
+ * `attempt` must be the real Workflow attempt (`getStepMetadata().attempt`) when
+ * called from a step — never hardcode 1 if the runtime exposes retries.
+ * `requestId` is only written when a provider request id is known; Workflow's
+ * stepId is not a fal request id and must not be invented here.
  */
 export async function persistGenerationStep(
   db: Firestore,

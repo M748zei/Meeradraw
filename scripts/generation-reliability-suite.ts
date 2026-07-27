@@ -8,6 +8,21 @@
  */
 import assert from "node:assert/strict";
 import { canSoftAcceptCover } from "../lib/cover-soft-accept";
+import {
+  applyCoverPosterVerdicts,
+  identityScoresPass,
+  IDENTITY_PASS_SCORE,
+  type CoverPosterCheck,
+} from "../lib/vision-qc";
+import {
+  bookFieldsAfterFreeRetryLaunchFailure,
+  FREE_RETRY_UNAVAILABLE_MESSAGE,
+  resolveGenerationStartClaim,
+} from "../lib/generation-start-claim";
+import {
+  persistGenerationStep,
+  stepIdempotencyKey,
+} from "../lib/generation-step-ledger";
 
 let passed = 0;
 let failed = 0;
@@ -22,6 +37,23 @@ async function test(name: string, fn: () => Promise<void> | void) {
     console.error(`  ✗ ${name}`);
     console.error(`    ${err instanceof Error ? err.message : err}`);
   }
+}
+
+function softPoster(
+  overrides: Partial<CoverPosterCheck> = {}
+): CoverPosterCheck {
+  return {
+    lineup: false,
+    actionVisible: true,
+    singleComposition: true,
+    anatomyValid: true,
+    professionalLineArt: true,
+    sharpReadable: true,
+    orientationCorrect: true,
+    storyRelated: true,
+    childSafe: true,
+    ...overrides,
+  };
 }
 
 async function runSoftAcceptTests() {
@@ -257,6 +289,127 @@ async function runSoftAcceptTests() {
   });
 }
 
+async function runCoverGateIntegrationTests() {
+  console.log("\n── cover poster gate → soft-accept wiring ──");
+
+  await test("anatomy verdict from cover check hits blocklist", () => {
+    const { verdicts, visionScore } = applyCoverPosterVerdicts(
+      softPoster({ anatomyValid: false, issue: "extra arm" })
+    );
+    assert.ok(verdicts.some((v) => v.startsWith("anatomy:")));
+    assert.ok(visionScore >= 4);
+    assert.equal(
+      canSoftAcceptCover({
+        isCover: true,
+        blank: false,
+        score: visionScore,
+        verdicts,
+      }),
+      false
+    );
+  });
+
+  await test("comic-layout verdict from cover check hits blocklist", () => {
+    const { verdicts, visionScore } = applyCoverPosterVerdicts(
+      softPoster({ singleComposition: false, issue: "panels" })
+    );
+    assert.ok(verdicts.some((v) => v.startsWith("comic-layout:")));
+    assert.equal(
+      canSoftAcceptCover({
+        isCover: true,
+        blank: false,
+        score: visionScore,
+        verdicts,
+      }),
+      false
+    );
+  });
+
+  await test("craft / blur / unsafe verdicts from cover check hard-reject", () => {
+    for (const poster of [
+      softPoster({ professionalLineArt: false, issue: "clipart" }),
+      softPoster({ sharpReadable: false, issue: "corrupt blur" }),
+      softPoster({ childSafe: false, issue: "unsafe" }),
+    ]) {
+      const { verdicts, visionScore } = applyCoverPosterVerdicts(poster);
+      assert.equal(
+        canSoftAcceptCover({
+          isCover: true,
+          blank: false,
+          score: visionScore,
+          verdicts,
+        }),
+        false
+      );
+    }
+  });
+
+  await test("identity + cast + title tags still hard-reject with soft lineup", () => {
+    const soft = applyCoverPosterVerdicts(
+      softPoster({ lineup: true, actionVisible: false, issue: "static row" })
+    );
+    for (const hard of [
+      "identity:Khadidja=80",
+      "cast:saw 0",
+      "title:illegible",
+      "corrupt:blank-or-unreadable",
+    ]) {
+      assert.equal(
+        canSoftAcceptCover({
+          isCover: true,
+          blank: hard.startsWith("corrupt:"),
+          score: soft.visionScore + 5,
+          verdicts: [...soft.verdicts, hard],
+        }),
+        false,
+        hard
+      );
+    }
+  });
+
+  await test("lineup/action alone soft-accepts after rerolls", () => {
+    const { verdicts, visionScore } = applyCoverPosterVerdicts(
+      softPoster({
+        lineup: true,
+        actionVisible: false,
+        issue: "static multi-character row",
+      })
+    );
+    assert.ok(verdicts.every((v) => /^cover-(lineup|action-missing):/i.test(v)));
+    assert.equal(
+      canSoftAcceptCover({
+        isCover: true,
+        blank: false,
+        score: visionScore,
+        verdicts,
+      }),
+      true
+    );
+  });
+
+  await test("lineup/action + hard anatomy stays rejected", () => {
+    const { verdicts, visionScore } = applyCoverPosterVerdicts(
+      softPoster({
+        lineup: true,
+        actionVisible: false,
+        anatomyValid: false,
+        issue: "lineup and fused limbs",
+      })
+    );
+    assert.ok(verdicts.some((v) => v.startsWith("cover-lineup:")));
+    assert.ok(verdicts.some((v) => v.startsWith("anatomy:")));
+    assert.equal(
+      canSoftAcceptCover({
+        isCover: true,
+        blank: false,
+        score: visionScore,
+        verdicts,
+      }),
+      false
+    );
+  });
+}
+
 async function runLogicInvariants() {
   console.log("\n── logic invariants ──");
 
@@ -285,54 +438,136 @@ async function runLogicInvariants() {
     );
   });
 
-  await test("identity threshold accepts 80/100 near-miss", () => {
-    const passes = [80, 90, 75].every((score) => score >= 75);
-    const fails = [74, 40].some((score) => score < 75);
-    assert.equal(passes, true);
-    assert.equal(fails, true);
+  await test("identity threshold: 85 passes, 84 fails, 80 fails", () => {
+    assert.equal(IDENTITY_PASS_SCORE, 85);
+    assert.equal(identityScoresPass([{ score: 85 }], 1), true);
+    assert.equal(identityScoresPass([{ score: 100 }], 1), true);
+    assert.equal(identityScoresPass([{ score: 84 }], 1), false);
+    assert.equal(identityScoresPass([{ score: 80 }], 1), false);
+    assert.equal(
+      identityScoresPass([{ score: 90 }, { score: 84 }], 2),
+      false,
+      "all characters must clear 85"
+    );
+    assert.equal(
+      identityScoresPass([{ score: 90 }, { score: 85 }], 2),
+      true
+    );
   });
 
-  await test("double generate claim reuses alive generation (logic)", () => {
-    const first = { generationId: "g-alive", alive: true };
-    const secondClick = first.alive
-      ? { reused: true, generationId: first.generationId }
-      : { reused: false, generationId: "g-new" };
-    assert.equal(secondClick.reused, true);
-    assert.equal(secondClick.generationId, "g-alive");
+  await test("free button + flag available → cost 0", () => {
+    const claim = resolveGenerationStartClaim({
+      isTrial: false,
+      estimatedCost: 18,
+      freeRetryAvailable: true,
+      requireFreeRetry: true,
+    });
+    assert.equal(claim.ok, true);
+    if (claim.ok) {
+      assert.equal(claim.cost, 0);
+      assert.equal(claim.freeRetry, true);
+    }
   });
 
-  await test("double free-retry consumes flag once (logic)", () => {
+  await test("free button + flag absent → 409, aucun débit", () => {
+    const claim = resolveGenerationStartClaim({
+      isTrial: false,
+      estimatedCost: 18,
+      freeRetryAvailable: false,
+      requireFreeRetry: true,
+    });
+    assert.equal(claim.ok, false);
+    if (!claim.ok) {
+      assert.equal(claim.code, "FREE_RETRY_UNAVAILABLE");
+      assert.equal(claim.message, FREE_RETRY_UNAVAILABLE_MESSAGE);
+    }
+  });
+
+  await test("double clic concurrent → une seule génération gratuite", () => {
     let freeRetryAvailable = true;
-    function claim() {
-      if (!freeRetryAvailable) return { cost: 18, freeRetry: false };
+    function claimOnce() {
+      const decision = resolveGenerationStartClaim({
+        isTrial: false,
+        estimatedCost: 18,
+        freeRetryAvailable,
+        requireFreeRetry: true,
+      });
+      if (!decision.ok) return decision;
       freeRetryAvailable = false;
-      return { cost: 0, freeRetry: true };
+      return decision;
     }
-    const a = claim();
-    const b = claim();
-    assert.equal(a.cost, 0);
-    assert.equal(b.cost, 18);
-    assert.equal(freeRetryAvailable, false);
+    const a = claimOnce();
+    const b = claimOnce();
+    assert.equal(a.ok, true);
+    if (a.ok) assert.equal(a.cost, 0);
+    assert.equal(b.ok, false);
+    if (!b.ok) assert.equal(b.code, "FREE_RETRY_UNAVAILABLE");
   });
 
-  await test("free retry success stays free; next run is paid (logic)", () => {
-    let freeRetryAvailable = true;
-    let balance = 84;
-    function start(costIfPaid: number) {
-      if (freeRetryAvailable) {
-        freeRetryAvailable = false;
-        return { cost: 0, reserved: 0 };
-      }
-      balance -= costIfPaid;
-      return { cost: costIfPaid, reserved: costIfPaid };
+  await test("retry gratuit échoué puis nouveau clic → jamais de débit caché", () => {
+    // Flag already consumed by a previous free start that failed after claim.
+    const sneak = resolveGenerationStartClaim({
+      isTrial: false,
+      estimatedCost: 18,
+      freeRetryAvailable: false,
+      requireFreeRetry: true,
+    });
+    assert.equal(sneak.ok, false);
+    // Paid recreate is explicit — never auto-free when flag is somehow still true.
+    const paidWhileFlagTrue = resolveGenerationStartClaim({
+      isTrial: false,
+      estimatedCost: 18,
+      freeRetryAvailable: true,
+      requireFreeRetry: false,
+    });
+    assert.equal(paidWhileFlagTrue.ok, true);
+    if (paidWhileFlagTrue.ok) {
+      assert.equal(paidWhileFlagTrue.cost, 18);
+      assert.equal(paidWhileFlagTrue.freeRetry, false);
     }
-    const retry = start(18);
-    assert.equal(retry.cost, 0);
-    assert.equal(balance, 84);
-    // success: no capture debit for free run
-    const later = start(18);
-    assert.equal(later.cost, 18);
-    assert.equal(balance, 66);
+  });
+
+  await test("action payante explicite → réservation normale de 18 crédits", () => {
+    const claim = resolveGenerationStartClaim({
+      isTrial: false,
+      estimatedCost: 18,
+      freeRetryAvailable: false,
+      requireFreeRetry: false,
+    });
+    assert.equal(claim.ok, true);
+    if (claim.ok) {
+      assert.equal(claim.cost, 18);
+      assert.equal(claim.freeRetry, false);
+    }
+  });
+
+  await test("échec hand-off Workflow → droit gratuit restauré", () => {
+    const fields = bookFieldsAfterFreeRetryLaunchFailure({
+      freeRetryWasClaimed: true,
+      compensated: true,
+    });
+    assert.equal(fields.free_retry_available, true);
+    assert.equal(fields.status, "draft");
+    assert.equal(fields.active_generation_id, null);
+    const paidLaunchFail = bookFieldsAfterFreeRetryLaunchFailure({
+      freeRetryWasClaimed: false,
+      compensated: true,
+    });
+    assert.equal(paidLaunchFail.free_retry_available, undefined);
+  });
+
+  await test("step ledger persists real attempt + request_id when provided", async () => {
+    // Documented behavior: attempt is caller-supplied (workflow uses
+    // getStepMetadata().attempt). request_id is only set when a provider id
+    // is passed — never invented.
+    assert.equal(
+      stepIdempotencyKey("g1", "cover", 3),
+      "gen:g1:step:cover:book:attempt:3"
+    );
+    assert.equal(
+      stepIdempotencyKey("g1", "cover", 1),
+      "gen:g1:step:cover:book:attempt:1"
+    );
   });
 
   await test("capture and refund cannot both apply on success (logic)", () => {
@@ -503,7 +738,7 @@ async function runEmulatorLedgerTests() {
     assert.equal(captures.length, 1);
   });
 
-  await test("free_retry_available consumed atomically under concurrency", async () => {
+  await test("require_free_retry consumes flag once; second is 409 not paid", async () => {
     const bookId = randomUUID();
     const bookRef = db.collection("books").doc(bookId);
     await bookRef.set({
@@ -516,34 +751,99 @@ async function runEmulatorLedgerTests() {
     async function claimOnce() {
       return db.runTransaction(async (tx) => {
         const snap = await tx.get(bookRef);
-        const free = Boolean(snap.data()?.free_retry_available);
-        if (!free) return { cost: 18, freeRetry: false };
+        const decision = resolveGenerationStartClaim({
+          isTrial: false,
+          estimatedCost: 18,
+          freeRetryAvailable: Boolean(snap.data()?.free_retry_available),
+          requireFreeRetry: true,
+        });
+        if (!decision.ok) return decision;
         tx.update(bookRef, {
           free_retry_available: false,
           updated_at: new Date().toISOString(),
         });
-        return { cost: 0, freeRetry: true };
+        return decision;
       });
     }
 
     const [a, b] = await Promise.all([claimOnce(), claimOnce()]);
-    const freeCount = [a, b].filter((x) => x.freeRetry).length;
-    const paidCount = [a, b].filter((x) => !x.freeRetry).length;
-    assert.equal(freeCount, 1, `freeCount=${freeCount}`);
-    assert.equal(paidCount, 1, `paidCount=${paidCount}`);
+    const okCount = [a, b].filter((x) => x.ok).length;
+    const conflictCount = [a, b].filter((x) => !x.ok).length;
+    assert.equal(okCount, 1);
+    assert.equal(conflictCount, 1);
     const after = await bookRef.get();
     assert.equal(after.data()?.free_retry_available, false);
+  });
+
+  await test("step ledger attempt=3 + request_id persisted when provided", async () => {
+    const gid = randomUUID();
+    await db.collection("generations").doc(gid).set({
+      user_id: uid,
+      status: "running",
+      created_at: new Date().toISOString(),
+    });
+    await persistGenerationStep(db, gid, {
+      stepKey: "cover",
+      status: "retrying",
+      attempt: 3,
+      provider: "fal",
+      requestId: "fal_req_abc",
+    });
+    await persistGenerationStep(db, gid, {
+      stepKey: "cover",
+      status: "failed",
+      attempt: 3,
+      provider: "fal",
+      requestId: "fal_req_abc",
+      error: new Error("transient"),
+      errorCode: "PROVIDER_TRANSIENT",
+    });
+    const step = await db
+      .collection("generations")
+      .doc(gid)
+      .collection("steps")
+      .doc("cover")
+      .get();
+    assert.equal(step.data()?.attempt, 3);
+    assert.equal(step.data()?.request_id, "fal_req_abc");
+    assert.equal(
+      step.data()?.idempotency_key,
+      stepIdempotencyKey(gid, "cover", 3)
+    );
+  });
+
+  await test("step ledger leaves request_id null when provider id absent", async () => {
+    const gid = randomUUID();
+    await db.collection("generations").doc(gid).set({
+      user_id: uid,
+      status: "running",
+      created_at: new Date().toISOString(),
+    });
+    await persistGenerationStep(db, gid, {
+      stepKey: "story",
+      status: "succeeded",
+      attempt: 1,
+      provider: "text",
+    });
+    const step = await db
+      .collection("generations")
+      .doc(gid)
+      .collection("steps")
+      .doc("story")
+      .get();
+    assert.equal(step.data()?.attempt, 1);
+    assert.equal(step.data()?.request_id, null);
   });
 }
 
 async function main() {
-  console.log("Generation reliability suite\n");
+  console.log("generation-reliability-suite\n");
   await runSoftAcceptTests();
+  await runCoverGateIntegrationTests();
   await runLogicInvariants();
   await runEmulatorLedgerTests();
-
   console.log(`\n${passed} passed, ${failed} failed`);
-  if (failed) process.exitCode = 1;
+  if (failed > 0) process.exit(1);
 }
 
 main().catch((err) => {

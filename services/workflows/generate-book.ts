@@ -1,4 +1,4 @@
-import { FatalError } from "workflow";
+import { FatalError, getStepMetadata } from "workflow";
 import { getAdminDb } from "@/lib/firebase/admin";
 import {
   assertGenerationActive,
@@ -19,6 +19,17 @@ export type GenerateBookArgs = {
   isTrial: boolean;
   startedAt: number;
 };
+
+/**
+ * Workflow step attempt from the runtime.
+ * getStepMetadata().attempt starts at 1 and increments on each Workflow retry.
+ * request_id is left null here unless a provider request id is later supplied —
+ * Workflow's stepId is NOT a fal/provider request id.
+ */
+function workflowStepAttempt(): number {
+  const { attempt } = getStepMetadata();
+  return Math.max(1, Number(attempt) || 1);
+}
 
 /**
  * Durable book generation — one step per phase / page wave so a 12–25 page
@@ -113,13 +124,14 @@ async function stepHealFailedPages(args: GenerateBookArgs, pass: number) {
 
 async function stepStory(args: GenerateBookArgs) {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step story gen=${args.generationId}`);
+  console.log(`[workflow] step story gen=${args.generationId} attempt=${attempt}`);
   const db = getAdminDb();
   await persistGenerationStep(db, args.generationId, {
     stepKey: "story",
-    status: "running",
-    attempt: 1,
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
     provider: "text",
   });
   try {
@@ -128,14 +140,14 @@ async function stepStory(args: GenerateBookArgs) {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "story",
       status: "succeeded",
-      attempt: 1,
+      attempt,
       provider: "text",
     });
   } catch (err) {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "story",
       status: "failed",
-      attempt: 1,
+      attempt,
       error: err,
       errorCode: classifyGenerationError(err).code,
     });
@@ -145,13 +157,14 @@ async function stepStory(args: GenerateBookArgs) {
 
 async function stepSheet(args: GenerateBookArgs) {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step sheet gen=${args.generationId}`);
+  console.log(`[workflow] step sheet gen=${args.generationId} attempt=${attempt}`);
   const db = getAdminDb();
   await persistGenerationStep(db, args.generationId, {
     stepKey: "sheet",
-    status: "running",
-    attempt: 1,
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
     provider: "fal",
   });
   try {
@@ -160,14 +173,14 @@ async function stepSheet(args: GenerateBookArgs) {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "sheet",
       status: "succeeded",
-      attempt: 1,
+      attempt,
       provider: "fal",
     });
   } catch (err) {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "sheet",
       status: "failed",
-      attempt: 1,
+      attempt,
       error: err,
       errorCode: classifyGenerationError(err).code,
     });
@@ -177,13 +190,14 @@ async function stepSheet(args: GenerateBookArgs) {
 
 async function stepCover(args: GenerateBookArgs) {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step cover gen=${args.generationId}`);
+  console.log(`[workflow] step cover gen=${args.generationId} attempt=${attempt}`);
   const db = getAdminDb();
   await persistGenerationStep(db, args.generationId, {
     stepKey: "cover",
-    status: "running",
-    attempt: 1,
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
     provider: "fal",
   });
   try {
@@ -192,14 +206,14 @@ async function stepCover(args: GenerateBookArgs) {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "cover",
       status: "succeeded",
-      attempt: 1,
+      attempt,
       provider: "fal",
     });
   } catch (err) {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "cover",
       status: "failed",
-      attempt: 1,
+      attempt,
       error: err,
       errorCode: classifyGenerationError(err).code,
     });
@@ -209,13 +223,16 @@ async function stepCover(args: GenerateBookArgs) {
 
 async function stepPagesSetup(args: GenerateBookArgs): Promise<string[]> {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step pages-setup gen=${args.generationId}`);
+  console.log(
+    `[workflow] step pages-setup gen=${args.generationId} attempt=${attempt}`
+  );
   const db = getAdminDb();
   await persistGenerationStep(db, args.generationId, {
     stepKey: "pages_setup",
-    status: "running",
-    attempt: 1,
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
     provider: "firestore",
   });
   try {
@@ -228,7 +245,7 @@ async function stepPagesSetup(args: GenerateBookArgs): Promise<string[]> {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "pages_setup",
       status: "succeeded",
-      attempt: 1,
+      attempt,
       provider: "firestore",
     });
     return pageIds;
@@ -236,7 +253,7 @@ async function stepPagesSetup(args: GenerateBookArgs): Promise<string[]> {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "pages_setup",
       status: "failed",
-      attempt: 1,
+      attempt,
       error: err,
       errorCode: classifyGenerationError(err).code,
     });
@@ -246,14 +263,17 @@ async function stepPagesSetup(args: GenerateBookArgs): Promise<string[]> {
 
 async function stepOnePage(args: GenerateBookArgs, pageId: string) {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step page ${pageId} gen=${args.generationId}`);
+  console.log(
+    `[workflow] step page ${pageId} gen=${args.generationId} attempt=${attempt}`
+  );
   const db = getAdminDb();
   await persistGenerationStep(db, args.generationId, {
     stepKey: "page",
     pageId,
-    status: "running",
-    attempt: 1,
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
     provider: "fal",
   });
   try {
@@ -268,7 +288,7 @@ async function stepOnePage(args: GenerateBookArgs, pageId: string) {
       stepKey: "page",
       pageId,
       status: "succeeded",
-      attempt: 1,
+      attempt,
       provider: "fal",
     });
   } catch (err) {
@@ -276,7 +296,7 @@ async function stepOnePage(args: GenerateBookArgs, pageId: string) {
       stepKey: "page",
       pageId,
       status: "failed",
-      attempt: 1,
+      attempt,
       error: err,
       errorCode: classifyGenerationError(err).code,
     });
@@ -286,13 +306,16 @@ async function stepOnePage(args: GenerateBookArgs, pageId: string) {
 
 async function stepFinalize(args: GenerateBookArgs) {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step finalize gen=${args.generationId}`);
+  console.log(
+    `[workflow] step finalize gen=${args.generationId} attempt=${attempt}`
+  );
   const db = getAdminDb();
   await persistGenerationStep(db, args.generationId, {
     stepKey: "finalize",
-    status: "running",
-    attempt: 1,
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
     provider: "pdf",
   });
   try {
@@ -308,14 +331,14 @@ async function stepFinalize(args: GenerateBookArgs) {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "finalize",
       status: "succeeded",
-      attempt: 1,
+      attempt,
       provider: "pdf",
     });
   } catch (err) {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "finalize",
       status: "failed",
-      attempt: 1,
+      attempt,
       error: err,
       errorCode: classifyGenerationError(err).code,
     });

@@ -127,8 +127,21 @@ function GenerateInner() {
     }
   }
 
-  async function retryFree() {
+  async function retryGeneration(opts: {
+    requireFreeRetry: boolean;
+    confirmPaid?: boolean;
+  }) {
     if (retryLock.current) return;
+    if (
+      !opts.requireFreeRetry &&
+      opts.confirmPaid &&
+      typeof window !== "undefined" &&
+      !window.confirm(
+        "Recréer ce livre va réserver 18 crédits. Continuer ?"
+      )
+    ) {
+      return;
+    }
     retryLock.current = true;
     setRetrying(true);
     setError(null);
@@ -136,10 +149,19 @@ function GenerateInner() {
       const res = await fetch("/api/generation/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ book_id: bookId }),
+        body: JSON.stringify({
+          book_id: bookId,
+          ...(opts.requireFreeRetry ? { require_free_retry: true } : {}),
+        }),
       });
       const json = await res.json();
       if (!json.success) {
+        if (res.status === 409 && opts.requireFreeRetry) {
+          throw new Error(
+            json.error?.message ||
+              "La tentative gratuite n’est plus disponible. Recrée le livre avec des crédits."
+          );
+        }
         throw new Error(json.error?.message || "Impossible de recommencer");
       }
       const nextId = json.data?.generation_id || json.data?.id;
@@ -154,6 +176,9 @@ function GenerateInner() {
       setRetrying(false);
     }
   }
+
+  const freeRetryAvailable = progress?.free_retry_available === true;
+  const paidRecreateCredits = 18;
 
   const step =
     GENERATION_TEAM.find((s) => s.id === progress?.current_step) ||
@@ -201,7 +226,9 @@ function GenerateInner() {
             : partial
               ? "On finalise encore les dernières pages."
               : failed
-                ? "Vous pouvez recommencer sans frais lorsque le remboursement a bien été enregistré."
+                ? freeRetryAvailable
+                  ? "Vous pouvez recommencer sans frais — une seule tentative gratuite est disponible."
+                  : "Vous pouvez recréer le livre avec des crédits, ou retourner au livre."
                 : "Regardez votre histoire se construire page après page."}
         </p>
       </div>
@@ -267,13 +294,32 @@ function GenerateInner() {
             {parentFacingError || "Essayons à nouveau."}
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
-            <Button
-              variant="secondary"
-              disabled={retrying}
-              onClick={() => void retryFree()}
-            >
-              {retrying ? "Relance…" : "Recommencer sans frais"}
-            </Button>
+            {freeRetryAvailable ? (
+              <Button
+                variant="secondary"
+                disabled={retrying}
+                onClick={() =>
+                  void retryGeneration({ requireFreeRetry: true })
+                }
+              >
+                {retrying ? "Relance…" : "Recommencer sans frais"}
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                disabled={retrying}
+                onClick={() =>
+                  void retryGeneration({
+                    requireFreeRetry: false,
+                    confirmPaid: true,
+                  })
+                }
+              >
+                {retrying
+                  ? "Relance…"
+                  : `Recréer le livre — ${paidRecreateCredits} crédits`}
+              </Button>
+            )}
             <Link href={`/books/${bookId}`}>
               <Button variant="ghost">Retour au livre</Button>
             </Link>

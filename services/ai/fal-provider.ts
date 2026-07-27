@@ -17,6 +17,7 @@ import { isBlankOrTooFaint, hasPoorEnvironment, isColored } from "@/lib/image-qu
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
 import {
   checkCast,
+  applyCoverPosterVerdicts,
   checkCoverAction,
   checkCoverTitle,
   checkIdentityReferences,
@@ -511,20 +512,29 @@ export class FalImageProvider implements ImageAIProvider {
               verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
             }
           }
-          // Cover poster check (NOT the interior-page 6-zone gate — that false-positived
-          // heroic covers as "lineup" and aborted paid books at 40%).
+          // Cover poster check (NOT the interior-page 6-zone environment gate).
+          // Hard defects (anatomy/craft/comic/blur/safety/…) feed canSoftAcceptCover's
+          // blocklist; soft lineup/action alone may soft-accept after re-rolls.
           if (input.action) {
             const poster = await checkCoverAction(current.url, input.action);
             if (!poster && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
               prevVisionNudges.push(PREMIUM_PAGE_BOOST);
               verdicts.push("cover-quality:vision-unavailable");
-            } else if (poster && (poster.lineup || !poster.actionVisible)) {
-              visionScore += poster.lineup ? 2 : 1;
-              prevVisionNudges.push(ANTI_LINEUP_BOOST);
-              verdicts.push(
-                `cover-${poster.lineup ? "lineup" : "action-missing"}:${poster.issue || ""}`
-              );
+            } else if (poster) {
+              const applied = applyCoverPosterVerdicts(poster);
+              if (applied.verdicts.length) {
+                visionScore += applied.visionScore;
+                const softOnly = applied.verdicts.every(
+                  (tag) =>
+                    /^cover-lineup:/i.test(tag) ||
+                    /^cover-action-missing:/i.test(tag)
+                );
+                prevVisionNudges.push(
+                  softOnly ? ANTI_LINEUP_BOOST : PREMIUM_PAGE_BOOST
+                );
+                verdicts.push(...applied.verdicts);
+              }
             }
           }
         } else if (input.isColoringPage) {
