@@ -464,6 +464,7 @@ export class GenerationOrchestrator {
 
     await this.updateGeneration(generationId, {
       current_step: "illustrator",
+      current_substep: `heal_pass_${pass}`,
       progress: Math.min(88, 70 + pass * 5),
       error_message: null,
     });
