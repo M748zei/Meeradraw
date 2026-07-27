@@ -7,6 +7,7 @@ import {
   GoogleAuthProvider,
   signInWithEmailAndPassword,
   signInWithPopup,
+  type User,
 } from "firebase/auth";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
@@ -15,13 +16,13 @@ import { Input } from "@/components/ui/input";
 import { getClientAuth, isFirebaseConfigured } from "@/lib/firebase/client";
 import { safeInternalPath } from "@/lib/safe-redirect";
 
-async function establishSession() {
-  const auth = getClientAuth();
-  const token = await auth.currentUser?.getIdToken();
-  if (!token) throw new Error("Session impossible");
+async function establishSession(user: User) {
+  // Force a fresh ID token. A cached token can have been revoked while the
+  // Firebase client still considers the account signed in.
+  const token = await user.getIdToken(true);
   const res = await fetch("/api/auth/session", {
     method: "POST",
-    credentials: "same-origin",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ idToken: token }),
   });
@@ -32,7 +33,7 @@ async function establishSession() {
   // the HttpOnly cookie and that the server can validate it first.
   const check = await fetch("/api/auth/session", {
     method: "GET",
-    credentials: "same-origin",
+    credentials: "include",
     cache: "no-store",
   });
   const checkJson = await check.json();
@@ -99,8 +100,12 @@ function LoginForm() {
         router.push(next);
         return;
       }
-      await signInWithEmailAndPassword(getClientAuth(), email, password);
-      await establishSession();
+      const credential = await signInWithEmailAndPassword(
+        getClientAuth(),
+        email,
+        password
+      );
+      await establishSession(credential.user);
       window.location.replace(await resolvePostAuthPath(next));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connexion impossible");
@@ -119,8 +124,8 @@ function LoginForm() {
       }
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: "select_account" });
-      await signInWithPopup(getClientAuth(), provider);
-      await establishSession();
+      const credential = await signInWithPopup(getClientAuth(), provider);
+      await establishSession(credential.user);
       window.location.replace(await resolvePostAuthPath(next));
     } catch (err) {
       setError(friendlyGoogleError(err));

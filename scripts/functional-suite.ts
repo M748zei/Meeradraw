@@ -62,6 +62,39 @@ async function runLogicTests() {
   const { normalizeCheckoutPhone } = await import("../lib/checkout-phone");
   const { isCustomerVisibleBook } = await import("../lib/book-visibility");
 
+  await test("stale session cookie cannot trap the login route", async () => {
+    const { NextRequest } = await import("next/server");
+    const { proxy } = await import("../proxy");
+    const previousApiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+    process.env.NEXT_PUBLIC_FIREBASE_API_KEY = "test-api-key";
+    try {
+      const request = new NextRequest("https://meeradraw.test/login", {
+        headers: { cookie: "__session=expired-or-revoked" },
+      });
+      const response = await proxy(request);
+      assert(
+        !response.headers.get("location"),
+        `unexpected redirect=${response.headers.get("location")}`
+      );
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+      } else {
+        process.env.NEXT_PUBLIC_FIREBASE_API_KEY = previousApiKey;
+      }
+    }
+  });
+
+  await test("sign-out explicitly expires the server session cookie", async () => {
+    const { DELETE } = await import("../app/api/auth/session/route");
+    const response = await DELETE();
+    const cookie = response.headers.get("set-cookie") || "";
+    assert(response.status === 200, `status=${response.status}`);
+    assert(cookie.includes("__session="), `cookie=${cookie}`);
+    assert(/Max-Age=0/i.test(cookie), `cookie=${cookie}`);
+    assert(/Path=\//i.test(cookie), `cookie=${cookie}`);
+  });
+
   await test("explicit species keeps a lion cub non-human", async () => {
     const { characterKind, expectedCastFor } = await import(
       "../services/ai/character-bible"
