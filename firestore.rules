@@ -42,6 +42,14 @@ service cloud.firestore {
     match /generations/{id} {
       allow read: if request.auth != null && resource.data.user_id == request.auth.uid;
       allow write: if false;
+      // Step ledger is server/Admin only. Owner may read for support UIs;
+      // never allow client writes (free_retry / financial fields live elsewhere).
+      match /steps/{stepId} {
+        allow read: if request.auth != null
+          && get(/databases/$(database)/documents/generations/$(id)).data.user_id
+            == request.auth.uid;
+        allow write: if false;
+      }
     }
 
     match /transactions/{id} {

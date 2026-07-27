@@ -2,6 +2,10 @@ import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { rateLimitAsync } from "@/lib/rate-limit-store";
 import { isGenerationAlive } from "@/lib/generation-lifecycle";
+import {
+  bookFieldsAfterFreeRetryLaunchFailure,
+  resolveGenerationStartClaim,
+} from "@/lib/generation-start-claim";
 import { estimateBookCost, FREE_TRIALS_MAX, FREE_TRIAL_MAX_PAGES } from "@/config/credits";
 import { BookService } from "@/services/book-service";
 import { CreditService } from "@/services/credit-service";
@@ -15,7 +19,13 @@ import { z } from "zod";
 /** Start is thin — durable work runs in Workflow steps (not after()). */
 export const maxDuration = 60;
 
-const schema = z.object({ book_id: z.string().uuid() });
+const schema = z.object({
+  book_id: z.string().uuid(),
+  /** Explicit free-retry button — never inferred from UI copy alone. */
+  require_free_retry: z.boolean().optional().default(false),
+  /** Paid recreate: must match server estimateBookCost or start is rejected. */
+  expected_cost: z.number().int().nonnegative().optional(),
+});
 
 export async function POST(request: Request) {
   try {
@@ -56,7 +66,11 @@ export async function POST(request: Request) {
       isTrial = true;
     }
 
-    const cost = isTrial ? 0 : estimateBookCost(book.page_count as number, book.type as string);
+    // Controlled free restart is decided atomically inside the claim transaction
+    // (see freeRetryConsumed below) so double-clicks cannot both go free.
+    const estimatedCost = isTrial
+      ? 0
+      : estimateBookCost(book.page_count as number, book.type as string);
     const generationId = randomUUID();
     const now = new Date().toISOString();
     const startedAt = Date.now();
@@ -116,7 +130,7 @@ export async function POST(request: Request) {
     // credits. Double-clicks with a LIVE workflow still reuse (checked above).
     type ClaimResult =
       | { kind: "existing"; generationId: string; isTrial: boolean; status: string }
-      | { kind: "created" };
+      | { kind: "created"; cost: number; freeRetry: boolean };
 
     const claim = await db.runTransaction(async (tx): Promise<ClaimResult> => {
       const bookSnap = await tx.get(bookRef);
@@ -174,6 +188,24 @@ export async function POST(request: Request) {
         });
       }
 
+      const claimDecision = resolveGenerationStartClaim({
+        isTrial,
+        estimatedCost,
+        freeRetryAvailable: Boolean(bookData.free_retry_available),
+        requireFreeRetry: Boolean(body.require_free_retry),
+        expectedCost:
+          body.expected_cost === undefined ? null : body.expected_cost,
+      });
+      if (!claimDecision.ok) {
+        throw new AppError(
+          "CONFLICT",
+          claimDecision.message,
+          409
+        );
+      }
+      const freeRetry = claimDecision.freeRetry;
+      const claimCost = claimDecision.cost;
+
       tx.set(genRef, {
         user_id: user.id,
         book_id: body.book_id,
@@ -181,13 +213,16 @@ export async function POST(request: Request) {
         status: "queued",
         progress: 0,
         current_step: "queued",
-        credits_used: cost,
+        credits_used: claimCost,
         tokens_used: 0,
         provider: null,
         duration_ms: null,
         error_message: null,
         cancelled: false,
-        metadata: isTrial ? { is_trial: true, trial_reserved: true } : {},
+        metadata: {
+          ...(isTrial ? { is_trial: true, trial_reserved: true } : {}),
+          ...(freeRetry ? { free_retry: true, compensated_retry: true } : {}),
+        },
         created_at: now,
         updated_at: now,
         heartbeat_at: now,
@@ -195,9 +230,10 @@ export async function POST(request: Request) {
       tx.update(bookRef, {
         status: "generating",
         active_generation_id: generationId,
+        ...(freeRetry ? { free_retry_available: false } : {}),
         updated_at: now,
       });
-      return { kind: "created" };
+      return { kind: "created", cost: claimCost, freeRetry };
     });
 
     if (claim.kind === "existing") {
@@ -209,6 +245,8 @@ export async function POST(request: Request) {
         reused: true,
       });
     }
+
+    const cost = claim.cost;
 
     if (!isTrial) {
       try {
@@ -265,13 +303,15 @@ export async function POST(request: Request) {
       workflowRunId = run.runId;
     } catch (launchError) {
       const failedAt = new Date().toISOString();
-      let compensated = isTrial;
+      const freeRetryWasClaimed = claim.freeRetry;
+      let compensated = isTrial || freeRetryWasClaimed || cost === 0;
       console.error(`[gen ${generationId}] workflow launch failed`, launchError);
 
       try {
         if (isTrial) {
           await releaseTrialSlot(db, user.id, true);
-        } else {
+          compensated = true;
+        } else if (cost > 0) {
           await credits.refund(
             user.id,
             cost,
@@ -279,12 +319,16 @@ export async function POST(request: Request) {
             `gen:${generationId}:refund:full`
           );
           compensated = true;
+        } else {
+          // Free retry: nothing to refund, but the flag must be restored below.
+          compensated = true;
         }
       } catch (compensationError) {
         console.error(
           `[gen ${generationId}] launch compensation failed`,
           compensationError
         );
+        compensated = false;
       }
 
       await db.runTransaction(async (tx) => {
@@ -295,8 +339,10 @@ export async function POST(request: Request) {
           currentBook.data()?.active_generation_id === generationId
         ) {
           tx.update(bookRef, {
-            status: "draft",
-            active_generation_id: null,
+            ...bookFieldsAfterFreeRetryLaunchFailure({
+              freeRetryWasClaimed,
+              compensated,
+            }),
             updated_at: failedAt,
           });
         }
@@ -307,8 +353,9 @@ export async function POST(request: Request) {
                 status: "failed",
                 cancelled: true,
                 credits_used: 0,
-                error_message:
-                  "La génération n’a pas pu démarrer. Tes crédits ont été remboursés.",
+                error_message: freeRetryWasClaimed
+                  ? "La génération n’a pas pu démarrer. Ta tentative gratuite a été restaurée — tu peux réessayer sans frais."
+                  : "La génération n’a pas pu démarrer. Tes crédits ont été remboursés.",
                 updated_at: failedAt,
                 heartbeat_at: failedAt,
               }
@@ -329,7 +376,9 @@ export async function POST(request: Request) {
       throw new AppError(
         "GENERATION_FAILED",
         compensated
-          ? "La génération n’a pas pu démarrer. Tes crédits ont été remboursés — tu peux réessayer."
+          ? freeRetryWasClaimed
+            ? "La génération n’a pas pu démarrer. Ta tentative gratuite est toujours disponible — tu peux réessayer sans frais."
+            : "La génération n’a pas pu démarrer. Tes crédits ont été remboursés — tu peux réessayer."
           : "La génération n’a pas pu démarrer. Réessaie : le remboursement sera finalisé automatiquement.",
         503,
         "Réessayer"

@@ -77,6 +77,97 @@ export interface CoverCheck {
   issue?: string;
 }
 
+/** Premium identity contract — covers, pages and multi-character scenes. */
+export const IDENTITY_PASS_SCORE = 85;
+
+/**
+ * Pure identity threshold used by checkIdentityReferences (and unit tests).
+ * A character passes only at score >= IDENTITY_PASS_SCORE.
+ */
+export function identityScoresPass(
+  scores: Array<{ score: number }>,
+  expectedCount: number
+): boolean {
+  return (
+    scores.length === expectedCount &&
+    scores.every(
+      (item) =>
+        Number.isFinite(item.score) && item.score >= IDENTITY_PASS_SCORE
+    )
+  );
+}
+
+/**
+ * Cover poster QC — hard gates for anatomy/craft/safety/composition, with soft
+ * lineup/action signals. Does NOT require 6 colorable environment zones (pages do).
+ */
+export interface CoverPosterCheck {
+  lineup: boolean;
+  actionVisible: boolean;
+  /** One continuous cover poster — no comic panels, gutters, bubbles. */
+  singleComposition: boolean;
+  anatomyValid: boolean;
+  professionalLineArt: boolean;
+  /** Sharp, readable line art — not blurry or corrupted. */
+  sharpReadable: boolean;
+  orientationCorrect: boolean;
+  /** Clearly related to the requested story beat / title context. */
+  storyRelated: boolean;
+  childSafe: boolean;
+  issue?: string;
+}
+
+/**
+ * Map a CoverPosterCheck into vision score deltas + verdict tags that feed
+ * canSoftAcceptCover. Exported for integration tests (real gate wiring).
+ */
+export function applyCoverPosterVerdicts(poster: CoverPosterCheck): {
+  visionScore: number;
+  verdicts: string[];
+} {
+  let visionScore = 0;
+  const verdicts: string[] = [];
+  if (poster.lineup || !poster.actionVisible) {
+    visionScore += poster.lineup ? 2 : 1;
+    verdicts.push(
+      `cover-${poster.lineup ? "lineup" : "action-missing"}:${poster.issue || ""}`
+    );
+  }
+  if (!poster.singleComposition) {
+    visionScore += 5;
+    verdicts.push(
+      `comic-layout:${poster.issue || "panels, bubbles or split frames on cover"}`
+    );
+  }
+  if (!poster.anatomyValid) {
+    visionScore += 4;
+    verdicts.push(`anatomy:${poster.issue || "malformed anatomy or face"}`);
+  }
+  if (!poster.professionalLineArt) {
+    visionScore += 3;
+    verdicts.push(`craft:${poster.issue || "generic or non-colorable line art"}`);
+  }
+  if (!poster.sharpReadable) {
+    visionScore += 4;
+    verdicts.push(`blur:${poster.issue || "blurry or corrupted cover"}`);
+  }
+  if (!poster.orientationCorrect) {
+    visionScore += 4;
+    verdicts.push(`orientation:${poster.issue || "incorrect orientation"}`);
+  }
+  if (!poster.storyRelated) {
+    visionScore += 4;
+    verdicts.push(
+      `story-mismatch:${poster.issue || "cover unrelated to the story"}`
+    );
+  }
+  if (!poster.childSafe) {
+    visionScore += 5;
+    verdicts.push(`unsafe:${poster.issue || "content not suitable for children"}`);
+  }
+  return { visionScore, verdicts };
+}
+
 /**
  * Downscale the image to ~512px and inline it as a data URL. Full-size images
  * cost ~6-7k vision tokens each and blow free TPM quotas. 512px keeps the
@@ -228,8 +319,7 @@ JSON schema: {"matches": <true only if every score is >=85 and every identity is
   return {
     matches:
       result.matches &&
-      scores.length === references.length &&
-      scores.every((item) => item.score >= 85),
+      identityScoresPass(scores, references.length),
     scores,
     issue: result.issue ? String(result.issue).slice(0, 240) : undefined,
   };
@@ -264,6 +354,68 @@ JSON schema: {"count": <number of distinct characters you see>, "matches": <true
     count: Number(result.count) || 0,
     matches: result.matches,
     issue: result.issue ? String(result.issue).slice(0, 200) : undefined,
+  };
+}
+
+/**
+ * Cover poster check — hard quality/safety/anatomy gates without the interior
+ * page's 6-zone environment requirement. Soft signals: lineup / action energy.
+ */
+export async function checkCoverAction(
+  imageUrl: string,
+  action: string
+): Promise<CoverPosterCheck | null> {
+  const result = await askVision<{
+    lineup: boolean;
+    action_visible: boolean;
+    single_composition: boolean;
+    anatomy_valid: boolean;
+    professional_line_art: boolean;
+    sharp_readable: boolean;
+    orientation_correct: boolean;
+    story_related: boolean;
+    child_safe: boolean;
+    issue?: string;
+  }>(
+    imageUrl,
+    `This is a children's COLORING BOOK COVER poster (not an interior page). Requested story beat: "${action || "a clear story moment"}".
+Evaluate EVERY item. Covers may use a heroic focal pose with limited scenery — do NOT fail for missing dense background props.
+1. LINEUP (soft): true ONLY if characters are a static multi-character reference-sheet row with ZERO story energy. A single hero (optionally with a pet) in a readable pose is NOT a lineup.
+2. ACTION (soft): is there a readable story moment related to "${action || "the adventure"}"?
+3. SINGLE COMPOSITION (hard): exactly ONE continuous poster. Comic panels, gutters, split frames, speech bubbles or caption boxes FAIL.
+4. ANATOMY (hard): coherent face/body; no missing, fused, duplicated or deformed limbs/features.
+5. PROFESSIONAL LINE ART (hard): clean printable children's-book ink that is actually colorable — not blurry clipart, not filled photorealism.
+6. SHARP/READABLE (hard): image is sharp enough to print; not corrupted, heavily blurred or unreadable.
+7. ORIENTATION (hard): upright portrait cover orientation.
+8. STORY RELATED (hard): the scene clearly relates to the requested story beat (not a random unrelated image).
+9. CHILD SAFE (hard): gentle children's content — no gore, sexual content, terror or unsafe themes.
+JSON schema: {"lineup": <boolean>, "action_visible": <boolean>, "single_composition": <boolean>, "anatomy_valid": <boolean>, "professional_line_art": <boolean>, "sharp_readable": <boolean>, "orientation_correct": <boolean>, "story_related": <boolean>, "child_safe": <boolean>, "issue": "<brief list of failed hard requirements>"}`
+  );
+  if (
+    !result ||
+    typeof result.lineup !== "boolean" ||
+    typeof result.action_visible !== "boolean" ||
+    typeof result.single_composition !== "boolean" ||
+    typeof result.anatomy_valid !== "boolean" ||
+    typeof result.professional_line_art !== "boolean" ||
+    typeof result.sharp_readable !== "boolean" ||
+    typeof result.orientation_correct !== "boolean" ||
+    typeof result.story_related !== "boolean" ||
+    typeof result.child_safe !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    lineup: result.lineup,
+    actionVisible: Boolean(result.action_visible),
+    singleComposition: result.single_composition,
+    anatomyValid: result.anatomy_valid,
+    professionalLineArt: result.professional_line_art,
+    sharpReadable: result.sharp_readable,
+    orientationCorrect: result.orientation_correct,
+    storyRelated: result.story_related,
+    childSafe: result.child_safe,
+    issue: result.issue ? String(result.issue).slice(0, 240) : undefined,
   };
 }
 

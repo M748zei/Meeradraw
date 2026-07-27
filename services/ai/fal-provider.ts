@@ -11,10 +11,18 @@ import {
 } from "@/services/ai/prompts";
 import { styleImageCraftLine } from "@/services/ai/style-contracts";
 import { buildCompositionBlueprint } from "@/services/ai/composition-templates";
+import { canSoftAcceptCover } from "@/lib/cover-soft-accept";
 import { withRetry } from "@/lib/async";
 import { isBlankOrTooFaint, hasPoorEnvironment, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
-import { checkCast, checkCoverTitle, checkIdentityReferences, checkPageAction } from "@/lib/vision-qc";
+import {
+  checkCast,
+  applyCoverPosterVerdicts,
+  checkCoverAction,
+  checkCoverTitle,
+  checkIdentityReferences,
+  checkPageAction,
+} from "@/lib/vision-qc";
 import { StorageService } from "@/services/storage-service";
 import { randomUUID } from "crypto";
 
@@ -86,7 +94,11 @@ export function isNonRetryableFalError(err: unknown): boolean {
   return (
     /feature_not_supported|cannot be 'DESIGN'|style_preset|Exhausted balance|User is locked|invalid_request|422/i.test(
       msg
-    ) || /fal\.ai error:.*"type"\s*:\s*"feature_not_supported"/i.test(msg)
+    ) ||
+    /strict visual quality gate|Premium character reference failed|Premium cover|Premium book is missing/i.test(
+      msg
+    ) ||
+    /fal\.ai error:.*"type"\s*:\s*"feature_not_supported"/i.test(msg)
   );
 }
 const ANTI_LINEUP_BOOST =
@@ -384,6 +396,8 @@ export class FalImageProvider implements ImageAIProvider {
     let prevColored = false;
     let prevNotColored = false;
     let prevVisionNudges: string[] = [];
+    /** Verdicts from the attempt that currently owns `best` (not the full history). */
+    let bestVerdicts: string[] = [];
 
     for (let attempt = 0; attempt <= maxRerolls; attempt++) {
       // Consistency mode: keep seed in the same family (seed+attempt) so rerolls
@@ -459,6 +473,7 @@ export class FalImageProvider implements ImageAIProvider {
       // own re-roll cap. Fail-open: null verdict = cannot judge = accept.
       let visionScore = 0;
       prevVisionNudges = [];
+      let attemptVerdicts: string[] = [];
       if (score === 0 && input && visionRerollsUsed < maxVisionRerolls + 1) {
         const verdicts: string[] = [];
         if (input.isCharacterSheet && input.expectedCast?.length) {
@@ -497,21 +512,29 @@ export class FalImageProvider implements ImageAIProvider {
               verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
             }
           }
-          // A cover is a POSTER: a static lineup on an empty background is the
-          // audit's #1 sin there too (verified: Kontext covers regress to the
-          // reference lineup when this check is missing).
+          // Cover poster check (NOT the interior-page 6-zone environment gate).
+          // Hard defects (anatomy/craft/comic/blur/safety/…) feed canSoftAcceptCover's
+          // blocklist; soft lineup/action alone may soft-accept after re-rolls.
           if (input.action) {
-            const poster = await checkPageAction(current.url, input.action);
+            const poster = await checkCoverAction(current.url, input.action);
             if (!poster && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
               prevVisionNudges.push(PREMIUM_PAGE_BOOST);
               verdicts.push("cover-quality:vision-unavailable");
-            } else if (poster && (poster.lineup || !poster.actionVisible)) {
-              visionScore += poster.lineup ? 2 : 1;
-              prevVisionNudges.push(ANTI_LINEUP_BOOST);
-              verdicts.push(
-                `cover-${poster.lineup ? "lineup" : "action-missing"}:${poster.issue || ""}`
-              );
+            } else if (poster) {
+              const applied = applyCoverPosterVerdicts(poster);
+              if (applied.verdicts.length) {
+                visionScore += applied.visionScore;
+                const softOnly = applied.verdicts.every(
+                  (tag) =>
+                    /^cover-lineup:/i.test(tag) ||
+                    /^cover-action-missing:/i.test(tag)
+                );
+                prevVisionNudges.push(
+                  softOnly ? ANTI_LINEUP_BOOST : PREMIUM_PAGE_BOOST
+                );
+                verdicts.push(...applied.verdicts);
+              }
             }
           }
         } else if (input.isColoringPage) {
@@ -593,8 +616,16 @@ export class FalImageProvider implements ImageAIProvider {
           }
         }
         if (verdicts.length) {
+          attemptVerdicts = verdicts;
           qcStats.visionVerdicts = [...(qcStats.visionVerdicts || []), ...verdicts];
         }
+      }
+
+      // Pixel-only defects (blank/colored/env) with no vision tags still need a signal
+      // for soft-accept decisions (covers with pure chroma use repairableColorOnly).
+      if (blank) attemptVerdicts = [...attemptVerdicts, "corrupt:blank-or-unreadable"];
+      if (analysisUnavailable) {
+        attemptVerdicts = [...attemptVerdicts, "corrupt:bytes-unavailable"];
       }
 
       const totalScore = score + visionScore;
@@ -608,6 +639,7 @@ export class FalImageProvider implements ImageAIProvider {
           needsUpload: Boolean(current.needsUpload),
           pngBuffer: current.pngBuffer,
         };
+        bestVerdicts = attemptVerdicts;
       }
 
       if (totalScore === 0) break; // clean page → accept immediately
@@ -685,9 +717,29 @@ export class FalImageProvider implements ImageAIProvider {
       !best.blank &&
       best.score === 2 &&
       !(qcStats.visionVerdicts || []).length;
-    if (input?.strictQuality && best.score > 0 && !repairableColorOnly) {
-      throw new Error(
+    // Covers only: closed allowlist soft-accept (lineup/action-energy), never a
+    // global score<=2 rule. Identity/cast/anatomy/safety always hard-reject.
+    const softCoverAcceptable = canSoftAcceptCover({
+      isCover: Boolean(input?.isCover),
+      blank: best.blank,
+      colored: best.colored,
+      score: best.score,
+      // Use ONLY the best attempt's verdicts — never stale hard tags from earlier rolls.
+      verdicts: bestVerdicts,
+    });
+    if (
+      input?.strictQuality &&
+      best.score > 0 &&
+      !repairableColorOnly &&
+      !softCoverAcceptable
+    ) {
+      throw new NonRetryableFalError(
         `strict visual quality gate rejected image (score ${best.score}): ${(qcStats.visionVerdicts || []).slice(-4).join("; ") || "pixel quality defect"}`
+      );
+    }
+    if (softCoverAcceptable) {
+      console.warn(
+        `[${label}] accepting cover after soft QC (allowlist lineup/action only; score ${best.score})`
       );
     }
     if (best.score > 0) {

@@ -1,9 +1,14 @@
-import { FatalError } from "workflow";
+import { FatalError, getStepMetadata } from "workflow";
 import { getAdminDb } from "@/lib/firebase/admin";
 import {
   assertGenerationActive,
   GenerationCancelledError,
 } from "@/lib/generation-lifecycle";
+import {
+  classifyGenerationError,
+  persistGenerationStep,
+} from "@/lib/generation-step-ledger";
+import { isNonRetryableFalError } from "@/services/ai/fal-provider";
 import { GenerationOrchestrator } from "@/services/generation-orchestrator";
 
 export type GenerateBookArgs = {
@@ -14,6 +19,17 @@ export type GenerateBookArgs = {
   isTrial: boolean;
   startedAt: number;
 };
+
+/**
+ * Workflow step attempt from the runtime.
+ * getStepMetadata().attempt starts at 1 and increments on each Workflow retry.
+ * request_id is left null here unless a provider request id is later supplied —
+ * Workflow's stepId is NOT a fal/provider request id.
+ */
+function workflowStepAttempt(): number {
+  const { attempt } = getStepMetadata();
+  return Math.max(1, Number(attempt) || 1);
+}
 
 /**
  * Durable book generation — one step per phase / page wave so a 12–25 page
@@ -33,7 +49,8 @@ export async function generateBookWorkflow(args: GenerateBookArgs) {
   try {
     await stepStory(args);
     await stepSheet(args);
-    const pageIds = await stepCoverAndSetup(args);
+    await stepCover(args);
+    const pageIds = await stepPagesSetup(args);
 
     // Parent books: larger waves (faster wall-clock). Studio keeps default.
     const waveSize = await stepResolveWaveSize(args);
@@ -43,11 +60,9 @@ export async function generateBookWorkflow(args: GenerateBookArgs) {
       await Promise.all(wave.map((pageId) => stepOnePage(args, pageId)));
     }
 
-    // Automatic delivery repair. Studio stops after its configured cap;
-    // parent books receive the extra third pass before finalization.
+    // Studio heal (capped in orchestrator). Parent skips.
     await stepHealFailedPages(args, 1);
     await stepHealFailedPages(args, 2);
-    await stepHealFailedPages(args, 3);
 
     await stepFinalize(args);
     console.log(`[workflow] generateBook done gen=${args.generationId}`);
@@ -74,6 +89,17 @@ async function assertNotCancelled(args: GenerateBookArgs) {
   });
 }
 
+function rethrowStepError(err: unknown): never {
+  if (err instanceof GenerationCancelledError) throw err;
+  if (err instanceof FatalError) throw err;
+  if (isNonRetryableFalError(err) || classifyGenerationError(err).permanent) {
+    throw new FatalError(
+      err instanceof Error ? err.message : "Erreur permanente de génération"
+    );
+  }
+  throw err;
+}
+
 async function stepResolveWaveSize(args: GenerateBookArgs): Promise<number> {
   "use step";
   await assertNotCancelled(args);
@@ -98,58 +124,226 @@ async function stepHealFailedPages(args: GenerateBookArgs, pass: number) {
 
 async function stepStory(args: GenerateBookArgs) {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step story gen=${args.generationId}`);
-  const orch = new GenerationOrchestrator(getAdminDb());
-  await orch.runStoryPhase(args.userId, args.bookId, args.generationId);
+  console.log(`[workflow] step story gen=${args.generationId} attempt=${attempt}`);
+  const db = getAdminDb();
+  await persistGenerationStep(db, args.generationId, {
+    stepKey: "story",
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
+    provider: "text",
+  });
+  try {
+    const orch = new GenerationOrchestrator(db);
+    await orch.runStoryPhase(args.userId, args.bookId, args.generationId);
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "story",
+      status: "succeeded",
+      attempt,
+      provider: "text",
+    });
+  } catch (err) {
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "story",
+      status: "failed",
+      attempt,
+      error: err,
+      errorCode: classifyGenerationError(err).code,
+    });
+    rethrowStepError(err);
+  }
 }
 
 async function stepSheet(args: GenerateBookArgs) {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step sheet gen=${args.generationId}`);
-  const orch = new GenerationOrchestrator(getAdminDb());
-  await orch.runSheetPhase(args.userId, args.bookId, args.generationId);
+  console.log(`[workflow] step sheet gen=${args.generationId} attempt=${attempt}`);
+  const db = getAdminDb();
+  await persistGenerationStep(db, args.generationId, {
+    stepKey: "sheet",
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
+    provider: "fal",
+  });
+  try {
+    const orch = new GenerationOrchestrator(db);
+    await orch.runSheetPhase(args.userId, args.bookId, args.generationId);
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "sheet",
+      status: "succeeded",
+      attempt,
+      provider: "fal",
+    });
+  } catch (err) {
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "sheet",
+      status: "failed",
+      attempt,
+      error: err,
+      errorCode: classifyGenerationError(err).code,
+    });
+    rethrowStepError(err);
+  }
 }
 
-async function stepCoverAndSetup(args: GenerateBookArgs): Promise<string[]> {
+async function stepCover(args: GenerateBookArgs) {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step cover gen=${args.generationId}`);
-  const orch = new GenerationOrchestrator(getAdminDb());
-  return orch.runCoverAndPagesSetupPhase(
-    args.userId,
-    args.bookId,
-    args.generationId
+  console.log(`[workflow] step cover gen=${args.generationId} attempt=${attempt}`);
+  const db = getAdminDb();
+  await persistGenerationStep(db, args.generationId, {
+    stepKey: "cover",
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
+    provider: "fal",
+  });
+  try {
+    const orch = new GenerationOrchestrator(db);
+    await orch.runCoverPhase(args.userId, args.bookId, args.generationId);
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "cover",
+      status: "succeeded",
+      attempt,
+      provider: "fal",
+    });
+  } catch (err) {
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "cover",
+      status: "failed",
+      attempt,
+      error: err,
+      errorCode: classifyGenerationError(err).code,
+    });
+    rethrowStepError(err);
+  }
+}
+
+async function stepPagesSetup(args: GenerateBookArgs): Promise<string[]> {
+  "use step";
+  const attempt = workflowStepAttempt();
+  await assertNotCancelled(args);
+  console.log(
+    `[workflow] step pages-setup gen=${args.generationId} attempt=${attempt}`
   );
+  const db = getAdminDb();
+  await persistGenerationStep(db, args.generationId, {
+    stepKey: "pages_setup",
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
+    provider: "firestore",
+  });
+  try {
+    const orch = new GenerationOrchestrator(db);
+    const pageIds = await orch.runPagesSetupPhase(
+      args.userId,
+      args.bookId,
+      args.generationId
+    );
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "pages_setup",
+      status: "succeeded",
+      attempt,
+      provider: "firestore",
+    });
+    return pageIds;
+  } catch (err) {
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "pages_setup",
+      status: "failed",
+      attempt,
+      error: err,
+      errorCode: classifyGenerationError(err).code,
+    });
+    rethrowStepError(err);
+  }
 }
 
 async function stepOnePage(args: GenerateBookArgs, pageId: string) {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step page ${pageId} gen=${args.generationId}`);
-  const orch = new GenerationOrchestrator(getAdminDb());
-  await orch.runOnePagePhase(
-    args.userId,
-    args.bookId,
-    args.generationId,
-    pageId
+  console.log(
+    `[workflow] step page ${pageId} gen=${args.generationId} attempt=${attempt}`
   );
+  const db = getAdminDb();
+  await persistGenerationStep(db, args.generationId, {
+    stepKey: "page",
+    pageId,
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
+    provider: "fal",
+  });
+  try {
+    const orch = new GenerationOrchestrator(db);
+    await orch.runOnePagePhase(
+      args.userId,
+      args.bookId,
+      args.generationId,
+      pageId
+    );
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "page",
+      pageId,
+      status: "succeeded",
+      attempt,
+      provider: "fal",
+    });
+  } catch (err) {
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "page",
+      pageId,
+      status: "failed",
+      attempt,
+      error: err,
+      errorCode: classifyGenerationError(err).code,
+    });
+    rethrowStepError(err);
+  }
 }
 
 async function stepFinalize(args: GenerateBookArgs) {
   "use step";
+  const attempt = workflowStepAttempt();
   await assertNotCancelled(args);
-  console.log(`[workflow] step finalize gen=${args.generationId}`);
-  const orch = new GenerationOrchestrator(getAdminDb());
-  await orch.runFinalizePhase(
-    args.userId,
-    args.bookId,
-    args.generationId,
-    args.cost,
-    args.isTrial,
-    args.startedAt
+  console.log(
+    `[workflow] step finalize gen=${args.generationId} attempt=${attempt}`
   );
+  const db = getAdminDb();
+  await persistGenerationStep(db, args.generationId, {
+    stepKey: "finalize",
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
+    provider: "pdf",
+  });
+  try {
+    const orch = new GenerationOrchestrator(db);
+    await orch.runFinalizePhase(
+      args.userId,
+      args.bookId,
+      args.generationId,
+      args.cost,
+      args.isTrial,
+      args.startedAt
+    );
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "finalize",
+      status: "succeeded",
+      attempt,
+      provider: "pdf",
+    });
+  } catch (err) {
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "finalize",
+      status: "failed",
+      attempt,
+      error: err,
+      errorCode: classifyGenerationError(err).code,
+    });
+    rethrowStepError(err);
+  }
 }
 
 async function stepFail(args: GenerateBookArgs, err: unknown) {

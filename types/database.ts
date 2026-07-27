@@ -94,6 +94,8 @@ export interface Book {
   child_photo_path?: string | null;
   /** "parent_create" enables the fast reliable parent pipeline. */
   source?: string | null;
+  /** After a compensated failure, one controlled free restart is allowed. */
+  free_retry_available?: boolean | null;
   /** Locked character descriptors injected into every image prompt. */
   character_bible?: string | null;
   character_sheet_url?: string | null;
@@ -214,7 +216,16 @@ export interface CreditLedger {
   id: string;
   /** Present when denormalized; subcollection docs under users/{uid} omit it. */
   user_id?: string;
-  operation: "credit" | "debit";
+  operation: "credit" | "debit" | "capture";
+  /** Product-facing ledger kind (reservation/capture/refund/…). */
+  kind?:
+    | "reservation"
+    | "capture"
+    | "refund"
+    | "release"
+    | "credit"
+    | "debit"
+    | null;
   amount: number;
   balance_after: number;
   reason: string;
@@ -229,6 +240,7 @@ export interface GenerationProgress {
   status: GenerationStatus;
   progress: number;
   current_step: string | null;
+  current_substep?: string | null;
   cover_image: string | null;
   pages: Array<{
     id: string;
@@ -238,5 +250,16 @@ export interface GenerationProgress {
     illustration_url: string | null;
     generation_status: PageGenerationStatus;
   }>;
+  pages_done?: number;
+  pages_total?: number;
+  elapsed_ms?: number | null;
+  estimated_total_ms?: number;
+  taking_longer?: boolean;
+  credits_reserved?: number;
+  credits_state?: "reserved" | "captured" | "released";
+  support_id?: string;
+  free_retry_available?: boolean;
+  /** Exact credits /api/generation/start reserves for a paid recreate. */
+  recreate_cost?: number;
   error_message: string | null;
 }
