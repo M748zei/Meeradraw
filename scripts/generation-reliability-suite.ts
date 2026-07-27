@@ -1941,6 +1941,122 @@ async function runNarrativeTextTests() {
   });
 }
 
+/**
+ * P1 — family cast capacity: "Khadidja et ses parents adoptent un chien"
+ * requires 4 stable entities (child + two parents + dog). The old pipeline
+ * capped every scene at 2 characters and the planner prompt banned named
+ * adults — the parents were erased by design.
+ */
+async function runFamilyCastTests() {
+  console.log("\n── capacité de cast familial (4 entités) ──");
+  const { charactersForPage, lockPlanToParentNarrative } = await import(
+    "../services/ai/character-bible"
+  );
+  const { buildColoringPagePrompt, buildStoryUserPrompt } = await import(
+    "../services/ai/prompts"
+  );
+
+  const familyCharacters = [
+    { id: "char_1", name: "Khadija", kind: "human", visualLock: "young girl child" },
+    { id: "char_2", name: "Maman Aïcha", kind: "human", visualLock: "adult woman parent" },
+    { id: "char_3", name: "Papa Moussa", kind: "human", visualLock: "adult man parent" },
+    { id: "char_4", name: "Bello", kind: "dog", visualLock: "small friendly dog" },
+  ].map((c) => ({
+    ...c,
+    description: c.name,
+    appearance: c.visualLock,
+    personality: "doux",
+  }));
+  const familyWorld = { setting: "maison familiale", palette: "chaud", mood: "tendre" };
+
+  await test("une scène familiale garde ses 4 personnages obligatoires", () => {
+    const plan = {
+      title: "t",
+      summary: "s",
+      audienceAge: "6-8",
+      world: familyWorld,
+      characters: familyCharacters,
+      pages: [],
+    };
+    const page = {
+      pageNumber: 6,
+      title: "Famille",
+      storyText: "Toute la famille accueille Bello.",
+      illustrationDescription: "family scene",
+      characterIds: ["char_1", "char_2", "char_3", "char_4"],
+    };
+    const cast = charactersForPage(plan, page);
+    assert.equal(cast.length, 4, cast.map((c) => c.name).join(","));
+    assert.deepEqual(
+      cast.map((c) => c.name),
+      ["Khadija", "Maman Aïcha", "Papa Moussa", "Bello"]
+    );
+  });
+
+  await test("le prompt de page exige EXACTEMENT le cast obligatoire (4)", () => {
+    const prompt = buildColoringPagePrompt({
+      scene: "La famille accueille le chien à la maison",
+      characters: "cast lock",
+      style: "cute",
+      world: "maison familiale",
+      castCount: 4,
+    });
+    assert.match(prompt, /EXACTLY 4 named character\(s\)/);
+    assert.doesNotMatch(prompt, /at most 2 characters/);
+  });
+
+  await test("le planificateur n'interdit plus les parents adultes nommés", () => {
+    const prompt = buildStoryUserPrompt({
+      idea: "khadija et ses parents adoptent un chien",
+      pageCount: 6,
+      style: "cute",
+      researchJson: "{}",
+      parentMode: true,
+      childName: "Khadija",
+      childGender: "girl",
+    } as Parameters<typeof buildStoryUserPrompt>[0]);
+    assert.match(prompt, /CONTRAT DE CAST/);
+    assert.match(prompt, /DEUX parents/);
+    assert.doesNotMatch(prompt, /AUCUN adulte nommé/);
+    assert.doesNotMatch(prompt, /max 2 personnages par scène/i);
+  });
+
+  await test("lockPlanToParentNarrative préserve les characterIds familiaux", () => {
+    const plan = {
+      title: "L'adoption de Bello",
+      summary: "Khadija et ses parents adoptent un chien.",
+      audienceAge: "6-8 ans",
+      world: familyWorld,
+      characters: familyCharacters,
+      pages: [1, 2, 3, 4, 5, 6].map((n) => ({
+        pageNumber: n,
+        title: `Étape ${n}`,
+        storyText: `Khadija et ses parents vivent l'étape ${n} de l'adoption.`,
+        illustrationDescription: `Khadija with her parents and the dog, adoption step ${n}`,
+        characterIds: ["char_1", "char_2", "char_3", "char_4"],
+        action: `Khadija and her parents adoption step ${n}`,
+      })),
+    };
+    const locked = lockPlanToParentNarrative(structuredClone(plan), {
+      sourceNarrative:
+        "khadija est une petite fille. HISTOIRE DU PARENT (intrigue obligatoire, ne pas remplacer) : khadija et ses parents adoptent un chien",
+      childName: "Khadija",
+      childGender: "girl",
+      audience: "6-8 ans",
+      pageCount: 6,
+    });
+    const familyPages = locked.pages.filter(
+      (p) => (p.characterIds || []).length >= 3
+    );
+    assert.ok(
+      familyPages.length >= 4,
+      `les scènes familiales gardent leur cast: ${locked.pages
+        .map((p) => (p.characterIds || []).length)
+        .join(",")}`
+    );
+  });
+}
+
 async function main() {
   console.log("generation-reliability-suite\n");
   await runSoftAcceptTests();
@@ -1954,6 +2070,7 @@ async function main() {
   await runRasterGateTests();
   await runStrictPagePrintIntegrationTests();
   await runNarrativeTextTests();
+  await runFamilyCastTests();
   await runEmulatorLedgerTests();
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
