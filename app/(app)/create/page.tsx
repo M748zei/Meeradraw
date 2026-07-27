@@ -153,7 +153,9 @@ export default function CreateForChildPage() {
       setPhotoFileName(file.name || "Photo sélectionnée");
       setPhotoError(null);
       setError(null);
-    } catch {
+    } catch (err) {
+      // Surface the real cause in the console — the UI copy stays parent-friendly.
+      console.error("child photo preparation failed", err);
       setPhotoError(
         "Impossible de préparer cette photo. Essayez un autre fichier ou exportez-la en JPG."
       );
@@ -436,14 +438,24 @@ export default function CreateForChildPage() {
           <p className="text-xs text-ink-muted">
             Pour que le héros lui ressemble. Portrait clair, visage visible. JPG, PNG, WebP, HEIC ou HEIF · max 12 Mo. Optionnel.
           </p>
-          <div
-            className="rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 p-4"
+          {/*
+            The whole dashed zone is a <label> for the file input: any click in
+            the zone opens the native chooser (the previous plain <div> header
+            was not wired to the input, so on Safar/desktop clicking the visible
+            "Ajouter une photo" area opened nothing).
+          */}
+          <label
+            htmlFor="child-photo"
+            className={cn(
+              "block rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 p-4",
+              loading ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-sky-400"
+            )}
             data-testid="child-photo-dropzone"
           >
-            <div className="mb-3 flex items-center justify-center gap-2 text-sm text-ink-muted">
+            <span className="mb-3 flex items-center justify-center gap-2 text-sm text-ink-muted">
               <Upload className="h-5 w-5 text-sky-600" aria-hidden />
               <span>{photoPreview ? "Changer la photo" : "Ajouter une photo"}</span>
-            </div>
+            </span>
             <input
               id="child-photo"
               name="child-photo"
@@ -453,14 +465,17 @@ export default function CreateForChildPage() {
               data-testid="child-photo-input"
               className="mx-auto block w-full max-w-md cursor-pointer rounded-xl border border-cream-300 bg-white text-sm text-ink file:mr-4 file:cursor-pointer file:border-0 file:bg-sky-600 file:px-4 file:py-3 file:font-semibold file:text-white hover:file:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={loading}
-              onChange={(e) => {
-                const file = e.target.files?.[0] ?? null;
-                void onPhotoChange(file);
-                // Reset after read so the same file can be chosen again.
-                e.currentTarget.value = "";
+              onChange={async (e) => {
+                const input = e.currentTarget;
+                const file = input.files?.[0] ?? null;
+                // Read the photo fully BEFORE clearing the input: resetting
+                // value while FileReader/createImageBitmap still holds the
+                // File aborts the read on WebKit ("Lecture impossible").
+                await onPhotoChange(file);
+                input.value = "";
               }}
             />
-          </div>
+          </label>
           {photoError ? (
             <p className="text-sm text-rose-700" role="alert">
               {photoError}
