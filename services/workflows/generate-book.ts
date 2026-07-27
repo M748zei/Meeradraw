@@ -48,7 +48,18 @@ export async function generateBookWorkflow(args: GenerateBookArgs) {
 
   try {
     await stepStory(args);
-    await stepSheet(args);
+    // Strict books: per-character portrait steps (short, resumable,
+    // heartbeat-honest). Prod gen 33d3c176 stalled silently when the
+    // monolithic sheet step was killed by 1800s instance recycling.
+    const sheetPlan = await stepSheetCast(args);
+    if (sheetPlan.strict) {
+      for (const character of sheetPlan.cast) {
+        await stepPortrait(args, character.id, character.index);
+      }
+      await stepSheetFinalize(args);
+    } else {
+      await stepSheet(args);
+    }
     await stepCover(args);
     const pageIds = await stepPagesSetup(args);
 
@@ -146,6 +157,98 @@ async function stepStory(args: GenerateBookArgs) {
   } catch (err) {
     await persistGenerationStep(db, args.generationId, {
       stepKey: "story",
+      status: "failed",
+      attempt,
+      error: err,
+      errorCode: classifyGenerationError(err).code,
+    });
+    rethrowStepError(err);
+  }
+}
+
+async function stepSheetCast(
+  args: GenerateBookArgs
+): Promise<{ strict: boolean; cast: Array<{ id: string; index: number }> }> {
+  "use step";
+  await assertNotCancelled(args);
+  const orch = new GenerationOrchestrator(getAdminDb());
+  return orch.resolveSheetCast(args.userId, args.bookId);
+}
+
+async function stepPortrait(
+  args: GenerateBookArgs,
+  characterId: string,
+  characterIndex: number
+) {
+  "use step";
+  const attempt = workflowStepAttempt();
+  await assertNotCancelled(args);
+  console.log(
+    `[workflow] step portrait ${characterId} gen=${args.generationId} attempt=${attempt}`
+  );
+  const db = getAdminDb();
+  await persistGenerationStep(db, args.generationId, {
+    stepKey: "portrait",
+    pageId: characterId,
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
+    provider: "fal",
+  });
+  try {
+    const orch = new GenerationOrchestrator(db);
+    await orch.runOnePortraitPhase(
+      args.userId,
+      args.bookId,
+      args.generationId,
+      characterId,
+      characterIndex
+    );
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "portrait",
+      pageId: characterId,
+      status: "succeeded",
+      attempt,
+      provider: "fal",
+    });
+  } catch (err) {
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "portrait",
+      pageId: characterId,
+      status: "failed",
+      attempt,
+      error: err,
+      errorCode: classifyGenerationError(err).code,
+    });
+    rethrowStepError(err);
+  }
+}
+
+async function stepSheetFinalize(args: GenerateBookArgs) {
+  "use step";
+  const attempt = workflowStepAttempt();
+  await assertNotCancelled(args);
+  console.log(
+    `[workflow] step sheet-finalize gen=${args.generationId} attempt=${attempt}`
+  );
+  const db = getAdminDb();
+  await persistGenerationStep(db, args.generationId, {
+    stepKey: "sheet_finalize",
+    status: attempt > 1 ? "retrying" : "running",
+    attempt,
+    provider: "firestore",
+  });
+  try {
+    const orch = new GenerationOrchestrator(db);
+    await orch.runSheetFinalizePhase(args.userId, args.bookId, args.generationId);
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "sheet_finalize",
+      status: "succeeded",
+      attempt,
+      provider: "firestore",
+    });
+  } catch (err) {
+    await persistGenerationStep(db, args.generationId, {
+      stepKey: "sheet_finalize",
       status: "failed",
       attempt,
       error: err,

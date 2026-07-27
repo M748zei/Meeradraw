@@ -478,6 +478,210 @@ export class GenerationOrchestrator {
   }
 
   /**
+   * Cast list for the decomposed per-portrait sheet steps (strict books).
+   * Prod gen 33d3c176: the monolithic sheet step (4 portraits, no heartbeat)
+   * was killed mid-flight by the platform's 1800s instance recycling and the
+   * whole run stalled silently. Per-character steps are short, resumable and
+   * heartbeat/progress-honest.
+   */
+  async resolveSheetCast(
+    userId: string,
+    bookId: string
+  ): Promise<{ strict: boolean; cast: Array<{ id: string; index: number }> }> {
+    const book = await this.books.get(userId, bookId);
+    const plan = this.loadStoryPlan(book);
+    return {
+      strict: requiresPremiumVisualQuality(book),
+      cast: plan.characters.map((c, index) => ({ id: c.id, index })),
+    };
+  }
+
+  /**
+   * Generate and persist ONE character portrait (strict path). Idempotent:
+   * when this generation already persisted the character's reference
+   * (model_sheet_crops_gen marker), the step is a no-op — a workflow retry
+   * after an instance kill only redoes the missing portraits.
+   */
+  async runOnePortraitPhase(
+    userId: string,
+    bookId: string,
+    generationId: string,
+    characterId: string,
+    characterIndex: number
+  ): Promise<void> {
+    await this.ensureActive(userId, bookId, generationId);
+    await this.touchHeartbeat(generationId);
+    const book = await this.books.get(userId, bookId);
+    const plan = this.loadStoryPlan(book);
+    const character = plan.characters.find((c) => c.id === characterId);
+    if (!character) {
+      throw new Error(`character ${characterId} missing from story_plan`);
+    }
+    const universeId = book.universe_id;
+    const universeRef = this.db.collection("universes").doc(universeId);
+    const universeSnap = await universeRef.get();
+    const sameGen = universeSnap.data()?.model_sheet_crops_gen === generationId;
+    const existingCrop = (universeSnap.data()?.model_sheet_crops as
+      | Record<string, { url?: string }>
+      | undefined)?.[characterId];
+    if (sameGen && existingCrop?.url) {
+      console.log(
+        `[gen ${generationId}] portrait ${characterId} already persisted — skipping`
+      );
+      return;
+    }
+
+    const style = book.style || "cute";
+    const worldSetting = [plan.world?.setting, plan.world?.mood]
+      .filter(Boolean)
+      .join(" — ");
+    const photoUrl =
+      (typeof book.child_photo_url === "string" && book.child_photo_url.trim()) ||
+      undefined;
+    const imageProvider = getImageProvider();
+
+    const castCount = Math.max(1, plan.characters.length);
+    await this.updateGeneration(generationId, {
+      current_step: "character_designer",
+      current_substep: `portrait_${characterIndex + 1}_of_${castCount}`,
+      progress: Math.min(39, 30 + Math.round(((characterIndex + 1) / castCount) * 8)),
+    });
+
+    const photoReference =
+      character.id === "char_1" || characterIndex === 0 ? photoUrl : undefined;
+    const photoIdentityLock = photoReference
+      ? `ONE young child hero named ${String(book.child_name || character.name)}. The reference photo is the absolute source of truth: preserve the same face, skin tone, hair, age, gender, body proportions and exact outfit; do not replace or redesign the clothing.`
+      : null;
+
+    let persistedRef: { url: string; path: string } | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= PARENT_SHEET_MAX_ATTEMPTS; attempt++) {
+      await this.touchHeartbeat(generationId);
+      try {
+        const portraitStats: ImageQcStats = {};
+        const portrait = await imageProvider.generateImage({
+          prompt: photoReference
+            ? "single premium cartoon portrait of the exact child in the reference photo; preserve the child's name and exact outfit"
+            : "single premium cartoon character portrait",
+          style,
+          characterBible: photoIdentityLock || formatCharacterLock([character]),
+          worldSetting,
+          isCharacterSheet: true,
+          referenceImageUrl: photoReference,
+          identityFromPhoto: Boolean(photoReference),
+          expectedCast: photoReference
+            ? [{
+                name: String(book.child_name || character.name),
+                kind: "human",
+                visualLock:
+                  "same child identity, age and gender as the provided reference photo; outfit comes from the photo",
+              }]
+            : expectedCastFor([character]),
+          qcStats: portraitStats,
+          strictQuality: true,
+          ...PARENT_FAL_CAPS,
+          seed: generationSeed({
+            bookId,
+            generationId,
+            assetType: "portrait",
+            index: characterIndex,
+            reroll: attempt,
+          }),
+          consistencyMode: true,
+        });
+        await this.setQcImage(generationId, `character_${character.id}`, portraitStats);
+        if (await this.isImplausibleHero(portrait.url)) continue;
+        const persisted = await this.storage.persistImageFromUrl(
+          portrait.url,
+          `universes/${universeId}/books/${bookId}/generations/${generationId}/characters/${character.id}.png`
+        );
+        if (!persisted.path) {
+          throw new Error(`Character ${character.name} portrait was not persisted`);
+        }
+        persistedRef = { url: persisted.url, path: persisted.path };
+        break;
+      } catch (portraitError) {
+        lastError = portraitError;
+        console.warn(
+          `character portrait ${character.name} attempt ${attempt}/${PARENT_SHEET_MAX_ATTEMPTS} failed`,
+          portraitError
+        );
+      }
+    }
+    if (!persistedRef) {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error(`Premium character reference failed for ${character.name}`);
+    }
+    await universeRef.set(
+      {
+        model_sheet_crops: { [character.id]: persistedRef },
+        model_sheet_crops_gen: generationId,
+        updated_at: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  }
+
+  /**
+   * After every portrait step: verify completeness for THIS generation and
+   * point the character docs at their references. The collective cast sheet
+   * is intentionally skipped on the decomposed strict path (non-essential,
+   * 1–3 extra fal calls and a long silent wait).
+   */
+  async runSheetFinalizePhase(
+    userId: string,
+    bookId: string,
+    generationId: string
+  ): Promise<void> {
+    await this.ensureActive(userId, bookId, generationId);
+    await this.touchHeartbeat(generationId);
+    const book = await this.books.get(userId, bookId);
+    const plan = this.loadStoryPlan(book);
+    const universeId = book.universe_id;
+    const universeSnap = await this.db
+      .collection("universes")
+      .doc(universeId)
+      .get();
+    const sameGen = universeSnap.data()?.model_sheet_crops_gen === generationId;
+    const crops =
+      (universeSnap.data()?.model_sheet_crops as Record<
+        string,
+        { url?: string }
+      >) || {};
+    if (
+      !sameGen ||
+      plan.characters.some((character) => !crops[character.id]?.url)
+    ) {
+      throw new Error("Premium book is missing an individual character reference");
+    }
+    const charsRef = this.db
+      .collection("universes")
+      .doc(universeId)
+      .collection("characters");
+    const afterChars = await charsRef.get();
+    const sheetBatch = this.db.batch();
+    afterChars.docs.forEach((doc) => {
+      const data = doc.data();
+      const character = plan.characters.find(
+        (candidate) =>
+          candidate.id === doc.id ||
+          candidate.id === data.id_key ||
+          candidate.name === data.name
+      );
+      const reference = character ? crops[character.id]?.url : undefined;
+      if (reference) sheetBatch.update(doc.ref, { image_reference: reference });
+    });
+    await sheetBatch.commit();
+    await this.books.update(userId, bookId, { character_sheet_url: null });
+    await this.updateGeneration(generationId, {
+      current_step: "world_builder",
+      progress: 39,
+      current_substep: "references_ready",
+    });
+  }
+
+  /**
    * Model sheet attempts + sheet crops + character image_reference updates.
    * Reconstructs plan from book.story_plan written by the story phase.
    */
@@ -674,6 +878,7 @@ export class GenerationOrchestrator {
     }
     await this.db.collection("universes").doc(universeId).update({
       model_sheet_crops: effectiveReferences,
+      model_sheet_crops_gen: generationId,
       updated_at: new Date().toISOString(),
     });
     const afterChars = await charsRef.get();
