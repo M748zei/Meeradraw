@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -78,7 +78,6 @@ async function compressPhotoForUpload(file: File): Promise<File> {
 
 export default function CreateForChildPage() {
   const router = useRouter();
-  const photoInputRef = useRef<HTMLInputElement>(null);
   const [ageId, setAgeId] = useState<string>("6-8");
   const [themeId, setThemeId] = useState<string>("magic");
   const [childName, setChildName] = useState("");
@@ -87,6 +86,7 @@ export default function CreateForChildPage() {
   const [pageCount, setPageCount] = useState(6);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [photoBase64, setPhotoBase64] = useState<string | null>(null);
+  const [photoFileName, setPhotoFileName] = useState<string | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +116,7 @@ export default function CreateForChildPage() {
   async function onPhotoChange(file: File | null) {
     setPhotoPreview(null);
     setPhotoBase64(null);
+    setPhotoFileName(null);
     setPhotoError(null);
     if (!file) return;
 
@@ -149,6 +150,7 @@ export default function CreateForChildPage() {
       if (!dataUrl.startsWith("data:image/")) throw new Error("Photo invalide");
       setPhotoPreview(dataUrl);
       setPhotoBase64(dataUrl);
+      setPhotoFileName(file.name || "Photo sélectionnée");
       setPhotoError(null);
       setError(null);
     } catch {
@@ -434,16 +436,22 @@ export default function CreateForChildPage() {
           <p className="text-xs text-ink-muted">
             Pour que le héros lui ressemble. Portrait clair, visage visible. JPG, PNG, WebP, HEIC ou HEIF · max 12 Mo. Optionnel.
           </p>
-          <div data-testid="child-photo-dropzone">
+          <div
+            className="rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 p-4"
+            data-testid="child-photo-dropzone"
+          >
+            <div className="mb-3 flex items-center justify-center gap-2 text-sm text-ink-muted">
+              <Upload className="h-5 w-5 text-sky-600" aria-hidden />
+              <span>{photoPreview ? "Changer la photo" : "Ajouter une photo"}</span>
+            </div>
             <input
-              ref={photoInputRef}
               id="child-photo"
               name="child-photo"
               type="file"
               accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif"
               aria-labelledby="child-photo-label"
               data-testid="child-photo-input"
-              className="sr-only"
+              className="mx-auto block w-full max-w-md cursor-pointer rounded-xl border border-cream-300 bg-white text-sm text-ink file:mr-4 file:cursor-pointer file:border-0 file:bg-sky-600 file:px-4 file:py-3 file:font-semibold file:text-white hover:file:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={loading}
               onChange={(e) => {
                 const file = e.target.files?.[0] ?? null;
@@ -452,15 +460,6 @@ export default function CreateForChildPage() {
                 e.currentTarget.value = "";
               }}
             />
-            <button
-              type="button"
-              disabled={loading}
-              onClick={() => photoInputRef.current?.click()}
-              className="flex min-h-[7.5rem] w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-cream-300 bg-cream-50/80 px-4 py-6 text-sm text-ink-muted transition hover:border-sky-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Upload className="h-5 w-5 text-sky-600" />
-              <span>{photoPreview ? "Changer la photo" : "Ajouter une photo"}</span>
-            </button>
           </div>
           {photoError ? (
             <p className="text-sm text-rose-700" role="alert">
@@ -468,13 +467,18 @@ export default function CreateForChildPage() {
             </p>
           ) : null}
           {photoPreview ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={photoPreview}
-              alt="Aperçu de la photo sélectionnée"
-              className="mx-auto h-28 w-28 rounded-2xl object-cover shadow-soft"
-              data-testid="child-photo-preview"
-            />
+            <div className="space-y-2 text-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={photoPreview}
+                alt="Aperçu de la photo sélectionnée"
+                className="mx-auto h-28 w-28 rounded-2xl object-cover shadow-soft"
+                data-testid="child-photo-preview"
+              />
+              <p className="text-sm font-medium text-emerald-700" role="status">
+                Photo sélectionnée{photoFileName ? ` : ${photoFileName}` : ""}
+              </p>
+            </div>
           ) : null}
         </Card>
 
