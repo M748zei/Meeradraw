@@ -11,6 +11,7 @@ import {
 } from "@/services/ai/prompts";
 import { styleImageCraftLine } from "@/services/ai/style-contracts";
 import { buildCompositionBlueprint } from "@/services/ai/composition-templates";
+import { canSoftAcceptCover } from "@/lib/cover-soft-accept";
 import { withRetry } from "@/lib/async";
 import { isBlankOrTooFaint, hasPoorEnvironment, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
@@ -394,6 +395,8 @@ export class FalImageProvider implements ImageAIProvider {
     let prevColored = false;
     let prevNotColored = false;
     let prevVisionNudges: string[] = [];
+    /** Verdicts from the attempt that currently owns `best` (not the full history). */
+    let bestVerdicts: string[] = [];
 
     for (let attempt = 0; attempt <= maxRerolls; attempt++) {
       // Consistency mode: keep seed in the same family (seed+attempt) so rerolls
@@ -469,6 +472,7 @@ export class FalImageProvider implements ImageAIProvider {
       // own re-roll cap. Fail-open: null verdict = cannot judge = accept.
       let visionScore = 0;
       prevVisionNudges = [];
+      let attemptVerdicts: string[] = [];
       if (score === 0 && input && visionRerollsUsed < maxVisionRerolls + 1) {
         const verdicts: string[] = [];
         if (input.isCharacterSheet && input.expectedCast?.length) {
@@ -602,8 +606,16 @@ export class FalImageProvider implements ImageAIProvider {
           }
         }
         if (verdicts.length) {
+          attemptVerdicts = verdicts;
           qcStats.visionVerdicts = [...(qcStats.visionVerdicts || []), ...verdicts];
         }
+      }
+
+      // Pixel-only defects (blank/colored/env) with no vision tags still need a signal
+      // for soft-accept decisions (covers with pure chroma use repairableColorOnly).
+      if (blank) attemptVerdicts = [...attemptVerdicts, "corrupt:blank-or-unreadable"];
+      if (analysisUnavailable) {
+        attemptVerdicts = [...attemptVerdicts, "corrupt:bytes-unavailable"];
       }
 
       const totalScore = score + visionScore;
@@ -617,6 +629,7 @@ export class FalImageProvider implements ImageAIProvider {
           needsUpload: Boolean(current.needsUpload),
           pngBuffer: current.pngBuffer,
         };
+        bestVerdicts = attemptVerdicts;
       }
 
       if (totalScore === 0) break; // clean page → accept immediately
@@ -694,20 +707,16 @@ export class FalImageProvider implements ImageAIProvider {
       !best.blank &&
       best.score === 2 &&
       !(qcStats.visionVerdicts || []).length;
-    // Covers are posters: vision often flags a dynamic hero scene as "lineup"
-    // (score 1–2). After exhausting rerolls, accept that soft defect rather than
-    // killing the whole paid book at 40% (prod gen 94d46b1e, 2026-07-27).
-    const softCoverAcceptable =
-      Boolean(input?.isCover) &&
-      !best.blank &&
-      best.score > 0 &&
-      best.score <= 2 &&
-      // Score ≤2 cannot include cast(+4)/identity(+5); ignore stale verdicts from earlier attempts.
-      !(qcStats.visionVerdicts || [])
-        .slice(-4)
-        .some((v) =>
-          /^(cast:|comic-layout:|cover-quality:vision-unavailable)/i.test(v)
-        );
+    // Covers only: closed allowlist soft-accept (lineup/action-energy), never a
+    // global score<=2 rule. Identity/cast/anatomy/safety always hard-reject.
+    const softCoverAcceptable = canSoftAcceptCover({
+      isCover: Boolean(input?.isCover),
+      blank: best.blank,
+      colored: best.colored,
+      score: best.score,
+      // Use ONLY the best attempt's verdicts — never stale hard tags from earlier rolls.
+      verdicts: bestVerdicts,
+    });
     if (
       input?.strictQuality &&
       best.score > 0 &&
@@ -720,7 +729,7 @@ export class FalImageProvider implements ImageAIProvider {
     }
     if (softCoverAcceptable) {
       console.warn(
-        `[${label}] accepting cover after soft QC score ${best.score} (lineup/action soft defect)`
+        `[${label}] accepting cover after soft QC (allowlist lineup/action only; score ${best.score})`
       );
     }
     if (best.score > 0) {
