@@ -45,7 +45,7 @@ MÉTIER LIVRE DE COLORIAGE (non négociable — niveau éditeur jeunesse)
 - Model sheet discipline : MÊME visage, cheveux, costume, proportions page après page.
 - Full body ou mid-shot intentionnel ; JAMAIS de membres/têtes coupés par accident au bord du cadre.
 - Traits noirs épais, formes fermées, GRANDES zones à colorier ; pas de micro-détails.
-- Max 2 personnages par scène complexe (3 seulement si très simple) ; personnages clairement séparés (pas de fusion).
+- Cast par scène = exactement les personnages que l'histoire exige (jusqu'à 4 nommés, ex. l'enfant + ses deux parents + l'animal) ; personnages clairement séparés (pas de fusion) ; jamais de figurants détaillés hors bible.
 - DÉCOR OBLIGATOIRE sur CHAQUE page : environnement riche et colorable aligné à la caption (cuisine = fourneau, casseroles, carrelage ; jardin = arbres, fleurs, clôture ; tempête = nuages, pluie, maison, vent). Interdit : vide blanc, personnages flottants, seulement 2 touffes d'herbe.
 - Composition : personnages + décor moyen plan + arrière-plan simple lisible (pas de photo-réalisme encombré).
 - Mains : préférer poses qui cachent les doigts, ou objets tenus avec mains type "mitaines" simplifiées enfant ; jamais de doigts fusionnés / surnuméraires.
@@ -369,9 +369,11 @@ Si le parent dit « princesse du village aimée de tous », l'histoire DOIT êtr
 - INTERDIT de substituer une autre aventure (voyage avec les parents, road-trip, journée/départ au marché, chemin poussiéreux) SAUF si le parent l'a EXPLICITEMENT demandé.
 - Si le parent demande princesse / village / couronne / être aimée : CHAQUE page porte cette intrigue — pas un marché générique ouest-africain.
 - Le style graphique (${params.style}) influence décors / tenues / ambiance — JAMAIS l'intrigue.
-- Cast max 2 : le héros enfant nommé + éventuellement UN ami enfant DISTINCT (jamais un clone du héros). AUCUN adulte nommé sauf figurant silhouette sans visage.
-- visualLock du héros : âge enfant explicite ("about 4/7/10 years old"), genre verrouillé, proportions enfant, yeux avec pupilles — INTERDIT adult woman/man, INTERDIT wrong gender.
-- Chaque page : le héros enfant EST visible et central ; storyText mentionne son prénom.`
+- CONTRAT DE CAST : le héros enfant nommé + CHAQUE personnage ESSENTIEL à l'histoire du parent (ex. « ses parents » = DEUX adultes nommés distincts ; un animal adopté = personnage à part entière), jusqu'à 4 personnages nommés au total. Chacun a une entrée dans characters avec un visualLock complet et stable.
+- INTERDIT de supprimer, fusionner ou remplacer un personnage essentiel de l'histoire du parent. Si l'histoire dit « ses parents », les DEUX parents existent, sont visibles dans les scènes familiales, et la dernière page réunit tout le cast principal.
+- Chaque page : characterIds liste TOUT le cast obligatoire de cette scène (pas seulement le héros). Aucun personnage hors bible, aucun clone, aucun figurant détaillé.
+- visualLock du héros : âge enfant explicite ("about 4/7/10 years old"), genre verrouillé, proportions enfant, yeux avec pupilles — INTERDIT adult woman/man pour l'ENFANT, INTERDIT wrong gender. Les parents adultes ont un visualLock ADULTE distinct et stable (jamais confondus avec l'enfant).
+- Chaque page : le héros enfant EST visible ; storyText est une phrase naturelle pour un enfant et mentionne son prénom.`
     : "";
 
   return `${fidelityBlock}
@@ -389,7 +391,7 @@ ${params.researchJson}
 
 Produis maintenant le plan JSON complet du livre de coloriage niveau librairie/KDP :
 titre, concept, bible visuelle LOCK (avec introducedOnPage), storyboard page par page avec action CONCRÈTE, characterPoses, camera, pageSetting, focalPoint, illustrationDescription ET negativePrompt.
-Rappel : FIDÉLITÉ histoire du parent d'abord ; héros = ENFANT au bon genre ; cast serré ; visualLock anglais identique partout ; characterIds seulement depuis la bible ; variété d'angles et de poses ; CHAQUE page avec environnement riche colorable ; max 2 personnages par scène.`;
+Rappel : FIDÉLITÉ histoire du parent d'abord ; héros = ENFANT au bon genre ; cast obligatoire COMPLET par scène (jusqu'à 4 personnages nommés quand l'histoire l'exige) ; visualLock anglais identique partout ; characterIds seulement depuis la bible ; variété d'angles et de poses ; CHAQUE page avec environnement riche colorable.`;
 }
 
 /**
@@ -524,9 +526,15 @@ export function buildColoringPagePrompt(params: {
   /** Parent books: lock gender + series hand. */
   heroGender?: string | null;
   consistencyMode?: boolean;
+  /** Exact number of named characters this scene requires (up to 4). */
+  castCount?: number;
 }): string {
   const craft = styleImageCraftLine(params.style);
   const genderBits = heroGenderPromptBits(params.heroGender);
+  const castCount =
+    typeof params.castCount === "number" && params.castCount > 0
+      ? Math.min(4, Math.floor(params.castCount))
+      : 2;
 
   const shot =
     params.shotType === "mid_shot"
@@ -560,7 +568,7 @@ export function buildColoringPagePrompt(params: {
     CHILD_SAFE_FACE_POSITIVE,
     RICH_ENVIRONMENT_POSITIVE,
     "Prefer a wide or full-body shot inside a busy scene — avoid tight portrait close-ups with empty backgrounds.",
-    "Full bodies inside the frame, simple mitten-style kid hands, at most 2 characters, no extra people.",
+    `Full bodies inside the frame, simple mitten-style kid hands, EXACTLY ${castCount} named character(s) — the full mandatory cast, no extra people, no missing characters.`,
     params.comicBeat ? `Narrative moment across the book: ${params.comicBeat}; this does NOT mean comic layout.` : "",
   ]
     .filter(Boolean)

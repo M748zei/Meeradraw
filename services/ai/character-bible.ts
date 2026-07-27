@@ -10,9 +10,10 @@ export function maxCastForPageCount(pageCount: number): number {
 
 /** Parent books: tiny cast — hero child (+ optional one friend). */
 export function maxCastForParentBook(): number {
-  // Hero + story companion/animal + one supporting person (for example Aïcha).
-  // The previous cap of 2 silently deleted named characters from the parent's story.
-  return 3;
+  // Hero + up to three essential story characters (for example the two
+  // parents and the adopted dog). The previous caps of 2 then 3 silently
+  // deleted named characters from the parent's story.
+  return 4;
 }
 
 export type NormalizeStoryPlanOpts = {
@@ -141,11 +142,12 @@ export function enforceParentChildHero(
     introducedOnPage: 1,
   };
 
-  // Keep up to two DISTINCT story characters. Preserve their real age and
-  // species: an adult stays an adult and an animal stays that exact animal.
+  // Keep up to three DISTINCT story characters beside the hero (family cast:
+  // two parents + the adopted animal). Preserve their real age and species:
+  // an adult stays an adult and an animal stays that exact animal.
   const others = characters
     .filter((_, i) => i !== heroIdx)
-    .slice(0, 2)
+    .slice(0, 3)
     .map((c, i) => {
       const lock = c.visualLock || c.appearance || "";
       const looksLikeHero =
@@ -178,9 +180,9 @@ export function enforceParentChildHero(
       .map((id) => idMap.get(id) || id)
       .filter((id) => nextChars.some((c) => c.id === id));
     if (!ids.includes("char_1")) ids = ["char_1", ...ids];
-    // Parent default: hero alone — supporting cast only if the page already asked for them.
-    ids = [...new Set(ids)].slice(0, nextChars.length > 1 ? 2 : 1);
-    if (ids.length > 1 && !ids.includes("char_1")) ids = ["char_1"];
+    // Keep the full mandatory cast the page asked for (up to the book cast
+    // cap) — family scenes need the child AND both parents AND the pet.
+    ids = [...new Set(ids)].slice(0, maxCastForParentBook());
     const poses: Record<string, string> = {};
     if (p.characterPoses) {
       for (const [k, v] of Object.entries(p.characterPoses)) {
@@ -292,7 +294,9 @@ export function lockPlanToParentNarrative(
             320
           ),
           focalPoint: name,
-          characterIds: ["char_1"],
+          // The finale gathers the page's full mandatory cast (family ending),
+          // never the hero alone.
+          characterIds: p.characterIds?.length ? p.characterIds : ["char_1"],
           comicBeat: "resolution",
           shotType: "wide",
         };
@@ -399,7 +403,10 @@ export function charactersForPage(
       resolved.push(hit);
     }
   }
-  return resolved.slice(0, 2);
+  // Up to 4 named characters: family stories (child + two parents + pet)
+  // MUST keep their full mandatory cast — the old cap of 2 silently erased
+  // the parents from "Khadidja et ses parents adoptent un chien".
+  return resolved.slice(0, 4);
 }
 
 export function formatPageCharacterLock(
@@ -501,7 +508,9 @@ export function normalizeStoryPlan(
         characterIds = characters.slice(0, 1).map((c) => c.id);
       }
     }
-    characterIds = characterIds.slice(0, 2);
+    // Family scenes may require the full mandatory cast (child + two parents
+    // + pet) — the old cap of 2 silently erased the parents.
+    characterIds = characterIds.slice(0, 4);
 
     const beat =
       p.comicBeat ||
@@ -1287,7 +1296,7 @@ function ensureRichEnvironment(
   const richness =
     "COLORING VALUE: compose a coherent foreground, midground and background with 6–10 LARGE CLOSED colorable objects/zones specific to this scene; ground and sky must also contain meaningful closed shapes. Hero occupies at most 35% of the page. Organic professional ink contours with gently varied line weight — never generic vector clipart or giant glossy emoji eyes.";
   const bans =
-    "No empty white void. No floating characters. No malformed, missing, fused or duplicated limbs. Simplified readable child hands holding objects when relevant. Max 2 characters.";
+    "No empty white void. No floating characters. No malformed, missing, fused or duplicated limbs. Simplified readable child hands holding objects when relevant. ONLY the named cast of this scene — no extra characters.";
 
   // If the model already wrote its own ENVIRONMENT: block, keep it (Fix B: don't stack
   // conflicting canned environments on top of the model's own scene-derived one).

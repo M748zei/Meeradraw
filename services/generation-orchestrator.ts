@@ -745,13 +745,18 @@ export class GenerationOrchestrator {
 
     const imageProvider = getImageProvider();
 
-    const coverHero = parentMode
-      ? (() => {
-          const hero =
-            plan.characters.find((c) => c.id === "char_1") || plan.characters[0];
-          return hero ? [hero] : coverCharacters(plan).slice(0, 1);
-        })()
-      : coverCharacters(plan);
+    // Cover cast: the hero FIRST, then the rest of the mandatory cast (up to
+    // 4). The old parent-mode hero-only cover hid the family from a family
+    // story ("Khadidja et ses parents adoptent un chien" → cover sans parents).
+    const coverHero = (() => {
+      const base = coverCharacters(plan);
+      const hero =
+        plan.characters.find((c) => c.id === "char_1") || plan.characters[0];
+      const ordered = hero
+        ? [hero, ...base.filter((c) => c.id !== hero.id)]
+        : base;
+      return ordered.slice(0, 4);
+    })();
     const coverAction =
       plan.pages.find((p) => p.action && p.comicBeat === "action")?.action ||
       plan.pages.find((p) => p.action)?.action ||
@@ -792,7 +797,9 @@ export class GenerationOrchestrator {
         coverReferenceImageUrls.length === 0 && !characterSheetUrl,
       coverTitle: useOverlayTitle ? undefined : plan.title,
       action: coverAction,
-      refScene: `${coverAction}. Draw ONLY the one hero child in action — no crowd of extra children.`,
+      refScene: `${coverAction}. Draw EXACTLY the ${coverHero.length} named cast character(s) — ${coverHero
+        .map((c) => c.name)
+        .join(", ")} — every one clearly visible and recognizable; no crowd, no extra children, no missing characters.`,
       settingElements: settingElementsForScene(
         settingBible?.elements,
         `${coverAction} ${plan.summary}`,
@@ -1024,22 +1031,22 @@ export class GenerationOrchestrator {
         (typeof book.child_gender === "string" && book.child_gender.trim()) ||
         undefined;
       const genderBits = heroGenderPromptBits(childGender);
-      const scenePrompt = [
-        scene || storyText || plan.summary,
-        page.shot_type ? `Shot: ${page.shot_type}.` : "",
-        page.comic_beat ? `Beat: ${page.comic_beat}.` : "",
-        parentMode ? genderBits.positive : "",
-        "PREMIUM full-scene coloring page, not a portrait: foreground, midground and background with 6–10 LARGE CLOSED scene-specific shapes to color. Hero occupies at most 35% of the page. Clean organic children's-book ink with gently varied line weight, natural modest eyes and coherent anatomy. No empty sky or ground, no generic clipart, no giant glossy emoji eyes. Max 2 characters on this page. EXACTLY the named cast with correct species — no clones or background children.",
-      ]
-        .filter(Boolean)
-        .join(" ");
-
       const pageCharacters = planPage
         ? charactersForPage(plan, planPage)
         : plan.characters.filter((character) =>
             characterIds.includes(character.id)
           );
       const expectedCast = expectedCastFor(pageCharacters);
+      const castCount = Math.max(1, expectedCast.length);
+      const scenePrompt = [
+        scene || storyText || plan.summary,
+        page.shot_type ? `Shot: ${page.shot_type}.` : "",
+        page.comic_beat ? `Beat: ${page.comic_beat}.` : "",
+        parentMode ? genderBits.positive : "",
+        `PREMIUM full-scene coloring page, not a portrait: foreground, midground and background with 6–10 LARGE CLOSED scene-specific shapes to color. Hero occupies at most 35% of the page. Clean organic children's-book ink with gently varied line weight, natural modest eyes and coherent anatomy. No empty sky or ground, no generic clipart, no giant glossy emoji eyes. EXACTLY ${castCount} named character(s) on this page — the full mandatory cast, every one clearly visible and recognizable, correct species — no clones, no missing characters, no background children.`,
+      ]
+        .filter(Boolean)
+        .join(" ");
       const referenceImageUrls = pageCharacters
         .map((character) => sheetCrops[character.id]?.url)
         .filter((url): url is string => Boolean(url));

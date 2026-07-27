@@ -1170,6 +1170,7 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
     settingElements: input.settingElements,
     heroGender: input.heroGender,
     consistencyMode: input.consistencyMode,
+    castCount: input.expectedCast?.length,
   });
 }
 
