@@ -310,7 +310,7 @@ export async function POST(request: Request) {
             illustration_url: persisted.url,
             illustration_path: persisted.path,
             generation_status: "completed",
-            qc_stats: qcStats,
+            qc_stats: firestoreSafe(qcStats),
             retry_token: null,
             updated_at: new Date().toISOString(),
           });

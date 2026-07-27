@@ -1122,7 +1122,7 @@ export class GenerationOrchestrator {
         illustration_url: persisted.url,
         illustration_path: persisted.path,
         generation_status: "completed",
-        qc_stats: pageStats,
+        qc_stats: firestoreSafe(pageStats),
         updated_at: new Date().toISOString(),
       });
 
