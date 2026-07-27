@@ -21,11 +21,26 @@ async function establishSession() {
   if (!token) throw new Error("Session impossible");
   const res = await fetch("/api/auth/session", {
     method: "POST",
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ idToken: token }),
   });
   const json = await res.json();
   if (!json.success) throw new Error(json.error?.message || "Session impossible");
+
+  // Do not navigate on a JSON-only success. Confirm that the browser retained
+  // the HttpOnly cookie and that the server can validate it first.
+  const check = await fetch("/api/auth/session", {
+    method: "GET",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  const checkJson = await check.json();
+  if (!check.ok || !checkJson.success) {
+    throw new Error(
+      "La connexion Google a réussi, mais le navigateur n’a pas conservé la session. Réessayez après avoir autorisé les cookies pour MeeraDraw."
+    );
+  }
 }
 
 async function resolvePostAuthPath(requestedNext: string) {
