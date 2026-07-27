@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import {
+  getRedirectResult,
   GoogleAuthProvider,
   signInWithEmailAndPassword,
-  signInWithPopup,
+  signInWithRedirect,
 } from "firebase/auth";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,23 @@ async function resolvePostAuthPath(requestedNext: string) {
   return safe;
 }
 
+function friendlyGoogleError(error: unknown): string {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String(error.code)
+      : "";
+  if (code === "auth/unauthorized-domain") {
+    return "Connexion Google non autorisée sur ce domaine. Contactez le support MeeraDraw.";
+  }
+  if (code === "auth/operation-not-allowed") {
+    return "La connexion Google n’est pas encore activée. Contactez le support MeeraDraw.";
+  }
+  if (code === "auth/network-request-failed") {
+    return "Connexion réseau interrompue. Vérifiez Internet puis réessayez.";
+  }
+  return error instanceof Error ? error.message : "Connexion Google impossible";
+}
+
 function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
@@ -51,6 +69,28 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured()) return;
+    let active = true;
+    void (async () => {
+      try {
+        const result = await getRedirectResult(getClientAuth());
+        if (!result || !active) return;
+        setLoading(true);
+        await establishSession();
+        router.push(await resolvePostAuthPath(next));
+        router.refresh();
+      } catch (err) {
+        if (active) setError(friendlyGoogleError(err));
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [next, router]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -80,13 +120,11 @@ function LoginForm() {
         router.push(next);
         return;
       }
-      await signInWithPopup(getClientAuth(), new GoogleAuthProvider());
-      await establishSession();
-      router.push(await resolvePostAuthPath(next));
-      router.refresh();
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+      await signInWithRedirect(getClientAuth(), provider);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Connexion Google impossible");
-    } finally {
+      setError(friendlyGoogleError(err));
       setLoading(false);
     }
   }
