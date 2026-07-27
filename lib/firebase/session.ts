@@ -4,30 +4,25 @@ import { cache } from "react";
 
 export const SESSION_COOKIE = "__session";
 const EXPIRES_IN_MS = 60 * 60 * 24 * 5 * 1000; // 5 days
+export const SESSION_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  maxAge: EXPIRES_IN_MS / 1000,
+  path: "/",
+  sameSite: "lax" as const,
+};
 
 export async function createSessionCookie(idToken: string) {
-  const sessionCookie = await getAdminAuth().createSessionCookie(idToken, {
+  return getAdminAuth().createSessionCookie(idToken, {
     expiresIn: EXPIRES_IN_MS,
   });
-  const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, sessionCookie, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    maxAge: EXPIRES_IN_MS / 1000,
-    path: "/",
-    sameSite: "lax",
-  });
-  return sessionCookie;
 }
 
 export async function clearSessionCookie() {
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    ...SESSION_COOKIE_OPTIONS,
     maxAge: 0,
-    path: "/",
-    sameSite: "lax",
   });
 }
 
