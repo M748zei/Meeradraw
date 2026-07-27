@@ -400,6 +400,9 @@ Rappel : FIDÉLITÉ histoire du parent d'abord ; héros = ENFANT au bon genre ; 
 export const COLORING_NEGATIVE_PROMPT = [
   "color, colored, grayscale, gray shading, shadows, gradients, cross-hatching, hatching,",
   "filled black areas, solid black fills, screentones, texture noise,",
+  "black background, dark background, inverted colors, negative image, white lines on black,",
+  "silhouette, filled silhouettes, solid dark shapes, black masses, mostly black page,",
+  "musical notes, music symbols, random glyphs, fake letters, gibberish characters, decorative symbols,",
   "photorealistic, photo, 3D render, painting, watercolor, realistic rendering,",
   "blurry, low quality, messy lines, sketchy, unfinished,",
   "text, letters, words, caption, watermark, logo, signature, page numbers, speech bubbles, dialogue balloons, text boxes,",
@@ -424,6 +427,15 @@ export const COLORING_NEGATIVE_PROMPT = [
  */
 export const ANTI_LINEUP_NEGATIVE =
   "characters standing in a row, front-facing lineup, model sheet, character reference sheet, static group photo, characters posing side by side, everyone facing the camera, characters standing still doing nothing";
+
+/**
+ * Final print rendering contract — injected into every strict page/cover
+ * prompt. Prod gen 4f8980ea shipped 70–95% black pages: the model returned
+ * shaded/filled art, and binarization turned every fill into a black slab.
+ * The render must be born as open line art, not repaired into one.
+ */
+export const PRINT_RENDER_CONTRACT =
+  "PRINT CONTRACT: PURE WHITE paper background with THIN clean continuous BLACK outlines. Every enclosed shape stays WHITE inside so a child can color it. NEVER solid black areas, NEVER filled silhouettes, NEVER a black or dark background, NEVER white-lines-on-black negative rendering, NEVER shading or gray tones. No musical notes, letters, glyphs or decorative symbols.";
 
 /** Soft, printable child faces — injected into covers and pages. */
 export const CHILD_SAFE_FACE_POSITIVE =
@@ -529,6 +541,7 @@ export function buildColoringPagePrompt(params: {
 
   return [
     "TRUE COLORING-BOOK PAGE — ONE SINGLE FULL-PAGE CONTINUOUS SCENE. NO comic panels, NO split frames, NO grid, NO gutters, NO speech bubbles, NO captions or text inside the image.",
+    PRINT_RENDER_CONTRACT,
     craft,
     params.consistencyMode ? BOOK_SERIES_STYLE_LOCK : "",
     genderBits.positive,
@@ -695,6 +708,7 @@ export function buildReferenceGuidedScenePrompt(params: {
   if ((params.scene || "").length < 420) {
     return [
       "TRUE COLORING PAGE: ONE continuous full-page B&W scene; NO panels, frames, grid, gutters, bubbles, captions or text. Keep ONLY reference identity (face, hair, outfit, species); discard its pose and background.",
+      PRINT_RENDER_CONTRACT,
       params.action ? `ACTION mid-motion: ${params.action}.` : "",
       `SCENE with a rich colorable environment: ${params.scene}`,
       anchors.length ? `Draw these props large: ${anchors.join(", ")}.` : "",
@@ -710,6 +724,7 @@ export function buildReferenceGuidedScenePrompt(params: {
   return [
     // ORDER IS LOAD-BEARING (see history above): B&W directive FIRST, before the scene.
     "Redraw the reference characters in a NEW scene as an expert children's coloring book page: ONE SINGLE FULL-PAGE CONTINUOUS COMPOSITION — NEVER comic panels, split frames, grids, gutters, speech bubbles, captions or text boxes. PURE BLACK AND WHITE LINE ART ONLY, bold thick uniform black outlines on white paper, strong clean confident ink lines suitable for printing, large white areas to color, closed shapes, absolutely NO color, no colored fills, no shading, no grey, no text, no letters, no watermark, no signage.",
+    PRINT_RENDER_CONTRACT,
     // Audit fix T2: decouple IDENTITY (keep) from COMPOSITION (discard). The reference
     // is a front-facing lineup and used to dictate every page's composition.
     "From the reference image keep ONLY the characters' IDENTITY: same faces, hair, outfits, proportions and animal species (a fox stays the SAME real four-legged fox walking on four paws, not a dog, not a person, not bipedal).",

@@ -47,6 +47,7 @@ const HARD_COVER_VERDICT_BLOCKLIST: readonly RegExp[] = [
   /^nsfw:/i,
   /^dangerous:/i,
   /^corrupt:/i,
+  /^raster-/i,
   /^blur:/i,
   /^orientation:/i,
   /^off-topic:/i,

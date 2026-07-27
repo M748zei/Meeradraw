@@ -74,7 +74,7 @@ export function recordAttempt(
 }
 
 export type StrictGateOutcome =
-  | { accept: true; mode: "clean" | "repairable-color" | "soft-cover" | "non-strict" }
+  | { accept: true; mode: "clean" | "soft-cover" | "non-strict" }
   | { accept: false; errorMessage: string };
 
 /**
@@ -82,12 +82,16 @@ export type StrictGateOutcome =
  * influence this decision — it exists for telemetry.
  *
  *  - clean: score 0;
- *  - repairable-color: pure chroma leakage on an otherwise clean image (the
- *    print normalization converts it to line art) — judged on the BEST
- *    attempt's verdicts, never the history;
  *  - soft-cover: closed allowlist (lineup / action-energy) via
  *    canSoftAcceptCover, hard tags always reject;
  *  - otherwise strict → terminal error describing ONLY the best attempt.
+ *
+ * There is deliberately NO "repairable color" acceptance anymore: prod gen
+ * 4f8980ea shipped 70–95%-black pages because colored candidates were
+ * accepted on the promise that print normalization would fix them, and the
+ * destroyed post-threshold bytes were never re-checked. Strict candidates are
+ * now normalized FIRST and judged on their final bytes (lib/print-normalize),
+ * so a defect on the best attempt is always a real defect of what would ship.
  */
 export function strictGateOutcome(params: {
   strictQuality: boolean;
@@ -97,10 +101,6 @@ export function strictGateOutcome(params: {
   const { strictQuality, isCover, best } = params;
   if (best.score === 0) return { accept: true, mode: "clean" };
   if (!strictQuality) return { accept: true, mode: "non-strict" };
-
-  const repairableColorOnly =
-    best.colored && !best.blank && best.score === 2 && best.verdicts.length === 0;
-  if (repairableColorOnly) return { accept: true, mode: "repairable-color" };
 
   if (
     canSoftAcceptCover({

@@ -1075,20 +1075,18 @@ async function runEmulatorLedgerTests() {
 async function runBestAttemptDecisionTests() {
   console.log("\n── décision QC = meilleure tentative uniquement ──");
 
-  await test("tentative 1 hard-reject n'empêche pas la réparation couleur de la tentative 2", () => {
+  await test("plus JAMAIS d'acceptation « couleur réparable » en strict (incident 4f8980ea)", () => {
+    // Prod gen 4f8980ea: colored candidates were accepted on the promise that
+    // print normalization would repair them — threshold() then shipped 70–95%
+    // black pages. A strict candidate with a defect score is now ALWAYS
+    // rejected; color is handled upstream by judging the FINAL render bytes.
     const tracker = createAttemptTracker();
-    // Attempt 1: identity + story hard failures (the incident pattern).
     recordAttempt(tracker, {
       score: 11,
-      verdicts: [
-        "identity:Khadidja=80",
-        "cover-lineup:action_visible, story_related",
-        "story-mismatch:action_visible, story_related",
-      ],
+      verdicts: ["identity:Khadidja=80", "story-mismatch:action_visible"],
       blank: false,
       colored: false,
     });
-    // Attempt 2: clean composition, only repairable color leakage.
     recordAttempt(tracker, {
       score: 2,
       verdicts: [],
@@ -1101,8 +1099,27 @@ async function runBestAttemptDecisionTests() {
       isCover: true,
       best: tracker.best!,
     });
-    assert.equal(outcome.accept, true);
-    assert.equal((outcome as { mode: string }).mode, "repairable-color");
+    assert.equal(outcome.accept, false, "colored score-2 ne doit plus être accepté");
+  });
+
+  await test("verdicts raster (aplats noirs/inversion) → hard reject, jamais soft-accept", () => {
+    const tracker = createAttemptTracker();
+    recordAttempt(tracker, {
+      score: 5,
+      verdicts: ["raster-black-flood:83% dark"],
+      blank: false,
+      colored: false,
+    });
+    const outcome = strictGateOutcome({
+      strictQuality: true,
+      isCover: true,
+      best: tracker.best!,
+    });
+    assert.equal(outcome.accept, false);
+    assert.match(
+      (outcome as { errorMessage: string }).errorMessage,
+      /raster-black-flood/
+    );
   });
 
   await test("tentative 2 propre après hard-reject → acceptée (pas de contamination)", () => {
@@ -1559,6 +1576,371 @@ async function runProviderRerollIntegrationTests() {
   });
 }
 
+/**
+ * P0 — REAL provider pipeline with the incident's failure mode: fal returns a
+ * shaded/colored page; the print render (the exact bytes that would ship) is
+ * black-flooded; the deterministic raster gate rejects it, routes the print
+ * boost, and only a clean-line-art attempt is accepted — with vision judging
+ * the FINAL data-URL bytes, and the uploaded buffer being the gated render.
+ */
+async function runStrictPagePrintIntegrationTests() {
+  console.log("\n── intégration page stricte: octets finaux gated (incident 4f8980ea) ──");
+  const fx = await buildRasterFixtures();
+  const { FalImageProvider } = await import("../services/ai/fal-provider");
+  const { StorageService } = await import("../services/storage-service");
+  const { analyzeRasterStats, rasterVerdicts } = await import("../lib/raster-gate");
+  const { RASTER_LINE_ART_BOOST } = await import("../services/ai/qc-boosts");
+
+  async function runPageScenario(falImages: Buffer[]) {
+    const origFetch = globalThis.fetch;
+    const origUpload = StorageService.prototype.uploadBytes;
+    const savedEnv = {
+      FAL_KEY: process.env.FAL_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      FAL_REF_ENDPOINT: process.env.FAL_REF_ENDPOINT,
+      VISION_QC: process.env.VISION_QC,
+      GROQ_API_KEY: process.env.GROQ_API_KEY,
+    };
+    process.env.FAL_KEY = "test-fal-key";
+    process.env.OPENAI_API_KEY = "test-openai-key";
+    process.env.FAL_REF_ENDPOINT = "https://fal.run/fal-ai/flux-kontext/dev";
+    delete process.env.VISION_QC;
+    delete process.env.GROQ_API_KEY;
+
+    const falBodies: Array<Record<string, unknown>> = [];
+    const visionImageUrls: string[] = [];
+    let uploadedFinal: Buffer | null = null;
+    const json = (obj: unknown) =>
+      new Response(JSON.stringify(obj), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+
+    globalThis.fetch = (async (url: unknown, init?: { method?: string; body?: string }) => {
+      const target = String(url);
+      if (init?.method === "POST" && /fal\.run/.test(target)) {
+        falBodies.push(JSON.parse(String(init.body)));
+        return json({ images: [{ url: `https://img.test/fal-${falBodies.length}.png` }] });
+      }
+      if (init?.method === "POST" && /openai\.com/.test(target)) {
+        const req = JSON.parse(String(init.body)) as {
+          messages: Array<{
+            content: Array<{ type: string; text?: string; image_url?: { url: string } }>;
+          }>;
+        };
+        for (const part of req.messages[0]?.content || []) {
+          if (part.type === "image_url" && part.image_url?.url) {
+            visionImageUrls.push(part.image_url.url.slice(0, 40));
+          }
+        }
+        const question =
+          req.messages[0]?.content?.find((c) => c.type === "text")?.text || "";
+        let payload: unknown = { matches: true, count: 1 };
+        if (question.includes("Compare every named character")) {
+          payload = { matches: true, scores: [{ name: "Khadija", score: 92 }] };
+        } else if (question.includes("should contain EXACTLY")) {
+          payload = { count: 1, matches: true };
+        } else if (question.includes("coloring-book page")) {
+          payload = {
+            lineup: false,
+            action_visible: true,
+            single_full_page: true,
+            environment_rich: true,
+            anatomy_valid: true,
+            professional_line_art: true,
+          };
+        }
+        return json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
+      }
+      const falMatch = target.match(/^https:\/\/img\.test\/fal-(\d+)\.png$/);
+      if (falMatch) {
+        const idx = Math.min(Number(falMatch[1]) - 1, falImages.length - 1);
+        return new Response(new Uint8Array(falImages[idx]), { status: 200 });
+      }
+      return new Response(new Uint8Array(falImages[0]), { status: 200 });
+    }) as typeof fetch;
+    StorageService.prototype.uploadBytes = async (
+      _path: string,
+      bytes: Uint8Array | Buffer
+    ) => {
+      uploadedFinal = Buffer.from(bytes);
+      return "https://storage.mock/final-print.png";
+    };
+
+    const qcStats: Record<string, unknown> = {};
+    try {
+      const provider = new FalImageProvider();
+      const result = await provider.generateImage({
+        prompt: "Khadija joue avec son chien dans le jardin familial.",
+        style: "cute",
+        characterBible: "Khadija, young girl child",
+        isColoringPage: true,
+        referenceImageUrl: "https://img.test/ref-khadija.png",
+        referenceImageUrls: ["https://img.test/ref-khadija.png"],
+        action: "Khadija lance une balle à son chien",
+        expectedCast: [{ name: "Khadija", kind: "human", visualLock: "young girl" }],
+        strictQuality: true,
+        qcStats,
+        maxVisionRerolls: 1,
+        maxQualityRerolls: 2,
+        maxProviderAttempts: 1,
+        skipRecovery: true,
+        seed: 4242,
+        consistencyMode: true,
+      });
+      return { result, falBodies, qcStats, uploadedFinal, visionImageUrls, error: null as Error | null };
+    } catch (err) {
+      return { result: null, falBodies, qcStats, uploadedFinal, visionImageUrls, error: err as Error };
+    } finally {
+      globalThis.fetch = origFetch;
+      StorageService.prototype.uploadBytes = origUpload;
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) delete process.env[key as keyof typeof savedEnv];
+        else process.env[key as keyof typeof savedEnv] = value;
+      }
+    }
+  }
+
+  await test("image ombrée → rendu final noirci REJETÉ → boost print → line art accepté", async () => {
+    const { result, falBodies, qcStats, uploadedFinal, visionImageUrls, error } =
+      await runPageScenario([fx.shadedColored, fx.goodLineArt]);
+    assert.equal(error, null, error?.message);
+    assert.equal(falBodies.length, 2, "un reroll après le rejet raster");
+    assert.match(String(falBodies[1].prompt), /PURE WHITE background/,
+      "le reroll porte le boost print (RASTER_LINE_ART_BOOST)");
+    assert.equal(String(falBodies[1].prompt).includes(RASTER_LINE_ART_BOOST), true);
+    // L'historique montre le rejet raster de la tentative 1.
+    const history = (qcStats.attemptHistory || []) as Array<{ verdicts: string[] }>;
+    assert.equal(
+      history[0].verdicts.some((v) => v.startsWith("raster-")),
+      true,
+      JSON.stringify(history)
+    );
+    // Les octets UPLOADÉS sont le rendu final gated : noir-sur-blanc propre.
+    assert.ok(uploadedFinal, "un buffer final doit être uploadé");
+    const uploadedStats = await analyzeRasterStats(uploadedFinal!);
+    assert.deepEqual(rasterVerdicts(uploadedStats), [], JSON.stringify(uploadedStats));
+    assert.equal(result?.url, "https://storage.mock/final-print.png");
+    // La vision a jugé un data URL (les octets finaux), pas l'URL fal brute.
+    assert.equal(
+      visionImageUrls.some((u) => u.startsWith("data:image/")),
+      true,
+      visionImageUrls.join(" | ")
+    );
+  });
+
+  await test("toutes les tentatives ombrées → échec strict raster, AUCUN upload, jamais completed", async () => {
+    const { result, uploadedFinal, error } = await runPageScenario([
+      fx.shadedColored,
+      fx.shadedColored,
+      fx.shadedColored,
+    ]);
+    assert.equal(result, null);
+    assert.ok(error);
+    assert.match(error!.message, /strict visual quality gate/);
+    assert.match(error!.message, /raster-/);
+    assert.equal(uploadedFinal, null, "aucun octet corrompu ne doit être persisté");
+  });
+}
+
+/** Synthetic raster fixtures (sharp SVG renders) shared by the P0 raster tests. */
+async function buildRasterFixtures() {
+  const sharp = (await import("sharp")).default;
+  const render = (svg: string) => sharp(Buffer.from(svg)).png().toBuffer();
+  const size = `width="512" height="512"`;
+  const frame = (inner: string, bg = "white") =>
+    `<svg xmlns="http://www.w3.org/2000/svg" ${size}><rect width="512" height="512" fill="${bg}"/>${inner}</svg>`;
+
+  // Good detailed line art: strokes reaching the borders, small legit dark
+  // hair blob (~2% of page) — must PASS (dark skin/hair calibration).
+  const goodLineArt = await render(
+    frame(
+      `<g stroke="black" stroke-width="6" fill="none">
+        <path d="M0 480 L 512 470"/><path d="M0 380 C 120 300, 380 300, 512 360"/>
+        <circle cx="250" cy="200" r="90"/><rect x="30" y="30" width="130" height="90"/>
+        <rect x="360" y="40" width="120" height="140"/><path d="M60 512 L 100 300 L 160 512"/>
+        <path d="M0 100 L 80 0"/><path d="M420 512 L 470 380 L 512 420"/>
+        <circle cx="250" cy="440" r="40"/><path d="M180 260 Q 250 320 330 260"/>
+      </g>
+      <ellipse cx="250" cy="130" rx="55" ry="30" fill="black"/>`
+    )
+  );
+  // 80%+ solid black (the incident's shipped pages).
+  const blackFlood = await render(
+    frame(`<rect x="0" y="60" width="512" height="452" fill="black"/>`)
+  );
+  // Inversion: white strokes on a black background.
+  const inverted = await render(
+    frame(
+      `<g stroke="white" stroke-width="6" fill="none">
+        <path d="M0 480 L 512 470"/><circle cx="250" cy="200" r="90"/>
+        <rect x="30" y="30" width="130" height="90"/><path d="M60 512 L 100 300 L 160 512"/>
+        <path d="M180 260 Q 250 320 330 260"/><rect x="360" y="40" width="120" height="140"/>
+      </g>`,
+      "black"
+    )
+  );
+  // Filled silhouette: one massive solid shape (~30% of the page).
+  const silhouette = await render(
+    frame(
+      `<g stroke="black" stroke-width="5" fill="none"><path d="M0 490 L 512 480"/><rect x="20" y="20" width="100" height="60"/></g>
+       <path d="M150 512 L 170 160 Q 256 60 342 160 L 362 512 Z" fill="black"/>`
+    )
+  );
+  // Nearly empty page.
+  const nearlyEmpty = await render(
+    frame(`<circle cx="256" cy="256" r="18" fill="none" stroke="black" stroke-width="2"/>`)
+  );
+  // Shaded/colored artwork (what fal returned in prod): colored fills +
+  // mid-gray shading on most of the page — looks fine RAW, dies in threshold.
+  const shadedColored = await render(
+    frame(
+      `<rect width="512" height="512" fill="#8fb8d8"/>
+       <rect x="0" y="330" width="512" height="182" fill="#7a9a53"/>
+       <circle cx="250" cy="210" r="110" fill="#a9744f" stroke="black" stroke-width="4"/>
+       <rect x="60" y="60" width="150" height="110" fill="#888888"/>
+       <path d="M340 90 L 470 90 L 405 220 Z" fill="#666688"/>`
+    )
+  );
+  return { goodLineArt, blackFlood, inverted, silhouette, nearlyEmpty, shadedColored };
+}
+
+/**
+ * P0 — deterministic raster gate on FINAL bytes (prod gen 4f8980ea: 70–95%
+ * black pages shipped). Real code: lib/raster-gate + lib/print-normalize.
+ */
+async function runRasterGateTests() {
+  console.log("\n── gate raster déterministe (octets finaux) ──");
+  const { analyzeRasterStats, rasterVerdicts } = await import("../lib/raster-gate");
+  const { prepareStrictPrintCandidate } = await import("../lib/print-normalize");
+  const fx = await buildRasterFixtures();
+
+  await test("bon line art (avec cheveux noirs légitimes) → AUCUN verdict", async () => {
+    const stats = await analyzeRasterStats(fx.goodLineArt);
+    assert.deepEqual(rasterVerdicts(stats), [], JSON.stringify(stats));
+    assert.ok(stats.darkRatio < 0.35, `darkRatio=${stats.darkRatio}`);
+    assert.ok(stats.whiteRatio > 0.5, `whiteRatio=${stats.whiteRatio}`);
+  });
+
+  await test("page majoritairement noire → raster-black-flood", async () => {
+    const verdicts = rasterVerdicts(await analyzeRasterStats(fx.blackFlood));
+    assert.equal(verdicts.some((v) => v.startsWith("raster-black-flood:")), true, verdicts.join(";"));
+  });
+
+  await test("inversion (traits blancs sur fond noir) → raster-inverted", async () => {
+    const verdicts = rasterVerdicts(await analyzeRasterStats(fx.inverted));
+    assert.equal(verdicts.some((v) => v.startsWith("raster-inverted:")), true, verdicts.join(";"));
+  });
+
+  await test("silhouette pleine massive → raster-silhouette", async () => {
+    const verdicts = rasterVerdicts(await analyzeRasterStats(fx.silhouette));
+    assert.equal(verdicts.some((v) => v.startsWith("raster-silhouette:")), true, verdicts.join(";"));
+  });
+
+  await test("page presque vide → raster-empty", async () => {
+    const verdicts = rasterVerdicts(await analyzeRasterStats(fx.nearlyEmpty));
+    assert.equal(verdicts.some((v) => v.startsWith("raster-empty:")), true, verdicts.join(";"));
+  });
+
+  await test("FORENSIC 4f8980ea : l'image ombrée est saine BRUTE et détruite PAR la normalisation", async () => {
+    // Raw shaded image: no black flood before the print pipeline…
+    const rawStats = await analyzeRasterStats(fx.shadedColored);
+    assert.ok(
+      rawStats.darkRatio < 0.2,
+      `l'image brute n'a pas d'aplats noirs (darkRatio=${rawStats.darkRatio})`
+    );
+    // …the threshold-based print render is where the black appears — and the
+    // gated candidate now REPORTS it instead of shipping it.
+    const candidate = await prepareStrictPrintCandidate(fx.shadedColored);
+    assert.ok(
+      candidate.stats.darkRatio > 0.45,
+      `la normalisation crée les aplats (darkRatio=${candidate.stats.darkRatio})`
+    );
+    assert.equal(
+      candidate.verdicts.some((v) => v.startsWith("raster-")),
+      true,
+      "le candidat final DOIT être rejeté par le gate raster"
+    );
+  });
+
+  await test("bonne page → candidat final propre (aucun verdict après normalisation)", async () => {
+    const candidate = await prepareStrictPrintCandidate(fx.goodLineArt);
+    assert.deepEqual(candidate.verdicts, [], JSON.stringify(candidate.stats));
+    assert.equal(candidate.repairedInversion, false);
+  });
+
+  await test("inversion réparée sur COPIE puis re-gatée intégralement", async () => {
+    const candidate = await prepareStrictPrintCandidate(fx.inverted);
+    assert.equal(candidate.repairedInversion, true, candidate.verdicts.join(";"));
+    assert.deepEqual(candidate.verdicts, [], "la version réparée repasse tous les gates");
+    const finalStats = await (await import("../lib/raster-gate")).analyzeRasterStats(candidate.png);
+    assert.ok(finalStats.whiteRatio > 0.5, "le rendu final est noir-sur-blanc");
+  });
+}
+
+/** P0 — natural child-facing narrative text (prod page 6 shipped the raw prompt). */
+async function runNarrativeTextTests() {
+  console.log("\n── texte narratif enfant (lockPlanToParentNarrative) ──");
+  const { sanitizeParentNarrative, lockPlanToParentNarrative } = await import(
+    "../services/ai/character-bible"
+  );
+  const RAW_INCIDENT_SOURCE =
+    "khadija est une petite fille. HISTOIRE DU PARENT (intrigue obligatoire, ne pas remplacer) : khadija et ses parents adoptent un chien";
+
+  await test("sanitizeParentNarrative retire le cadrage technique et le gender-lock", () => {
+    const clean = sanitizeParentNarrative(RAW_INCIDENT_SOURCE);
+    assert.equal(clean, "Khadija et ses parents adoptent un chien.");
+    assert.doesNotMatch(clean, /HISTOIRE DU PARENT/i);
+    assert.doesNotMatch(clean, /est une petite fille/i);
+  });
+
+  await test("la dernière page verrouillée porte une phrase naturelle, jamais le prompt brut", () => {
+    const plan = {
+      title: "L'aventure de Khadija",
+      summary: "Khadija adopte un chien avec ses parents.",
+      audienceAge: "6-8 ans",
+      world: { setting: "maison familiale", palette: "chaud", mood: "tendre" },
+      characters: [
+        {
+          id: "char_1",
+          name: "Khadija",
+          description: "héroïne",
+          appearance: "petite fille",
+          visualLock: "young girl child named Khadija",
+          personality: "curieuse",
+          kind: "human",
+        },
+      ],
+      pages: [1, 2, 3, 4, 5, 6].map((n) => ({
+        pageNumber: n,
+        title: `Page ${n}`,
+        storyText: `Khadija vit une étape ${n} de l'adoption du chien.`,
+        illustrationDescription: `Khadija scene ${n} with her parents and the dog`,
+        characterIds: ["char_1"],
+        action: `Khadija does adoption step ${n}`,
+      })),
+    };
+    const locked = lockPlanToParentNarrative(structuredClone(plan), {
+      sourceNarrative: RAW_INCIDENT_SOURCE,
+      childName: "Khadija",
+      childGender: "girl",
+      audience: "6-8 ans",
+      pageCount: 6,
+    });
+    const last = locked.pages[locked.pages.length - 1];
+    assert.equal(last.storyText, "Khadija et ses parents adoptent un chien.");
+    for (const page of locked.pages) {
+      assert.doesNotMatch(page.storyText || "", /HISTOIRE DU PARENT/i, `page ${page.pageNumber}`);
+      assert.doesNotMatch(page.storyText || "", /accomplit sa mission\s*:/i, `page ${page.pageNumber}`);
+      assert.doesNotMatch(
+        page.storyText || "",
+        /est une petite fille\./i,
+        `page ${page.pageNumber}`
+      );
+    }
+  });
+}
+
 async function main() {
   console.log("generation-reliability-suite\n");
   await runSoftAcceptTests();
@@ -1569,6 +1951,9 @@ async function main() {
   await runSeedDiversityTests();
   await runBoostRoutingTests();
   await runProviderRerollIntegrationTests();
+  await runRasterGateTests();
+  await runStrictPagePrintIntegrationTests();
+  await runNarrativeTextTests();
   await runEmulatorLedgerTests();
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

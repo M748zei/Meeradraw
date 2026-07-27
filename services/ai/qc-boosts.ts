@@ -63,6 +63,9 @@ export const SHARP_PRINT_BOOST =
 export const CHILD_SAFE_BOOST =
   "CRITICAL CHILD SAFETY: gentle, joyful, reassuring children's-book content only — absolutely no scary, violent, dark, injured or distressing imagery of any kind.";
 
+export const RASTER_LINE_ART_BOOST =
+  "CRITICAL PRINT RENDERING: PURE WHITE background with THIN, clean, continuous BLACK OUTLINES only. Every enclosed region stays WHITE and open for a child to color. ABSOLUTELY NO solid black areas, NO filled black shapes or silhouettes, NO black background, NO white-lines-on-black negative/inverted rendering, NO shading, NO grayscale tones, NO fully painted zones. Large friendly open shapes suitable for ages 6–8. NO text, letters, glyphs, musical notes, decorative symbols, signature or watermark anywhere in the image.";
+
 /**
  * COVER_STORY_ACTION_BOOST — re-injects the exact planned action and a short
  * story summary so the re-roll shows the story instead of a generic pose.
@@ -181,6 +184,10 @@ export function routeBoostsForVerdicts(
       push(PREMIUM_PAGE_BOOST);
     } else if (tag.startsWith("unsafe:")) {
       push(CHILD_SAFE_BOOST);
+    } else if (tag.startsWith("raster-")) {
+      // Deterministic final-render defects (black flood, inversion,
+      // silhouette, empty, no white background) — see lib/raster-gate.ts.
+      push(RASTER_LINE_ART_BOOST);
     }
   }
   return boosts;

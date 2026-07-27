@@ -213,6 +213,10 @@ export interface ImageQcStats {
   bestAttemptId?: string;
   bestScore?: number;
   bestVerdicts?: string[];
+  /** Raster stats of the accepted FINAL print render (lib/raster-gate). */
+  finalRaster?: Record<string, number>;
+  /** True when an inverted render was deterministically repaired + re-gated. */
+  rasterRepairedInversion?: boolean;
   /** True when vision QC confirmed lineup syndrome at least once. */
   lineupDetected?: boolean;
   /** True when a delivered candidate diverged from its visual reference. */

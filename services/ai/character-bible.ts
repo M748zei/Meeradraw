@@ -199,6 +199,33 @@ export function enforceParentChildHero(
  * parent's story. Forces title/summary/world + scrubbed page captions onto the
  * locked narrative theme (princess/village/etc.).
  */
+/**
+ * Strip technical framing from the composed parent idea so it can be shown to
+ * a child. The raw source looks like:
+ *   "khadija est une petite fille. HISTOIRE DU PARENT (intrigue obligatoire,
+ *    ne pas remplacer) : khadija et ses parents adoptent un chien"
+ * Prod gen 4f8980ea shipped that string VERBATIM as page 6's caption.
+ */
+export function sanitizeParentNarrative(source: string): string {
+  let text = String(source || "").trim();
+  // Drop the technical narrative-lock label wherever it appears.
+  text = text.replace(
+    /HISTOIRE DU PARENT\s*\([^)]*\)\s*:?\s*/gi,
+    ""
+  );
+  // Drop the leading gender-lock sentence ("X est une petite fille."…).
+  text = text.replace(
+    /^[^.!?]{1,60}\best\s+(une petite fille|un petit gar[cç]on|un enfant)\s*\.\s*/i,
+    ""
+  );
+  text = text.replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  // Natural child sentence: capital first letter, terminal punctuation.
+  text = text.charAt(0).toUpperCase() + text.slice(1);
+  if (!/[.!?…]$/.test(text)) text += ".";
+  return text;
+}
+
 export function lockPlanToParentNarrative(
   plan: StoryPlan,
   opts: {
@@ -212,7 +239,9 @@ export function lockPlanToParentNarrative(
   const name = opts.childName.trim() || plan.characters[0]?.name || "Héros";
   const themeKey = inferNarrativeThemeKey(opts.sourceNarrative);
   const source = opts.sourceNarrative.trim();
-  const shortSource = source.slice(0, 220);
+  // Child-facing copy NEVER carries the technical framing — only the clean story.
+  const cleanSource = sanitizeParentNarrative(source);
+  const shortSource = (cleanSource || source).slice(0, 220);
 
   let next = enforceParentChildHero(plan, {
     childName: name,
@@ -251,8 +280,13 @@ export function lockPlanToParentNarrative(
       if (i === pages.length - 1) {
         return {
           ...p,
-          title: "La mission accomplie",
-          storyText: `${name} accomplit sa mission : ${shortSource}`.slice(0, 280),
+          title: "La belle fin de l'histoire",
+          // Natural sentence for the child — the parent's own story words,
+          // never the technical prompt framing.
+          storyText: (cleanSource || `${name} a réussi sa belle aventure !`).slice(
+            0,
+            280
+          ),
           action: `${name} completes the exact parent story: ${shortSource}`.slice(
             0,
             320
