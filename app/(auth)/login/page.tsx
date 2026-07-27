@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import {
   GoogleAuthProvider,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   type User,
 } from "firebase/auth";
 import { Logo } from "@/components/brand/logo";
@@ -14,6 +15,11 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { getClientAuth, isFirebaseConfigured } from "@/lib/firebase/client";
+import {
+  consumeGoogleRedirectResult,
+  GOOGLE_REDIRECT_NEXT_KEY,
+  shouldUseGoogleRedirect,
+} from "@/lib/firebase/google-auth-flow";
 import { safeInternalPath } from "@/lib/safe-redirect";
 
 async function establishSession(user: User) {
@@ -91,6 +97,38 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (!isFirebaseConfigured()) return;
+    let active = true;
+
+    void (async () => {
+      try {
+        const credential = await consumeGoogleRedirectResult(getClientAuth());
+        if (!credential || !active) return;
+
+        setLoading(true);
+        const storedNext = safeInternalPath(
+          window.sessionStorage.getItem(GOOGLE_REDIRECT_NEXT_KEY),
+          next
+        );
+        window.sessionStorage.removeItem(GOOGLE_REDIRECT_NEXT_KEY);
+        await establishSession(credential.user);
+        window.location.replace(await resolvePostAuthPath(storedNext));
+      } catch (err) {
+        if (active) {
+          window.sessionStorage.removeItem(GOOGLE_REDIRECT_NEXT_KEY);
+          setError(friendlyGoogleError(err));
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [next]);
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -124,6 +162,13 @@ function LoginForm() {
       }
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: "select_account" });
+
+      if (shouldUseGoogleRedirect()) {
+        window.sessionStorage.setItem(GOOGLE_REDIRECT_NEXT_KEY, next);
+        await signInWithRedirect(getClientAuth(), provider);
+        return;
+      }
+
       const credential = await signInWithPopup(getClientAuth(), provider);
       await establishSession(credential.user);
       window.location.replace(await resolvePostAuthPath(next));

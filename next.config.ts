@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { withWorkflow } from "workflow/next";
+import { firebaseAuthProxyRewrites } from "./config/firebase-auth-proxy";
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -48,7 +49,26 @@ const nextConfig: NextConfig = {
             : []),
         ],
       },
+      {
+        // The proxied Firebase iframe is embedded by MeeraDraw itself. Override
+        // the app-wide anti-framing headers only for these helper resources.
+        source: "/__/auth/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          {
+            key: "Content-Security-Policy",
+            value: "frame-ancestors 'self'",
+          },
+        ],
+      },
     ];
+  },
+  async rewrites() {
+    // Firebase option 3: keep redirect state first-party on Safari/iOS while
+    // transparently serving Firebase's maintained sign-in helper.
+    return firebaseAuthProxyRewrites(
+      process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    );
   },
   async redirects() {
     // Friendly aliases people type or old links share.
