@@ -26,6 +26,22 @@ import {
   persistGenerationStep,
   stepIdempotencyKey,
 } from "../lib/generation-step-ledger";
+import {
+  createAttemptTracker,
+  recordAttempt,
+  strictGateOutcome,
+  strictRejectionMessage,
+} from "../lib/qc-attempts";
+import { generationSeed, seedForReroll } from "../lib/generation-seed";
+import {
+  ANTI_LINEUP_BOOST,
+  ANATOMY_FIX_BOOST,
+  CAST_FIX_BOOST,
+  CHILD_SAFE_BOOST,
+  SINGLE_COMPOSITION_BOOST,
+  TITLE_FIX_BOOST,
+  routeBoostsForVerdicts,
+} from "../services/ai/qc-boosts";
 
 let passed = 0;
 let failed = 0;
@@ -1052,12 +1068,507 @@ async function runEmulatorLedgerTests() {
   });
 }
 
+/**
+ * P0 — best-attempt QC decision decontamination (prod gens 7af5818f/b13a8320).
+ * Tests the REAL decision code used by fal-provider (lib/qc-attempts).
+ */
+async function runBestAttemptDecisionTests() {
+  console.log("\n── décision QC = meilleure tentative uniquement ──");
+
+  await test("tentative 1 hard-reject n'empêche pas la réparation couleur de la tentative 2", () => {
+    const tracker = createAttemptTracker();
+    // Attempt 1: identity + story hard failures (the incident pattern).
+    recordAttempt(tracker, {
+      score: 11,
+      verdicts: [
+        "identity:Khadidja=80",
+        "cover-lineup:action_visible, story_related",
+        "story-mismatch:action_visible, story_related",
+      ],
+      blank: false,
+      colored: false,
+    });
+    // Attempt 2: clean composition, only repairable color leakage.
+    recordAttempt(tracker, {
+      score: 2,
+      verdicts: [],
+      blank: false,
+      colored: true,
+    });
+    assert.equal(tracker.best?.attemptId, "a2");
+    const outcome = strictGateOutcome({
+      strictQuality: true,
+      isCover: true,
+      best: tracker.best!,
+    });
+    assert.equal(outcome.accept, true);
+    assert.equal((outcome as { mode: string }).mode, "repairable-color");
+  });
+
+  await test("tentative 2 propre après hard-reject → acceptée (pas de contamination)", () => {
+    const tracker = createAttemptTracker();
+    recordAttempt(tracker, {
+      score: 9,
+      verdicts: ["identity:Khadidja=80", "story-mismatch:no action"],
+      blank: false,
+      colored: false,
+    });
+    recordAttempt(tracker, { score: 0, verdicts: [], blank: false, colored: false });
+    const outcome = strictGateOutcome({
+      strictQuality: true,
+      isCover: true,
+      best: tracker.best!,
+    });
+    assert.equal(outcome.accept, true);
+    assert.equal((outcome as { mode: string }).mode, "clean");
+  });
+
+  await test("erreur terminale décrit UNIQUEMENT la meilleure tentative", () => {
+    const tracker = createAttemptTracker();
+    recordAttempt(tracker, {
+      score: 11,
+      verdicts: ["identity:Khadidja=78", "story-mismatch:unrelated scene"],
+      blank: false,
+      colored: false,
+    });
+    recordAttempt(tracker, {
+      score: 5,
+      verdicts: ["identity:Khadidja=80"],
+      blank: false,
+      colored: false,
+    });
+    assert.equal(tracker.best?.attemptId, "a2");
+    const outcome = strictGateOutcome({
+      strictQuality: true,
+      isCover: true,
+      best: tracker.best!,
+    });
+    assert.equal(outcome.accept, false);
+    const msg = (outcome as { errorMessage: string }).errorMessage;
+    assert.match(msg, /attempt a2, score 5/);
+    assert.match(msg, /identity:Khadidja=80/);
+    assert.doesNotMatch(msg, /story-mismatch/, "les défauts de la tentative 1 ne fuient pas");
+    assert.doesNotMatch(msg, /Khadidja=78/);
+  });
+
+  await test("aucun verdict d'identité dupliqué dans l'erreur terminale", () => {
+    const tracker = createAttemptTracker();
+    recordAttempt(tracker, {
+      score: 10,
+      verdicts: [
+        "identity:Khadidja=80",
+        "cover-lineup:action_visible, story_related",
+        "story-mismatch:action_visible, story_related",
+        "identity:Khadidja=80",
+      ],
+      blank: false,
+      colored: false,
+    });
+    assert.equal(tracker.best?.verdicts.filter((v) => v.startsWith("identity:")).length, 1);
+    const msg = strictRejectionMessage(tracker.best!);
+    assert.equal(msg.split("identity:Khadidja=80").length - 1, 1);
+  });
+
+  await test("score, verdicts et attempt ID racontent la même décision", () => {
+    const tracker = createAttemptTracker();
+    recordAttempt(tracker, { score: 7, verdicts: ["anatomy:bad hand"], blank: false, colored: false });
+    recordAttempt(tracker, { score: 4, verdicts: ["cast:saw 2"], blank: false, colored: false });
+    recordAttempt(tracker, { score: 6, verdicts: ["craft:clipart"], blank: false, colored: false });
+    const best = tracker.best!;
+    assert.equal(best.attemptId, "a2");
+    assert.equal(best.score, 4);
+    assert.deepEqual(best.verdicts, ["cast:saw 2"]);
+    assert.match(strictRejectionMessage(best), /attempt a2, score 4.*cast:saw 2/);
+    // Full history stays available as telemetry, clearly separated.
+    assert.equal(tracker.attemptHistory.length, 3);
+  });
+
+  await test("soft-accept lineup basé sur la meilleure tentative malgré un historique identity", () => {
+    const tracker = createAttemptTracker();
+    recordAttempt(tracker, {
+      score: 9,
+      verdicts: ["identity:Khadidja=80"],
+      blank: false,
+      colored: false,
+    });
+    recordAttempt(tracker, {
+      score: 2,
+      verdicts: ["cover-lineup:static heroic pose"],
+      blank: false,
+      colored: false,
+    });
+    const outcome = strictGateOutcome({
+      strictQuality: true,
+      isCover: true,
+      best: tracker.best!,
+    });
+    assert.equal(outcome.accept, true);
+    assert.equal((outcome as { mode: string }).mode, "soft-cover");
+  });
+
+  await test("lineup + identity sur la MÊME tentative → rejet (jamais soft-accept)", () => {
+    const tracker = createAttemptTracker();
+    recordAttempt(tracker, {
+      score: 7,
+      verdicts: ["cover-lineup:x", "identity:Khadidja=80"],
+      blank: false,
+      colored: false,
+    });
+    const outcome = strictGateOutcome({
+      strictQuality: true,
+      isCover: true,
+      best: tracker.best!,
+    });
+    assert.equal(outcome.accept, false);
+  });
+
+  await test("seuil identité: 85 passe, 84 échoue, 80 échoue — jamais abaissé", () => {
+    assert.equal(IDENTITY_PASS_SCORE, 85);
+    assert.equal(identityScoresPass([{ score: 85 }], 1), true);
+    assert.equal(identityScoresPass([{ score: 84 }], 1), false);
+    assert.equal(identityScoresPass([{ score: 80 }], 1), false);
+    assert.equal(identityScoresPass([{ score: 100 }, { score: 84 }], 2), false);
+  });
+}
+
+/**
+ * P0 — deterministic seed family with cross-generation diversity.
+ * Automated proof over the two REAL production generation IDs of the incident
+ * (book 4f356812…, paid gen 7af5818f… vs free retry b13a8320…) — no images or
+ * child data involved, only the ID-derived seeds.
+ */
+async function runSeedDiversityTests() {
+  console.log("\n── seeds déterministes + diversité entre générations ──");
+
+  const BOOK = "4f356812-491a-4162-808a-42edd3a83c69";
+  const GEN_PAID = "7af5818f-33d3-42f9-8f4c-a9890425f202";
+  const GEN_FREE = "b13a8320-42c1-4e54-902b-c72bc7dc2dca";
+
+  await test("même run + même étape → même seed (idempotence de reprise)", () => {
+    const a = generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "cover" });
+    const b = generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "cover" });
+    assert.equal(a, b);
+    const p1 = generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "page", index: 3 });
+    const p2 = generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "page", index: 3 });
+    assert.equal(p1, p2);
+  });
+
+  await test("PREUVE incident: la génération payante et le retry gratuit ont des familles différentes", () => {
+    assert.notEqual(
+      generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "cover" }),
+      generationSeed({ bookId: BOOK, generationId: GEN_FREE, assetType: "cover" })
+    );
+    for (let page = 1; page <= 6; page++) {
+      assert.notEqual(
+        generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "page", index: page }),
+        generationSeed({ bookId: BOOK, generationId: GEN_FREE, assetType: "page", index: page }),
+        `page ${page} doit changer de seed entre les deux générations`
+      );
+    }
+    assert.notEqual(
+      generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "portrait", index: 0, reroll: 1 }),
+      generationSeed({ bookId: BOOK, generationId: GEN_FREE, assetType: "portrait", index: 0, reroll: 1 })
+    );
+  });
+
+  await test("aucune collision entre cover, sheet, portraits et pages d'un même run", () => {
+    const seeds = new Set<number>();
+    const add = (s: number) => {
+      assert.equal(seeds.has(s), false, `collision de seed: ${s}`);
+      seeds.add(s);
+    };
+    add(generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "cover" }));
+    for (let r = 1; r <= 2; r++) {
+      add(generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "sheet", reroll: r }));
+    }
+    for (let c = 0; c < 3; c++) {
+      for (let r = 1; r <= 2; r++) {
+        add(generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "portrait", index: c, reroll: r }));
+      }
+    }
+    for (let page = 1; page <= 12; page++) {
+      add(generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "page", index: page }));
+    }
+  });
+
+  await test("rerolls distincts mais stables au sein d'un run", () => {
+    const base = generationSeed({ bookId: BOOK, generationId: GEN_PAID, assetType: "cover" });
+    const r0 = seedForReroll(base, 0);
+    const r1 = seedForReroll(base, 1);
+    const r2 = seedForReroll(base, 2);
+    assert.equal(r0, base % 2147483647);
+    assert.notEqual(r1, r0);
+    assert.notEqual(r2, r1);
+    assert.notEqual(r2, r0);
+    assert.equal(seedForReroll(base, 1), r1, "reroll déterministe");
+  });
+
+  await test("seeds dans l'intervalle valide fal (0 < seed < 2^31-1)", () => {
+    for (const gen of [GEN_PAID, GEN_FREE]) {
+      for (let page = 0; page <= 12; page++) {
+        const s = generationSeed({ bookId: BOOK, generationId: gen, assetType: "page", index: page });
+        assert.equal(Number.isInteger(s) && s > 0 && s < 2147483647, true);
+      }
+    }
+  });
+}
+
+/** P0 — targeted boost routing from the CURRENT attempt's verdicts. */
+async function runBoostRoutingTests() {
+  console.log("\n── routage des boosts ciblés ──");
+
+  const ctx = {
+    action: "Khadidja nourrit doucement une girafe au zoo",
+    storySummary: "Khadidja découvre les animaux du zoo et apprend à les protéger",
+    cast: [{ name: "Khadidja", kind: "human" }],
+    multiReference: false,
+  };
+
+  await test("story-mismatch → boost qui réinjecte l'action EXACTE et le résumé", () => {
+    const boosts = routeBoostsForVerdicts(["story-mismatch:cover unrelated"], ctx);
+    assert.equal(boosts.length, 1);
+    assert.match(boosts[0], /Khadidja nourrit doucement une girafe au zoo/);
+    assert.match(boosts[0], /découvre les animaux du zoo/);
+    assert.match(boosts[0], /NO generic standing pose/);
+    assert.match(boosts[0], /title band/i);
+  });
+
+  await test("action non visible → même réinjection d'action", () => {
+    const boosts = routeBoostsForVerdicts(["cover-action-missing:static pose"], ctx);
+    assert.equal(boosts.length, 1);
+    assert.match(boosts[0], /Khadidja nourrit doucement une girafe au zoo/);
+  });
+
+  await test("identity<85 → boost référence immuable (pas le cast générique)", () => {
+    const boosts = routeBoostsForVerdicts(["identity:Khadidja=80"], ctx);
+    assert.equal(boosts.length, 1);
+    assert.match(boosts[0], /IMMUTABLE source of truth/);
+    assert.match(boosts[0], /face shape, apparent age, skin tone, hairstyle/);
+    assert.match(boosts[0], /Khadidja/);
+    assert.notEqual(boosts[0], CAST_FIX_BOOST);
+  });
+
+  await test("lineup → anti-lineup; cast → cast fix; anatomy/comic/title/unsafe dédiés", () => {
+    assert.deepEqual(routeBoostsForVerdicts(["cover-lineup:row"], ctx), [ANTI_LINEUP_BOOST]);
+    assert.deepEqual(routeBoostsForVerdicts(["cast:saw 2"], ctx), [CAST_FIX_BOOST]);
+    assert.deepEqual(routeBoostsForVerdicts(["anatomy:fused hand"], ctx), [ANATOMY_FIX_BOOST]);
+    assert.deepEqual(routeBoostsForVerdicts(["comic-layout:panels"], ctx), [SINGLE_COMPOSITION_BOOST]);
+    assert.deepEqual(routeBoostsForVerdicts(["title:illegible"], ctx), [TITLE_FIX_BOOST]);
+    assert.deepEqual(routeBoostsForVerdicts(["unsafe:scary"], ctx), [CHILD_SAFE_BOOST]);
+  });
+
+  await test("verdicts combinés (incident) → boosts dédupliqués story+identity+anti-lineup", () => {
+    const boosts = routeBoostsForVerdicts(
+      [
+        "identity:Khadidja=80",
+        "cover-lineup:action_visible, story_related",
+        "story-mismatch:action_visible, story_related",
+        "identity:Khadidja=80",
+      ],
+      ctx
+    );
+    const identityBoosts = boosts.filter((b) => /IMMUTABLE source of truth/.test(b));
+    assert.equal(identityBoosts.length, 1, "un seul boost identité même si verdict dupliqué");
+    assert.equal(boosts.includes(ANTI_LINEUP_BOOST), true);
+    assert.equal(boosts.some((b) => /Khadidja nourrit doucement/.test(b)), true);
+  });
+}
+
+/**
+ * P0 — REAL provider re-roll loop integration (network mocked, code real):
+ * FalImageProvider.generateImage with a strict cover, exercising the actual
+ * generateWithEnvRetry wiring — vision verdicts → targeted boosts on the next
+ * fal call, distinct re-roll seeds, and a terminal error built from the best
+ * attempt only.
+ */
+async function runProviderRerollIntegrationTests() {
+  console.log("\n── intégration provider: reroll ciblé + décision best-attempt ──");
+
+  const sharp = (await import("sharp")).default;
+  // Dense black line-art on white: passes the blank guard, fails the colored guard.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512">
+    <rect width="512" height="512" fill="white"/>
+    <g stroke="black" stroke-width="18" fill="none">
+      <circle cx="256" cy="180" r="120"/>
+      <path d="M40 470 L 180 300 L 320 450 L 470 250"/>
+      <rect x="60" y="40" width="180" height="110"/>
+      <path d="M256 300 L 256 460 M 200 380 L 312 380"/>
+    </g>
+  </svg>`;
+  const linePng = await sharp(Buffer.from(svg)).png().toBuffer();
+
+  const { FalImageProvider } = await import("../services/ai/fal-provider");
+  const { StorageService } = await import("../services/storage-service");
+
+  const ACTION = "Khadidja nourrit doucement une girafe au zoo";
+  const goodPoster = {
+    lineup: false,
+    action_visible: true,
+    single_composition: true,
+    anatomy_valid: true,
+    professional_line_art: true,
+    sharp_readable: true,
+    orientation_correct: true,
+    story_related: true,
+    child_safe: true,
+  };
+
+  type Scenario = {
+    posters: Array<Record<string, unknown>>;
+    identities: Array<Record<string, unknown>>;
+  };
+
+  async function runScenario(scenario: Scenario) {
+    const origFetch = globalThis.fetch;
+    const origUpload = StorageService.prototype.uploadBytes;
+    const savedEnv = {
+      FAL_KEY: process.env.FAL_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      FAL_REF_ENDPOINT: process.env.FAL_REF_ENDPOINT,
+      VISION_QC: process.env.VISION_QC,
+      GROQ_API_KEY: process.env.GROQ_API_KEY,
+    };
+    process.env.FAL_KEY = "test-fal-key";
+    process.env.OPENAI_API_KEY = "test-openai-key";
+    process.env.FAL_REF_ENDPOINT = "https://fal.run/fal-ai/flux-kontext/dev";
+    delete process.env.VISION_QC;
+    delete process.env.GROQ_API_KEY;
+
+    const falBodies: Array<Record<string, unknown>> = [];
+    let posterIdx = 0;
+    let identityIdx = 0;
+    const json = (obj: unknown) =>
+      new Response(JSON.stringify(obj), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+
+    globalThis.fetch = (async (url: unknown, init?: { method?: string; body?: string }) => {
+      const target = String(url);
+      if (init?.method === "POST" && /fal\.run/.test(target)) {
+        falBodies.push(JSON.parse(String(init.body)));
+        return json({ images: [{ url: `https://img.test/fal-${falBodies.length}.png` }] });
+      }
+      if (init?.method === "POST" && /openai\.com/.test(target)) {
+        const req = JSON.parse(String(init.body)) as {
+          messages: Array<{ content: Array<{ type: string; text?: string }> }>;
+        };
+        const question = req.messages[0]?.content?.find((c) => c.type === "text")?.text || "";
+        let payload: unknown = { matches: true, count: 1 };
+        if (question.includes("COLORING BOOK COVER poster")) {
+          payload = scenario.posters[Math.min(posterIdx++, scenario.posters.length - 1)];
+        } else if (question.includes("Compare every named character")) {
+          payload = scenario.identities[Math.min(identityIdx++, scenario.identities.length - 1)];
+        } else if (question.includes("should contain EXACTLY")) {
+          payload = { count: 1, matches: true };
+        } else if (question.includes("title text")) {
+          payload = { title_legible: true };
+        }
+        return json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
+      }
+      // Any GET (fal image download, vision downscale, references, final check)
+      return new Response(new Uint8Array(linePng), { status: 200 });
+    }) as typeof fetch;
+    StorageService.prototype.uploadBytes = async () =>
+      "https://storage.mock/normalized-print.png";
+
+    const qcStats: Record<string, unknown> = {};
+    try {
+      const provider = new FalImageProvider();
+      const result = await provider.generateImage({
+        prompt: "Khadidja au zoo. Khadidja découvre les animaux du zoo et apprend à les protéger.",
+        style: "cute",
+        characterBible: "Khadidja, the parent-provided hero child",
+        isCover: true,
+        referenceImageUrl: "https://img.test/ref-khadidja.png",
+        referenceImageUrls: ["https://img.test/ref-khadidja.png"],
+        action: ACTION,
+        expectedCast: [{ name: "Khadidja", kind: "human", visualLock: "young girl child" }],
+        strictQuality: true,
+        qcStats,
+        maxVisionRerolls: 1,
+        maxQualityRerolls: 0,
+        maxProviderAttempts: 1,
+        skipRecovery: true,
+        seed: 12345,
+        consistencyMode: true,
+      });
+      return { result, falBodies, qcStats, error: null as Error | null };
+    } catch (err) {
+      return { result: null, falBodies, qcStats, error: err as Error };
+    } finally {
+      globalThis.fetch = origFetch;
+      StorageService.prototype.uploadBytes = origUpload;
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) delete process.env[key as keyof typeof savedEnv];
+        else process.env[key as keyof typeof savedEnv] = value;
+      }
+    }
+  }
+
+  await test("échec story+identity → reroll avec boosts ciblés + seed distincte → accepté", async () => {
+    const { result, falBodies, qcStats, error } = await runScenario({
+      posters: [
+        { ...goodPoster, action_visible: false, story_related: false, issue: "generic pose" },
+        goodPoster,
+      ],
+      identities: [
+        { matches: false, scores: [{ name: "Khadidja", score: 80 }] },
+        { matches: true, scores: [{ name: "Khadidja", score: 92 }] },
+      ],
+    });
+    assert.equal(error, null, error?.message);
+    assert.equal(falBodies.length, 2, "exactement un reroll");
+    // Reroll #2 porte les boosts ciblés issus des verdicts de la tentative 1.
+    const rerollPrompt = String(falBodies[1].prompt);
+    assert.match(rerollPrompt, /Khadidja nourrit doucement une girafe au zoo/);
+    assert.match(rerollPrompt, /IMMUTABLE source of truth/);
+    // Seeds distinctes mais déterministes entre les deux tentatives du run.
+    assert.equal(falBodies[0].seed, 12345);
+    assert.notEqual(falBodies[1].seed, falBodies[0].seed);
+    // Résultat = image normalisée pour impression (tentative 2).
+    assert.equal(result?.url, "https://storage.mock/normalized-print.png");
+    assert.equal(qcStats.bestAttemptId, "a2");
+    assert.equal(qcStats.bestScore, 0);
+    const history = qcStats.attemptHistory as Array<{ attemptId: string; verdicts: string[] }>;
+    assert.equal(history.length, 2);
+    assert.equal(history[0].verdicts.some((v) => v.startsWith("story-mismatch:")), true);
+    assert.equal(history[0].verdicts.some((v) => v.startsWith("identity:")), true);
+  });
+
+  await test("double échec → erreur terminale = meilleure tentative uniquement, sans doublon", async () => {
+    const { result, qcStats, error } = await runScenario({
+      posters: [
+        { ...goodPoster, action_visible: false, story_related: false, issue: "generic pose" },
+        goodPoster,
+      ],
+      identities: [
+        { matches: false, scores: [{ name: "Khadidja", score: 78 }] },
+        { matches: false, scores: [{ name: "Khadidja", score: 80 }] },
+      ],
+    });
+    assert.equal(result, null);
+    assert.ok(error, "le gate strict doit rejeter");
+    assert.match(error!.message, /strict visual quality gate/);
+    assert.match(error!.message, /attempt a2, score 5/);
+    assert.match(error!.message, /identity:Khadidja=80/);
+    assert.doesNotMatch(error!.message, /story-mismatch/, "pas de contamination de la tentative 1");
+    assert.doesNotMatch(error!.message, /Khadidja=78/);
+    assert.equal(error!.message.split("identity:").length - 1, 1, "verdict identité unique");
+    assert.equal(qcStats.bestAttemptId, "a2");
+  });
+}
+
 async function main() {
   console.log("generation-reliability-suite\n");
   await runSoftAcceptTests();
   await runCoverGateIntegrationTests();
   await runCoverPersistTests();
   await runLogicInvariants();
+  await runBestAttemptDecisionTests();
+  await runSeedDiversityTests();
+  await runBoostRoutingTests();
+  await runProviderRerollIntegrationTests();
   await runEmulatorLedgerTests();
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

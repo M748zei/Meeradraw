@@ -33,6 +33,23 @@ jobs:
         run: npm run typecheck
       - name: Logic tests
         run: npm run test:functional:logic
+      - name: Generation reliability tests
+        run: npm run test:generation-reliability
+      - name: Setup Java (Firestore emulator needs JDK 21+)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Generation reliability tests (Firestore emulator)
+        run: |
+          npx -y firebase-tools@latest emulators:exec \
+            --only firestore \
+            --project demo-meeradraw \
+            "npm run test:generation-reliability"
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+          FIREBASE_PROJECT_ID: demo-meeradraw
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-meeradraw
       - name: Production build
         run: npm run build
         env:

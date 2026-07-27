@@ -201,7 +201,18 @@ export interface ImageGenerationInput {
 export interface ImageQcStats {
   pixelRerolls?: number;
   visionRerolls?: number;
+  /** CUMULATIVE verdict history across attempts — telemetry ONLY, never a decision input. */
   visionVerdicts?: string[];
+  /** Per-attempt telemetry (id, score, verdicts) in chronological order. */
+  attemptHistory?: Array<{
+    attemptId: string;
+    score: number;
+    verdicts: string[];
+  }>;
+  /** Attempt selected as best — the ONLY attempt the final decision was made on. */
+  bestAttemptId?: string;
+  bestScore?: number;
+  bestVerdicts?: string[];
   /** True when vision QC confirmed lineup syndrome at least once. */
   lineupDetected?: boolean;
   /** True when a delivered candidate diverged from its visual reference. */
