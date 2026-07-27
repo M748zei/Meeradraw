@@ -1,4 +1,5 @@
 import { requireUser } from "@/lib/api-auth";
+import { resetBookArtifactsForPaidRecreate } from "@/lib/book-recreate-reset";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { rateLimitAsync } from "@/lib/rate-limit-store";
 import { isGenerationAlive } from "@/lib/generation-lifecycle";
@@ -281,6 +282,20 @@ export async function POST(request: Request) {
           { merge: true }
         );
         throw err;
+      }
+    }
+
+    // PAID recreate: the parent pays for a FRESH book. Wipe the previous
+    // generation's page docs and cover pointers so cover + pages regenerate
+    // from the new plan — the idempotent resume logic must never reuse stale
+    // (possibly invalidated) art across generations. Free retries keep the
+    // historical resume semantics (good pages of the failed run are reused).
+    if (!isTrial && cost > 0) {
+      const reset = await resetBookArtifactsForPaidRecreate(db, body.book_id);
+      if (reset.pagesDeleted > 0 || reset.coverCleared) {
+        console.log(
+          `[gen ${generationId}] paid recreate reset: ${reset.pagesDeleted} stale page(s) deleted, cover cleared=${reset.coverCleared}`
+        );
       }
     }
 
