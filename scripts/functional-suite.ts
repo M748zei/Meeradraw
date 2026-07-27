@@ -328,6 +328,71 @@ async function runLogicTests() {
     assert(refundForFailedPages(6, 0, "colorbook") === 12, "all failed pages");
   });
 
+  await test("6-page parent colorbook costs 18 credits", () => {
+    assert(estimateBookCost(6, "colorbook") === 18, `got ${estimateBookCost(6, "colorbook")}`);
+  });
+
+  await test("generation step ledger classifies permanent QC errors", async () => {
+    const { classifyGenerationError, stepIdempotencyKey } = await import(
+      "../lib/generation-step-ledger"
+    );
+    const qc = classifyGenerationError(
+      new Error(
+        "strict visual quality gate rejected image (score 2): cover-action-missing:lineup"
+      )
+    );
+    assert(qc.permanent, "QC gate must be permanent");
+    assert(qc.code === "QUALITY_GATE", `code=${qc.code}`);
+    const transient = classifyGenerationError(new Error("fal timeout ETIMEDOUT"));
+    assert(!transient.permanent, "timeouts are transient");
+    assert(
+      stepIdempotencyKey("g1", "cover", 1) === "gen:g1:step:cover:book:attempt:1",
+      "idempotency key shape"
+    );
+  });
+
+  await test("NonRetryableFalError covers strict quality and exhausted balance", async () => {
+    const { isNonRetryableFalError, NonRetryableFalError } = await import(
+      "../services/ai/fal-provider"
+    );
+    assert(
+      isNonRetryableFalError(
+        new NonRetryableFalError("strict visual quality gate rejected image (score 2)")
+      ),
+      "strict gate"
+    );
+    assert(
+      isNonRetryableFalError(
+        new Error('fal.ai error: {"detail": "User is locked. Reason: Exhausted balance."}')
+      ),
+      "exhausted"
+    );
+    assert(
+      !isNonRetryableFalError(new Error("fetch failed ETIMEDOUT")),
+      "timeout remains retryable at provider layer"
+    );
+  });
+
+  await test("Google PC/iPhone auth helpers remain intact after pipeline fix", async () => {
+    const { isIosOrIpadOs } = await import("../lib/firebase/google-auth-flow");
+    assert(
+      isIosOrIpadOs(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+        "iPhone",
+        5
+      ),
+      "iPhone redirect"
+    );
+    assert(
+      !isIosOrIpadOs(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/126.0.0.0",
+        "MacIntel",
+        0
+      ),
+      "desktop popup"
+    );
+  });
+
   await test("packForChariowProduct maps known packs", () => {
     assert(packForChariowProduct("prd_d2ik58za")?.id === "entry", "entry");
     assert(packForChariowProduct("prd_0658xmlt")?.credits === 150, "recharge");
@@ -821,6 +886,53 @@ async function runFirestoreIntegration() {
     assert((await credits.getBalance(userA)) === mid + 30, "full idempotent");
   });
 
+  await test("CreditService terminal failure refunds exactly 18 once", async () => {
+    const before = await credits.getBalance(userA);
+    const gid = randomUUID();
+    await credits.reserve(
+      userA,
+      18,
+      "Réservation génération livre test 6 pages",
+      `gen:${gid}:reserve`
+    );
+    assert((await credits.getBalance(userA)) === before - 18, "reserved 18");
+    await credits.refund(
+      userA,
+      18,
+      "Remboursement — génération interrompue",
+      `gen:${gid}:refund:full`
+    );
+    assert((await credits.getBalance(userA)) === before, "restored");
+    await credits.refund(
+      userA,
+      18,
+      "Remboursement — génération interrompue",
+      `gen:${gid}:refund:full`
+    );
+    assert((await credits.getBalance(userA)) === before, "no double refund");
+  });
+
+  await test("CreditService free retry success captures once without second debit", async () => {
+    const before = await credits.getBalance(userA);
+    const paid = randomUUID();
+    const free = randomUUID();
+    await credits.reserve(userA, 18, "paid attempt", `gen:${paid}:reserve`);
+    await credits.refund(userA, 18, "failed paid", `gen:${paid}:refund:full`);
+    // Free retry: no reserve. Success capture is a zero-delta ledger marker.
+    await credits.capture(userA, 18, "capture free success", `gen:${free}:capture`);
+    await credits.capture(userA, 18, "capture free success", `gen:${free}:capture`);
+    assert((await credits.getBalance(userA)) === before, "balance unchanged after free success");
+    const hist = await credits.history(userA, 20);
+    const captures = hist.filter(
+      (h) => (h as { reference_id?: string }).reference_id === `gen:${free}:capture`
+    );
+    assert(captures.length === 1, `capture once, got ${captures.length}`);
+    assert(
+      (captures[0] as { kind?: string }).kind === "capture",
+      "kind=capture"
+    );
+  });
+
   await test("CreditService blocks overspend", async () => {
     let blocked = false;
     try {
@@ -829,6 +941,41 @@ async function runFirestoreIntegration() {
       blocked = e instanceof Error && e.message.includes("manque");
     }
     assert(blocked, "expected insufficient credits");
+  });
+
+  await test("generation step ledger persists statuses", async () => {
+    const { persistGenerationStep } = await import("../lib/generation-step-ledger");
+    const gid = randomUUID();
+    await db.collection("generations").doc(gid).set({
+      user_id: userA,
+      book_id: randomUUID(),
+      status: "running",
+      created_at: new Date().toISOString(),
+    });
+    await persistGenerationStep(db, gid, {
+      stepKey: "cover",
+      status: "running",
+      attempt: 1,
+      provider: "fal",
+      requestId: "req_test_1",
+    });
+    await persistGenerationStep(db, gid, {
+      stepKey: "cover",
+      status: "succeeded",
+      attempt: 1,
+      provider: "fal",
+      requestId: "req_test_1",
+    });
+    const step = await db
+      .collection("generations")
+      .doc(gid)
+      .collection("steps")
+      .doc("cover")
+      .get();
+    assert(step.exists, "step doc");
+    assert(step.data()?.status === "succeeded", "succeeded");
+    assert(step.data()?.provider === "fal", "provider");
+    assert(typeof step.data()?.idempotency_key === "string", "idempotency");
   });
 
   let universeAId = "";

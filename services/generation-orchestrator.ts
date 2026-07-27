@@ -680,20 +680,31 @@ export class GenerationOrchestrator {
   }
 
   /**
-   * Cover generation + page document setup. Returns page IDs in page_number order.
-   * Progress 45 during cover work, then 55 once cover is done.
+   * Cover generation only. Idempotent when cover_image already persisted for this book.
    */
-  async runCoverAndPagesSetupPhase(
+  async runCoverPhase(
     userId: string,
     bookId: string,
     generationId: string
-  ): Promise<string[]> {
+  ): Promise<void> {
     await this.ensureActive(userId, bookId, generationId);
     const book = await this.books.get(userId, bookId);
     await this.updateGeneration(generationId, {
       current_step: "illustrator",
       progress: isParentBook(book) ? 40 : 45,
+      current_substep: "cover",
     });
+    await this.touchHeartbeat(generationId);
+
+    if (
+      typeof book.cover_image === "string" &&
+      book.cover_image &&
+      typeof book.cover_image_path === "string" &&
+      book.cover_image_path
+    ) {
+      console.log(`[gen ${generationId}] cover already persisted — skipping`);
+      return;
+    }
 
     const plan = this.loadStoryPlan(book);
     const style = book.style || "cute";
@@ -782,6 +793,7 @@ export class GenerationOrchestrator {
     });
     await this.setQcImage(generationId, "cover", coverStats);
     await this.ensureActive(userId, bookId, generationId);
+    await this.touchHeartbeat(generationId);
     const persistedCover = await this.persistCover(
       cover.url,
       bookId,
@@ -800,10 +812,48 @@ export class GenerationOrchestrator {
       cover_image: persistedCover.url,
       updated_at: new Date().toISOString(),
     });
+    await this.updateGeneration(generationId, {
+      current_step: "illustrator",
+      progress: isParentBook(book) ? 48 : 50,
+      current_substep: "cover_done",
+    });
+  }
 
-    // Reset pages
+  /**
+   * Create page documents after cover. Returns page IDs in page_number order.
+   * Reuses existing pending/generating/completed pages when already set up.
+   */
+  async runPagesSetupPhase(
+    userId: string,
+    bookId: string,
+    generationId: string
+  ): Promise<string[]> {
+    await this.ensureActive(userId, bookId, generationId);
+    const book = await this.books.get(userId, bookId);
+    const parentMode = isParentBook(book);
+    await this.updateGeneration(generationId, {
+      current_step: "illustrator",
+      progress: parentMode ? 50 : 55,
+      current_substep: "pages_setup",
+    });
+
+    const plan = this.loadStoryPlan(book);
     const pagesCol = this.db.collection("books").doc(bookId).collection("pages");
-    const oldPages = await pagesCol.get();
+    const existing = await pagesCol.get();
+    if (existing.size > 0 && existing.size === plan.pages.length) {
+      const ordered = existing.docs
+        .map((d) => ({
+          id: d.id,
+          page_number: Number(d.data().page_number || 0),
+        }))
+        .sort((a, b) => a.page_number - b.page_number);
+      console.log(
+        `[gen ${generationId}] pages already set up (${ordered.length}) — reusing`
+      );
+      return ordered.map((p) => p.id);
+    }
+
+    const oldPages = existing;
     const batchPages = this.db.batch();
     oldPages.docs.forEach((d) => batchPages.delete(d.ref));
     await batchPages.commit();
@@ -844,12 +894,26 @@ export class GenerationOrchestrator {
 
     await this.updateGeneration(generationId, {
       current_step: "illustrator",
-      progress: parentMode ? 50 : 55,
+      progress: parentMode ? 52 : 55,
+      current_substep: "pages_ready",
     });
 
     return pageIdsByNumber
       .sort((a, b) => a.page_number - b.page_number)
       .map((p) => p.id);
+  }
+
+  /**
+   * Cover generation + page document setup. Returns page IDs in page_number order.
+   * Kept for the legacy monolith `run()` path.
+   */
+  async runCoverAndPagesSetupPhase(
+    userId: string,
+    bookId: string,
+    generationId: string
+  ): Promise<string[]> {
+    await this.runCoverPhase(userId, bookId, generationId);
+    return this.runPagesSetupPhase(userId, bookId, generationId);
   }
 
   /**
@@ -865,6 +929,24 @@ export class GenerationOrchestrator {
     // Heartbeat before long fal wait so the reaper won't kill a live page gen.
     await this.touchHeartbeat(generationId);
     const book = await this.books.get(userId, bookId);
+    // Skip already-completed pages (resume after worker restart / free retry).
+    {
+      const existingPage = await this.db
+        .collection("books")
+        .doc(bookId)
+        .collection("pages")
+        .doc(pageId)
+        .get();
+      const data = existingPage.data();
+      if (
+        existingPage.exists &&
+        data?.generation_status === "completed" &&
+        typeof data.illustration_url === "string" &&
+        data.illustration_url
+      ) {
+        return "ok";
+      }
+    }
     const plan = this.loadStoryPlan(book);
     const style = book.style || "cute";
     const universeId = book.universe_id;
@@ -1072,6 +1154,7 @@ export class GenerationOrchestrator {
       await this.books.update(userId, bookId, {
         status: strictDelivery ? "draft" : "failed",
         active_generation_id: null,
+        free_retry_available: !isTrial && cost > 0,
       });
       await this.credits.refund(
         userId,
@@ -1101,6 +1184,7 @@ export class GenerationOrchestrator {
       await this.books.update(userId, bookId, {
         status: "draft",
         active_generation_id: null,
+        free_retry_available: !isTrial && cost > 0,
       });
       await this.credits.refund(
         userId,
@@ -1228,6 +1312,14 @@ export class GenerationOrchestrator {
       );
     }
     const creditsUsed = Math.max(0, cost - refund);
+    if (creditsUsed > 0) {
+      await this.credits.capture(
+        userId,
+        creditsUsed,
+        `Capture définitive — cahier livré ${String(full.title)}`,
+        `gen:${generationId}:capture`
+      );
+    }
 
     console.log(
       `[gen ${generationId}] QC re-rolls — pixel: ${qcSummary.pixel_rerolls}, vision: ${qcSummary.vision_rerolls}, images: ${qcSummary.images}` +
@@ -1334,6 +1426,8 @@ export class GenerationOrchestrator {
               ? "draft"
               : "failed",
           active_generation_id: null,
+          // One controlled free restart after a compensated terminal failure.
+          free_retry_available: !isTrial && cost > 0 && compensated,
           updated_at: new Date().toISOString(),
         });
       });
@@ -1615,12 +1709,32 @@ export class GenerationOrchestrator {
       book_id: string;
     };
     const book = await this.books.getWithPages(userId, generation.book_id);
+    const pagesDone = book.pages.filter(
+      (p) => p.generation_status === "completed" && Boolean(p.illustration_url)
+    ).length;
+    const pagesTotal = Math.max(book.page_count || 0, book.pages.length);
+    const createdAt =
+      typeof generation.created_at === "string" ? generation.created_at : null;
+    const heartbeatAt =
+      typeof generation.heartbeat_at === "string"
+        ? generation.heartbeat_at
+        : typeof generation.updated_at === "string"
+          ? generation.updated_at
+          : null;
+    const elapsedMs = createdAt
+      ? Math.max(0, Date.now() - Date.parse(createdAt))
+      : null;
+    const staleMs = heartbeatAt
+      ? Math.max(0, Date.now() - Date.parse(heartbeatAt))
+      : null;
+    const supportId = `MD-${generation.id.slice(0, 8).toUpperCase()}`;
     return {
       id: generation.id,
       book_id: generation.book_id,
       status: generation.status,
       progress: generation.progress,
       current_step: generation.current_step,
+      current_substep: generation.current_substep ?? null,
       cover_image: book.cover_image,
       pages: book.pages.map((p) => ({
         id: p.id,
@@ -1630,6 +1744,26 @@ export class GenerationOrchestrator {
         illustration_url: p.illustration_url,
         generation_status: p.generation_status,
       })),
+      pages_done: pagesDone,
+      pages_total: pagesTotal,
+      elapsed_ms: elapsedMs,
+      // Honest estimate: ~75s/page + 3 min story/sheet/cover for parent 6-pagers.
+      estimated_total_ms: Math.max(240_000, pagesTotal * 75_000 + 180_000),
+      taking_longer: Boolean(
+        generation.status === "running" || generation.status === "queued"
+          ? (staleMs != null && staleMs > 90_000) ||
+              (elapsedMs != null && elapsedMs > pagesTotal * 90_000 + 240_000)
+          : false
+      ),
+      credits_reserved: Number(generation.credits_used || 0),
+      credits_state:
+        generation.status === "completed"
+          ? "captured"
+          : generation.status === "failed" || generation.status === "partial"
+            ? "released"
+            : "reserved",
+      support_id: supportId,
+      free_retry_available: Boolean(book.free_retry_available),
       error_message: generation.error_message,
       book,
     };

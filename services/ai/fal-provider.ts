@@ -14,7 +14,13 @@ import { buildCompositionBlueprint } from "@/services/ai/composition-templates";
 import { withRetry } from "@/lib/async";
 import { isBlankOrTooFaint, hasPoorEnvironment, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
-import { checkCast, checkCoverTitle, checkIdentityReferences, checkPageAction } from "@/lib/vision-qc";
+import {
+  checkCast,
+  checkCoverAction,
+  checkCoverTitle,
+  checkIdentityReferences,
+  checkPageAction,
+} from "@/lib/vision-qc";
 import { StorageService } from "@/services/storage-service";
 import { randomUUID } from "crypto";
 
@@ -86,7 +92,11 @@ export function isNonRetryableFalError(err: unknown): boolean {
   return (
     /feature_not_supported|cannot be 'DESIGN'|style_preset|Exhausted balance|User is locked|invalid_request|422/i.test(
       msg
-    ) || /fal\.ai error:.*"type"\s*:\s*"feature_not_supported"/i.test(msg)
+    ) ||
+    /strict visual quality gate|Premium character reference failed|Premium cover|Premium book is missing/i.test(
+      msg
+    ) ||
+    /fal\.ai error:.*"type"\s*:\s*"feature_not_supported"/i.test(msg)
   );
 }
 const ANTI_LINEUP_BOOST =
@@ -497,11 +507,10 @@ export class FalImageProvider implements ImageAIProvider {
               verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
             }
           }
-          // A cover is a POSTER: a static lineup on an empty background is the
-          // audit's #1 sin there too (verified: Kontext covers regress to the
-          // reference lineup when this check is missing).
+          // Cover poster check (NOT the interior-page 6-zone gate — that false-positived
+          // heroic covers as "lineup" and aborted paid books at 40%).
           if (input.action) {
-            const poster = await checkPageAction(current.url, input.action);
+            const poster = await checkCoverAction(current.url, input.action);
             if (!poster && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
               prevVisionNudges.push(PREMIUM_PAGE_BOOST);
@@ -685,9 +694,33 @@ export class FalImageProvider implements ImageAIProvider {
       !best.blank &&
       best.score === 2 &&
       !(qcStats.visionVerdicts || []).length;
-    if (input?.strictQuality && best.score > 0 && !repairableColorOnly) {
-      throw new Error(
+    // Covers are posters: vision often flags a dynamic hero scene as "lineup"
+    // (score 1–2). After exhausting rerolls, accept that soft defect rather than
+    // killing the whole paid book at 40% (prod gen 94d46b1e, 2026-07-27).
+    const softCoverAcceptable =
+      Boolean(input?.isCover) &&
+      !best.blank &&
+      best.score > 0 &&
+      best.score <= 2 &&
+      // Score ≤2 cannot include cast(+4)/identity(+5); ignore stale verdicts from earlier attempts.
+      !(qcStats.visionVerdicts || [])
+        .slice(-4)
+        .some((v) =>
+          /^(cast:|comic-layout:|cover-quality:vision-unavailable)/i.test(v)
+        );
+    if (
+      input?.strictQuality &&
+      best.score > 0 &&
+      !repairableColorOnly &&
+      !softCoverAcceptable
+    ) {
+      throw new NonRetryableFalError(
         `strict visual quality gate rejected image (score ${best.score}): ${(qcStats.visionVerdicts || []).slice(-4).join("; ") || "pixel quality defect"}`
+      );
+    }
+    if (softCoverAcceptable) {
+      console.warn(
+        `[${label}] accepting cover after soft QC score ${best.score} (lineup/action soft defect)`
       );
     }
     if (best.score > 0) {

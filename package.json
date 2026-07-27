@@ -11,6 +11,7 @@
     "test:functional": "node --import tsx scripts/functional-suite.ts",
     "test:functional:logic": "node --import tsx scripts/functional-suite.ts --logic-only",
     "test:functional:http": "node --import tsx scripts/functional-suite.ts --http-only",
+    "test:generation-reliability": "node --import tsx scripts/generation-reliability-suite.ts",
     "test:bench-kai": "node --import tsx scripts/bench-kai-fidelity.ts"
   },
   "dependencies": {

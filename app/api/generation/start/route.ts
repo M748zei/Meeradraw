@@ -56,7 +56,11 @@ export async function POST(request: Request) {
       isTrial = true;
     }
 
-    const cost = isTrial ? 0 : estimateBookCost(book.page_count as number, book.type as string);
+    // Controlled free restart is decided atomically inside the claim transaction
+    // (see freeRetryConsumed below) so double-clicks cannot both go free.
+    const estimatedCost = isTrial
+      ? 0
+      : estimateBookCost(book.page_count as number, book.type as string);
     const generationId = randomUUID();
     const now = new Date().toISOString();
     const startedAt = Date.now();
@@ -116,7 +120,7 @@ export async function POST(request: Request) {
     // credits. Double-clicks with a LIVE workflow still reuse (checked above).
     type ClaimResult =
       | { kind: "existing"; generationId: string; isTrial: boolean; status: string }
-      | { kind: "created" };
+      | { kind: "created"; cost: number; freeRetry: boolean };
 
     const claim = await db.runTransaction(async (tx): Promise<ClaimResult> => {
       const bookSnap = await tx.get(bookRef);
@@ -174,6 +178,10 @@ export async function POST(request: Request) {
         });
       }
 
+      const freeRetry =
+        !isTrial && Boolean(bookData.free_retry_available);
+      const claimCost = freeRetry ? 0 : estimatedCost;
+
       tx.set(genRef, {
         user_id: user.id,
         book_id: body.book_id,
@@ -181,13 +189,16 @@ export async function POST(request: Request) {
         status: "queued",
         progress: 0,
         current_step: "queued",
-        credits_used: cost,
+        credits_used: claimCost,
         tokens_used: 0,
         provider: null,
         duration_ms: null,
         error_message: null,
         cancelled: false,
-        metadata: isTrial ? { is_trial: true, trial_reserved: true } : {},
+        metadata: {
+          ...(isTrial ? { is_trial: true, trial_reserved: true } : {}),
+          ...(freeRetry ? { free_retry: true, compensated_retry: true } : {}),
+        },
         created_at: now,
         updated_at: now,
         heartbeat_at: now,
@@ -195,9 +206,10 @@ export async function POST(request: Request) {
       tx.update(bookRef, {
         status: "generating",
         active_generation_id: generationId,
+        ...(freeRetry ? { free_retry_available: false } : {}),
         updated_at: now,
       });
-      return { kind: "created" };
+      return { kind: "created", cost: claimCost, freeRetry };
     });
 
     if (claim.kind === "existing") {
@@ -209,6 +221,8 @@ export async function POST(request: Request) {
         reused: true,
       });
     }
+
+    const cost = claim.cost;
 
     if (!isTrial) {
       try {

@@ -229,7 +229,9 @@ JSON schema: {"matches": <true only if every score is >=85 and every identity is
     matches:
       result.matches &&
       scores.length === references.length &&
-      scores.every((item) => item.score >= 85),
+      // 75 keeps strong likeness without killing covers/pages on 80/100 near-misses
+      // seen in production (gen 94d46b1e: identity Khadidja=80).
+      scores.every((item) => item.score >= 75),
     scores,
     issue: result.issue ? String(result.issue).slice(0, 240) : undefined,
   };
@@ -263,6 +265,34 @@ JSON schema: {"count": <number of distinct characters you see>, "matches": <true
   return {
     count: Number(result.count) || 0,
     matches: result.matches,
+    issue: result.issue ? String(result.issue).slice(0, 200) : undefined,
+  };
+}
+
+/**
+ * Cover poster check — looser than interior pages. A cover may show a heroic
+ * focal pose with limited scenery; do NOT apply the 6-zone page coloring gate.
+ */
+export async function checkCoverAction(
+  imageUrl: string,
+  action: string
+): Promise<Pick<PageCheck, "lineup" | "actionVisible" | "issue"> | null> {
+  const result = await askVision<{
+    lineup: boolean;
+    action_visible: boolean;
+    issue?: string;
+  }>(
+    imageUrl,
+    `This is a children's COLORING BOOK COVER poster (not an interior page). Requested story beat: "${action || "a clear story moment"}".
+Question 1 (true lineup only): are ALL characters merely standing front-facing in a static reference-sheet row with ZERO story energy?
+A single hero in a dynamic pose, or hero + pet interacting, is NOT a lineup even if they face the camera.
+Question 2: is there a readable story moment related to "${action || "the adventure"}" (playing, meeting, walking, hugging, arriving, exploring)?
+JSON schema: {"lineup": <true ONLY for a static multi-character reference row>, "action_visible": <boolean>, "issue": "<short reason when lineup is true or action_visible is false>"}`
+  );
+  if (!result || typeof result.lineup !== "boolean") return null;
+  return {
+    lineup: result.lineup,
+    actionVisible: Boolean(result.action_visible),
     issue: result.issue ? String(result.issue).slice(0, 200) : undefined,
   };
 }

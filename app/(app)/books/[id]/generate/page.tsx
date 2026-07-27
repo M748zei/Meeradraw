@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { GENERATION_TEAM } from "@/config/generation-steps";
 import { RegeneratePageButton } from "@/components/books/regenerate-page-button";
@@ -11,6 +11,14 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { GenerationProgress } from "@/types/database";
+
+function formatDuration(ms: number | null | undefined) {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";
+  const totalSec = Math.floor(ms / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return min > 0 ? `${min} min ${sec.toString().padStart(2, "0")} s` : `${sec} s`;
+}
 
 function GenerateInner() {
   const { id: bookId } = useParams<{ id: string }>();
@@ -22,6 +30,8 @@ function GenerateInner() {
   const [progress, setProgress] = useState<GenerationProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState(!gidParam);
+  const [retrying, setRetrying] = useState(false);
+  const retryLock = useRef(false);
 
   // Resolve missing gid from the book / latest active generation.
   useEffect(() => {
@@ -82,7 +92,10 @@ function GenerateInner() {
         const res = await fetch(`/api/generation/${generationId}`);
         const json = await res.json();
         if (!json.success) throw new Error(json.error?.message || "Erreur");
-        if (active) setProgress(json.data);
+        if (active) {
+          setProgress(json.data);
+          setError(null);
+        }
         pollCount += 1;
         consecutiveErrors = 0;
         const st = json.data.status as string;
@@ -114,6 +127,34 @@ function GenerateInner() {
     }
   }
 
+  async function retryFree() {
+    if (retryLock.current) return;
+    retryLock.current = true;
+    setRetrying(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/generation/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ book_id: bookId }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        throw new Error(json.error?.message || "Impossible de recommencer");
+      }
+      const nextId = json.data?.generation_id || json.data?.id;
+      if (!nextId) throw new Error("Identifiant de génération manquant");
+      router.replace(`/books/${bookId}/generate?gid=${nextId}`);
+      setResolvedGid(nextId);
+      setProgress(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur");
+      retryLock.current = false;
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   const step =
     GENERATION_TEAM.find((s) => s.id === progress?.current_step) ||
     GENERATION_TEAM[0];
@@ -122,13 +163,15 @@ function GenerateInner() {
   const partial = progress?.status === "partial";
   const failed = progress?.status === "failed";
   const finished = done || partial;
+  const inFlight = !done && !partial && !failed && Boolean(progress);
   const parentFacingError = (() => {
     const raw = error || progress?.error_message || "";
     if (!raw) return null;
-    // Provider, workflow and storage errors are internal diagnostics. Parents
-    // get a clear next step without stack traces, provider names or raw prompts.
     if (failed) {
-      return "La création n’a pas pu être finalisée. Aucun livre incomplet ne sera livré et vos crédits restent protégés. Vous pouvez recommencer.";
+      const support = progress?.support_id
+        ? ` Identifiant support : ${progress.support_id}.`
+        : "";
+      return `La création n’a pas pu être finalisée. Aucun livre incomplet ne sera livré. Vos crédits ont été libérés (remboursement automatique).${support}`;
     }
     if (/qualité\s*\d+\s*\/\s*100|score\s*[:=]?\s*\d+/i.test(raw) && raw.length < 220) {
       return "On termine encore quelques pages pour vous offrir un cahier complet.";
@@ -148,14 +191,18 @@ function GenerateInner() {
             ? "Votre livre est prêt ✦"
             : partial
               ? "Presque terminé…"
-              : "Votre livre prend vie…"}
+              : failed
+                ? "Création interrompue"
+                : "Votre livre prend vie…"}
         </h1>
         <p className="mt-2 text-ink-muted">
           {done
             ? "Votre cahier est prêt à imprimer."
             : partial
               ? "On finalise encore les dernières pages."
-              : "Regardez votre histoire se construire page après page."}
+              : failed
+                ? "Vous pouvez recommencer sans frais lorsque le remboursement a bien été enregistré."
+                : "Regardez votre histoire se construire page après page."}
         </p>
       </div>
 
@@ -166,7 +213,11 @@ function GenerateInner() {
           </div>
           <div>
             <p className="font-semibold">{step.role}</p>
-            <p className="text-sm text-ink-muted">{step.message}</p>
+            <p className="text-sm text-ink-muted">
+              {progress?.current_substep
+                ? `${step.message} · ${progress.current_substep}`
+                : step.message}
+            </p>
           </div>
           <div className="ml-auto font-display text-2xl text-sky-700">
             {progress?.progress ?? 0}%
@@ -179,6 +230,32 @@ function GenerateInner() {
             transition={{ duration: 0.5 }}
           />
         </div>
+        {inFlight ? (
+          <div className="space-y-1 border-t border-cream-200 bg-cream-50/80 px-5 py-3 text-sm text-ink-muted">
+            <p>
+              Temps écoulé : {formatDuration(progress?.elapsed_ms)} · estimation :{" "}
+              {formatDuration(progress?.estimated_total_ms)} · pages terminées :{" "}
+              {progress?.pages_done ?? 0}/{progress?.pages_total ?? "—"}
+            </p>
+            <p>
+              Vous pouvez quitter cette page, la génération continue côté serveur.
+            </p>
+            {progress?.credits_state === "reserved" ? (
+              <p>
+                {progress.credits_reserved ?? 0} crédits sont seulement réservés —
+                le débit définitif n’a lieu qu’à la livraison complète.
+              </p>
+            ) : null}
+            {progress?.taking_longer ? (
+              <p className="text-amber-800">
+                Cette étape prend plus de temps que prévu — on continue.
+              </p>
+            ) : null}
+            <Link href="/library" className="inline-block text-sky-700 underline">
+              Voir ma bibliothèque
+            </Link>
+          </div>
+        ) : null}
       </Card>
 
       {error || failed ? (
@@ -189,9 +266,21 @@ function GenerateInner() {
           <p className="mt-1 text-sm text-ink-muted">
             {parentFacingError || "Essayons à nouveau."}
           </p>
-          <Link href="/create" className="mt-4 inline-block">
-            <Button variant="secondary">Recommencer sans frais</Button>
-          </Link>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button
+              variant="secondary"
+              disabled={retrying}
+              onClick={() => void retryFree()}
+            >
+              {retrying ? "Relance…" : "Recommencer sans frais"}
+            </Button>
+            <Link href={`/books/${bookId}`}>
+              <Button variant="ghost">Retour au livre</Button>
+            </Link>
+            <Link href="/library">
+              <Button variant="ghost">Bibliothèque</Button>
+            </Link>
+          </div>
         </Card>
       ) : null}
 

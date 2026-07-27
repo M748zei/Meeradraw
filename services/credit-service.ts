@@ -64,12 +64,30 @@ export class CreditService {
    * Admins are auto-topped-up within the same transaction.
    *
    * Returns the new balance. Refund the unused portion with `refund()` when the
-   * work finishes (fully, partially, or fails).
+   * work finishes (fully, partially, or fails). Capture on success with `capture()`.
    */
   async reserve(userId: string, amount: number, reason: string, referenceId?: string) {
     if (amount <= 0) return this.getBalance(userId);
     const admin = await this.isAdminUser(userId);
-    return this.applyDelta(userId, -amount, "debit", reason, referenceId, admin);
+    return this.applyDelta(userId, -amount, "debit", reason, referenceId, admin, "reservation");
+  }
+
+  /**
+   * Mark a reservation as permanently captured after a successful book delivery.
+   * Balance is unchanged (already debited at reserve). Idempotent via referenceId.
+   */
+  async capture(userId: string, amount: number, reason: string, referenceId?: string) {
+    if (amount <= 0) return this.getBalance(userId);
+    return this.applyDelta(
+      userId,
+      0,
+      "capture",
+      reason,
+      referenceId,
+      false,
+      "capture",
+      amount
+    );
   }
 
   /**
@@ -80,32 +98,41 @@ export class CreditService {
    */
   async refund(userId: string, amount: number, reason: string, referenceId?: string) {
     if (amount <= 0) return this.getBalance(userId);
-    return this.applyDelta(userId, amount, "credit", reason, referenceId, false);
+    return this.applyDelta(userId, amount, "credit", reason, referenceId, false, "refund");
   }
 
   async debit(userId: string, amount: number, reason: string, referenceId?: string) {
     if (amount <= 0) return this.getBalance(userId);
     const admin = await this.isAdminUser(userId);
-    return this.applyDelta(userId, -amount, "debit", reason, referenceId, admin);
+    return this.applyDelta(userId, -amount, "debit", reason, referenceId, admin, "debit");
   }
 
   async credit(userId: string, amount: number, reason: string, referenceId?: string) {
     if (amount <= 0) return this.getBalance(userId);
-    return this.applyDelta(userId, amount, "credit", reason, referenceId, false);
+    return this.applyDelta(userId, amount, "credit", reason, referenceId, false, "credit");
   }
 
   /**
    * Core atomic balance mutation. `delta` is signed (negative = spend).
    * When `autoTopUp` is set (admins), the balance is raised inside the same
    * transaction if it would otherwise go negative, so admin actions never fail.
+   * `delta === 0` is allowed for capture markers (balance unchanged).
    */
   private async applyDelta(
     userId: string,
     delta: number,
-    operation: "credit" | "debit",
+    operation: "credit" | "debit" | "capture",
     reason: string,
     referenceId: string | undefined,
-    autoTopUp: boolean
+    autoTopUp: boolean,
+    kind:
+      | "reservation"
+      | "capture"
+      | "refund"
+      | "release"
+      | "credit"
+      | "debit" = "debit",
+    ledgerAmount?: number
   ): Promise<number> {
     const userRef = this.db.collection("users").doc(userId);
     const ledgerRef = userRef.collection("credit_ledger");
@@ -131,6 +158,19 @@ export class CreditService {
       if (!snap.exists) throw new AppError("NOT_FOUND", "Profil introuvable", 404);
       const balance = (snap.data()?.credits as number) ?? 0;
 
+      if (delta === 0) {
+        tx.set(ledgerRef.doc(), {
+          operation,
+          kind,
+          amount: Math.max(0, ledgerAmount ?? 0),
+          balance_after: balance,
+          reason,
+          reference_id: referenceId ?? null,
+          created_at: now,
+        });
+        return balance;
+      }
+
       const appliedDelta = delta;
       let topUp = 0;
       if (delta < 0 && balance + delta < 0) {
@@ -150,6 +190,7 @@ export class CreditService {
         const afterTopUp = balance + topUp;
         tx.set(ledgerRef.doc(), {
           operation: "credit",
+          kind: "credit",
           amount: topUp,
           balance_after: afterTopUp,
           reason: "Recharge automatique administrateur",
@@ -160,6 +201,7 @@ export class CreditService {
         tx.update(userRef, { credits: next, updated_at: now });
         tx.set(ledgerRef.doc(), {
           operation,
+          kind,
           amount: Math.abs(appliedDelta),
           balance_after: next,
           reason,
@@ -173,6 +215,7 @@ export class CreditService {
       tx.update(userRef, { credits: next, updated_at: now });
       tx.set(ledgerRef.doc(), {
         operation,
+        kind,
         amount: Math.abs(appliedDelta),
         balance_after: next,
         reason,
