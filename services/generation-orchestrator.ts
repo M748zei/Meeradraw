@@ -24,6 +24,8 @@ import { CreditService } from "@/services/credit-service";
 import { PDFService } from "@/services/pdf-service";
 import { StorageService } from "@/services/storage-service";
 import { isBlankOrTooFaint, isColored } from "@/lib/image-quality";
+import { analyzeRasterStats, rasterVerdicts } from "@/lib/raster-gate";
+import { fetchSafeImageBytes } from "@/lib/safe-image-url";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
 import { buildBookQualitySummary } from "@/lib/quality-score";
 import {
@@ -1172,7 +1174,7 @@ export class GenerationOrchestrator {
       }));
     const parentMode = isParentBook(book);
     const strictDelivery = requiresPremiumVisualQuality(book);
-    const completedCount = pageDocs.filter(
+    let completedCount = pageDocs.filter(
       (p) =>
         p.generation_status === "completed" &&
         (!strictDelivery ||
@@ -1184,6 +1186,53 @@ export class GenerationOrchestrator {
     const failedCount = pageDocs.filter(
       (p) => p.generation_status === "failed"
     ).length;
+
+    // FINAL-BOOK RASTER GATE (prod gen 4f8980ea): before any PDF or capture,
+    // re-verify the PERSISTED bytes of the cover and of every completed page
+    // with the deterministic raster gate. A book whose stored assets are
+    // black-flooded, inverted or corrupted must fail cleanly and refund —
+    // never ship on the verdict of an earlier version of the image.
+    let coverUnprintable = false;
+    if (strictDelivery) {
+      for (const p of pageDocs) {
+        if (
+          p.generation_status !== "completed" ||
+          typeof p.illustration_url !== "string" ||
+          !p.illustration_url
+        ) {
+          continue;
+        }
+        const verdicts = await this.persistedAssetRasterVerdicts(
+          p.illustration_url
+        );
+        if (verdicts.length > 0) {
+          console.error(
+            `[gen ${generationId}] persisted page ${String(p.page_number)} failed the final raster gate: ${verdicts.join("; ")}`
+          );
+          await pagesCol.doc(p.id).update({
+            generation_status: "failed",
+            qc_stats: firestoreSafe({
+              ...((p.qc_stats as ImageQcStats | undefined) || {}),
+              finalAssetVerdicts: verdicts,
+            }),
+            updated_at: new Date().toISOString(),
+          });
+          p.generation_status = "failed";
+          completedCount -= 1;
+        }
+      }
+      if (typeof book.cover_image === "string" && book.cover_image) {
+        const coverVerdicts = await this.persistedAssetRasterVerdicts(
+          book.cover_image
+        );
+        if (coverVerdicts.length > 0) {
+          console.error(
+            `[gen ${generationId}] persisted cover failed the final raster gate: ${coverVerdicts.join("; ")}`
+          );
+          coverUnprintable = true;
+        }
+      }
+    }
 
     // Never mark a book "completed" with blank pages
     if (completedCount === 0) {
@@ -1216,7 +1265,7 @@ export class GenerationOrchestrator {
 
     const plannedPages = book.page_count || pageDocs.length;
     // Product promise: no paid coloring book ships incomplete or below QC.
-    if (strictDelivery && completedCount < plannedPages) {
+    if (strictDelivery && (completedCount < plannedPages || coverUnprintable)) {
       await this.books.update(userId, bookId, {
         status: "draft",
         active_generation_id: null,
@@ -1521,6 +1570,17 @@ export class GenerationOrchestrator {
       current_step: "illustrator",
       progress,
     });
+  }
+
+  /**
+   * Deterministic raster verdicts of a PERSISTED strict asset (final-book
+   * gate). Analysis defects fail closed; a FETCH failure throws so the
+   * durable finalize step retries instead of refunding a possibly-good book.
+   */
+  private async persistedAssetRasterVerdicts(url: string): Promise<string[]> {
+    const bytes = await fetchSafeImageBytes(url);
+    const stats = await analyzeRasterStats(Buffer.from(bytes));
+    return rasterVerdicts(stats);
   }
 
   /** Merge one image's QC stats onto the generation doc (sheet/cover). */

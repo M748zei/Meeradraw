@@ -18,6 +18,10 @@ import {
 } from "@/lib/qc-attempts";
 import { seedForReroll } from "@/lib/generation-seed";
 import {
+  prepareStrictPrintCandidate,
+  printCandidateVisionDataUrl,
+} from "@/lib/print-normalize";
+import {
   COLOR_SHEET_BOOST,
   LINEART_BOOST,
   ENV_BOOST,
@@ -264,7 +268,13 @@ export class FalImageProvider implements ImageAIProvider {
 
       // Reference-guided Kontext sometimes keeps the hero's colors despite the B&W prompt.
       // After re-rolls, if the page/cover is still colored, fall back to text-only Ideogram.
+      // Strict print candidates are binarized + raster-gated by construction —
+      // re-downloading the uploaded URL would be pure waste.
+      const strictPrintDelivered =
+        Boolean(input.strictQuality) &&
+        Boolean(input.isCover || input.isColoringPage);
       if (
+        !strictPrintDelivered &&
         useReference &&
         validateLineArt &&
         (await this.isStillColored(result.url))
@@ -366,6 +376,14 @@ export class FalImageProvider implements ImageAIProvider {
 
     const wantsQualityCheck =
       validateNonBlank || validateEnvironment || validateLineArt || Boolean(requireColored);
+    // Strict pages/covers: normalize to the FINAL print render inside the
+    // attempt loop, then run every gate (pixel, deterministic raster, vision)
+    // on those exact bytes. Prod gen 4f8980ea shipped black-flooded pages
+    // because gates judged the raw fal image and threshold() destroyed it
+    // afterwards with no re-check.
+    const strictPrint =
+      Boolean(input?.strictQuality) &&
+      Boolean(input?.isCover || input?.isColoringPage);
     // Vision re-rolls extend the loop but keep their own (smaller) cap.
     const maxRerolls = wantsQualityCheck
       ? maxQualityRerolls + maxVisionRerolls
@@ -386,6 +404,8 @@ export class FalImageProvider implements ImageAIProvider {
           provider: string;
           needsUpload: boolean;
           pngBuffer?: Buffer;
+          /** True when pngBuffer already IS the gated final print render. */
+          isFinalPrint?: boolean;
         }
       | null = null;
     let lastError: unknown = null;
@@ -450,25 +470,61 @@ export class FalImageProvider implements ImageAIProvider {
         continue;
       }
 
+      // Strict pages/covers: build the FINAL print render for THIS attempt and
+      // gate on those bytes; the raw fal image is only an intermediate.
+      let finalPrintPng: Buffer | undefined;
+      let rasterTags: string[] = [];
+      if (strictPrint && current.pngBuffer) {
+        try {
+          const candidate = await prepareStrictPrintCandidate(current.pngBuffer);
+          finalPrintPng = candidate.png;
+          rasterTags = candidate.verdicts;
+          if (candidate.repairedInversion) {
+            qcStats.rasterRepairedInversion = true;
+          }
+          qcStats.finalRaster = {
+            darkRatio: Number(candidate.stats.darkRatio.toFixed(4)),
+            whiteRatio: Number(candidate.stats.whiteRatio.toFixed(4)),
+            borderDarkRatio: Number(candidate.stats.borderDarkRatio.toFixed(4)),
+            largestDarkBlobRatio: Number(
+              candidate.stats.largestDarkBlobRatio.toFixed(4)
+            ),
+          };
+        } catch (prepErr) {
+          console.warn(`[${label}] print candidate preparation failed`, prepErr);
+          finalPrintPng = undefined;
+          rasterTags = ["corrupt:print-normalization-failed"];
+        }
+      }
       const blank =
-        validateNonBlank && current.bytes ? isBlankOrTooFaint(current.bytes) : false;
+        !strictPrint && validateNonBlank && current.bytes
+          ? isBlankOrTooFaint(current.bytes)
+          : false;
       const colored =
-        validateLineArt && current.bytes ? isColored(current.bytes) : false;
+        !strictPrint && validateLineArt && current.bytes
+          ? isColored(current.bytes)
+          : false;
+      // Environment richness is judged on the RAW bytes: the final print
+      // render adds white 3:4 padding bands that would fake a poor border.
       const poorEnv =
-        validateEnvironment && current.bytes ? hasPoorEnvironment(current.bytes) : false;
+        validateEnvironment && current.bytes
+          ? hasPoorEnvironment(current.bytes)
+          : false;
       // Hero portrait plausibility: a NON-colored result means the model drifted to a
       // degenerate B&W sheet (the "two generic boys" failure) → defect, re-roll.
       const notColored =
         requireColored && current.bytes && !blank ? !isColored(current.bytes) : false;
       // Blank / empty-void pages are severe; poor environment is almost as bad for
       // a coloring book (nothing to color). Weight it high so we re-roll hard.
-      const analysisUnavailable = wantsQualityCheck && !current.bytes;
+      const analysisUnavailable =
+        (wantsQualityCheck && !current.bytes) || (strictPrint && !finalPrintPng);
       const score =
         (analysisUnavailable ? 5 : 0) +
         (blank ? 3 : 0) +
         (colored ? 2 : 0) +
         (notColored ? 2 : 0) +
-        (poorEnv ? 3 : 0);
+        (poorEnv ? 3 : 0) +
+        rasterTags.length * 5;
       prevBlankOrEnv = blank || poorEnv;
       prevColored = colored;
       prevNotColored = notColored;
@@ -478,12 +534,18 @@ export class FalImageProvider implements ImageAIProvider {
       // Verdict tags are the single signal — targeted boosts for the NEXT
       // attempt are routed from these tags (routeBoostsForVerdicts).
       let visionScore = 0;
-      let attemptVerdicts: string[] = [];
+      let attemptVerdicts: string[] = [...rasterTags];
       if (score === 0 && input && visionRerollsUsed < maxVisionRerolls + 1) {
+        // Vision judges the EXACT bytes that would ship: for strict print
+        // candidates that is the normalized render, never the raw fal image.
+        const visionSourceUrl =
+          strictPrint && finalPrintPng
+            ? await printCandidateVisionDataUrl(finalPrintPng)
+            : current.url;
         const verdicts: string[] = [];
         if (input.isCharacterSheet && input.expectedCast?.length) {
-          const cast = await checkCast(current.url, input.expectedCast);
-          if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
+          const cast = await checkCast(visionSourceUrl, input.expectedCast);
+          if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED !== "false") {
             visionScore += 4;
             verdicts.push("cast:vision-unavailable");
           } else if (cast && !cast.matches) {
@@ -492,8 +554,8 @@ export class FalImageProvider implements ImageAIProvider {
           }
         } else if (input.isCover) {
           if (input.coverTitle) {
-            const title = await checkCoverTitle(current.url, input.coverTitle);
-            if (!title && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
+            const title = await checkCoverTitle(visionSourceUrl, input.coverTitle);
+            if (!title && input.strictQuality && process.env.STRICT_VISION_REQUIRED !== "false") {
               visionScore += 4;
               verdicts.push("title:vision-unavailable");
             } else if (title && !title.titleLegible) {
@@ -502,8 +564,8 @@ export class FalImageProvider implements ImageAIProvider {
             }
           }
           if (input.expectedCast?.length) {
-            const cast = await checkCast(current.url, input.expectedCast);
-            if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
+            const cast = await checkCast(visionSourceUrl, input.expectedCast);
+            if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED !== "false") {
               visionScore += 4;
               verdicts.push("cast:vision-unavailable");
             } else if (cast && !cast.matches) {
@@ -515,8 +577,8 @@ export class FalImageProvider implements ImageAIProvider {
           // Hard defects (anatomy/craft/comic/blur/safety/…) feed canSoftAcceptCover's
           // blocklist; soft lineup/action alone may soft-accept after re-rolls.
           if (input.action) {
-            const poster = await checkCoverAction(current.url, input.action);
-            if (!poster && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
+            const poster = await checkCoverAction(visionSourceUrl, input.action);
+            if (!poster && input.strictQuality && process.env.STRICT_VISION_REQUIRED !== "false") {
               visionScore += 4;
               verdicts.push("cover-quality:vision-unavailable");
             } else if (poster) {
@@ -529,8 +591,8 @@ export class FalImageProvider implements ImageAIProvider {
           }
         } else if (input.isColoringPage) {
           if (input.expectedCast?.length) {
-            const cast = await checkCast(current.url, input.expectedCast);
-            if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
+            const cast = await checkCast(visionSourceUrl, input.expectedCast);
+            if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED !== "false") {
               visionScore += 4;
               verdicts.push("cast:vision-unavailable");
             } else if (cast && !cast.matches) {
@@ -538,8 +600,8 @@ export class FalImageProvider implements ImageAIProvider {
               verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
             }
           }
-          const page = await checkPageAction(current.url, input.action || "");
-          if (!page && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
+          const page = await checkPageAction(visionSourceUrl, input.action || "");
+          if (!page && input.strictQuality && process.env.STRICT_VISION_REQUIRED !== "false") {
             visionScore += 4;
             verdicts.push("page-quality:vision-unavailable");
           } else if (page) {
@@ -575,13 +637,13 @@ export class FalImageProvider implements ImageAIProvider {
           input.expectedCast?.length === identityUrls.length
         ) {
           const identity = await checkIdentityReferences(
-            current.url,
+            visionSourceUrl,
             input.expectedCast.map((character, index) => ({
               ...character,
               referenceImageUrl: identityUrls[index],
             }))
           );
-          if (!identity && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
+          if (!identity && input.strictQuality && process.env.STRICT_VISION_REQUIRED !== "false") {
             visionScore += 5;
             verdicts.push("identity:vision-unavailable");
           } else if (identity && !identity.matches) {
@@ -596,13 +658,13 @@ export class FalImageProvider implements ImageAIProvider {
           }
         }
         if (verdicts.length) {
-          attemptVerdicts = verdicts;
+          attemptVerdicts = [...attemptVerdicts, ...verdicts];
           qcStats.visionVerdicts = [...(qcStats.visionVerdicts || []), ...verdicts];
         }
       }
 
-      // Pixel-only defects (blank/colored/env) with no vision tags still need a signal
-      // for soft-accept decisions (covers with pure chroma use repairableColorOnly).
+      // Pixel-only defects (blank/env/unreadable) still need a verdict tag so
+      // the soft-accept blocklist and boost routing see them.
       if (blank) attemptVerdicts = [...attemptVerdicts, "corrupt:blank-or-unreadable"];
       if (analysisUnavailable) {
         attemptVerdicts = [...attemptVerdicts, "corrupt:bytes-unavailable"];
@@ -616,12 +678,22 @@ export class FalImageProvider implements ImageAIProvider {
         colored,
       });
       if (tracker.best === record) {
-        bestPayload = {
-          url: current.url,
-          provider: current.provider,
-          needsUpload: Boolean(current.needsUpload),
-          pngBuffer: current.pngBuffer,
-        };
+        bestPayload = strictPrint
+          ? {
+              // Strict print: the payload IS the gated final render — the
+              // exact bytes every check above just judged.
+              url: current.url,
+              provider: current.provider,
+              needsUpload: true,
+              pngBuffer: finalPrintPng,
+              isFinalPrint: true,
+            }
+          : {
+              url: current.url,
+              provider: current.provider,
+              needsUpload: Boolean(current.needsUpload),
+              pngBuffer: current.pngBuffer,
+            };
       }
       prevVerdicts = record.verdicts;
 
@@ -733,7 +805,22 @@ export class FalImageProvider implements ImageAIProvider {
       );
     }
 
-    // Normalize strict interior pages to a real print canvas (3:4 portrait,
+    // Strict print candidates: the gated final render IS the deliverable.
+    // Persist exactly those bytes — no further transformation may run after
+    // the gates (the incident's root cause was a post-gate threshold()).
+    if (bestPayload.isFinalPrint) {
+      if (!bestPayload.pngBuffer) {
+        throw new Error("Strict print candidate lost its final bytes");
+      }
+      const url = await this.storage.uploadBytes(
+        `generated/${randomUUID()}-print.png`,
+        bestPayload.pngBuffer,
+        "image/png"
+      );
+      return { url, provider: bestPayload.provider };
+    }
+
+    // Non-strict paths: normalize to a real print canvas (3:4 portrait,
     // 2400×3200 by default). This preserves aspect ratio with white padding,
     // removes residual chroma, and avoids stretching a 1024px square in the PDF.
     if ((input?.isColoringPage || input?.isCover) && bestPayload.pngBuffer) {
