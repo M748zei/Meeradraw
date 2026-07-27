@@ -61,6 +61,78 @@ async function runLogicTests() {
   } = await import("../lib/pdf-export-state");
   const { normalizeCheckoutPhone } = await import("../lib/checkout-phone");
   const { isCustomerVisibleBook } = await import("../lib/book-visibility");
+  const { resolveFirebaseAuthDomain } = await import(
+    "../lib/firebase/auth-domain"
+  );
+  const { isIosOrIpadOs } = await import(
+    "../lib/firebase/google-auth-flow"
+  );
+  const { firebaseAuthProxyRewrites } = await import(
+    "../config/firebase-auth-proxy"
+  );
+
+  await test("Firebase redirect auth is first-party only on the production host", () => {
+    assert(
+      resolveFirebaseAuthDomain(
+        "bookstudioai-8eadb.firebaseapp.com",
+        "https://meeradraw.digiafrik.shop",
+        "meeradraw.digiafrik.shop"
+      ) === "meeradraw.digiafrik.shop",
+      "production must use the MeeraDraw auth domain"
+    );
+    assert(
+      resolveFirebaseAuthDomain(
+        "bookstudioai-8eadb.firebaseapp.com",
+        "https://meeradraw.digiafrik.shop",
+        "preview.vercel.app"
+      ) === "bookstudioai-8eadb.firebaseapp.com",
+      "preview must keep the configured Firebase helper domain"
+    );
+  });
+
+  await test("Google auth detects iPhone and modern iPadOS", () => {
+    assert(
+      isIosOrIpadOs(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X)",
+        "iPhone",
+        5
+      ),
+      "iPhone must use redirect auth"
+    );
+    assert(
+      isIosOrIpadOs(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)",
+        "MacIntel",
+        5
+      ),
+      "touch iPadOS must use redirect auth"
+    );
+    assert(
+      !isIosOrIpadOs(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        "MacIntel",
+        0
+      ),
+      "desktop Mac must keep popup auth"
+    );
+  });
+
+  await test("Firebase auth helper proxy is transparent and allowlisted", () => {
+    const rewrites = firebaseAuthProxyRewrites(
+      "bookstudioai-8eadb.firebaseapp.com"
+    );
+    assert(rewrites.length === 2, `rewrites=${rewrites.length}`);
+    assert(
+      rewrites[0]?.source === "/__/auth/:path*" &&
+        rewrites[0]?.destination ===
+          "https://bookstudioai-8eadb.firebaseapp.com/__/auth/:path*",
+      "auth helper must be reverse-proxied without redirecting the browser"
+    );
+    assert(
+      firebaseAuthProxyRewrites("evil.example.com").length === 0,
+      "proxy destination must be restricted to Firebase Hosting"
+    );
+  });
 
   await test("stale session cookie cannot trap the login route", async () => {
     const { NextRequest } = await import("next/server");
