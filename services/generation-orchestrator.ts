@@ -18,6 +18,7 @@ import type { ImageQcStats, SettingBible, StoryPlan } from "@/services/ai/types"
 import { getImageProvider, getTextProvider } from "@/services/ai";
 import { MockTextProvider } from "@/services/ai/mock-provider";
 import { generationSeed } from "@/lib/generation-seed";
+import { assertParentPlanViable } from "@/lib/plan-fidelity";
 import { heroGenderPromptBits } from "@/services/ai/prompts";
 import { BookService } from "@/services/book-service";
 import { CreditService } from "@/services/credit-service";
@@ -285,9 +286,18 @@ export class GenerationOrchestrator {
         { originalIdea, childName, childGender, parentMode }
       );
     } catch (err) {
-      // A text-provider outage must not block a paid parent book. The local
-      // planner preserves the requested story, child name, page count and style
-      // so image generation can continue without spending extra text credits.
+      if (parentMode) {
+        // Prod gen 46a9262b: a Groq hiccup silently degraded a PAID parent
+        // book to the local fallback planner (one bare hero, empty actions)
+        // and the whole run burned downstream. Parent books must retry the
+        // REAL planner (workflow step retry/backoff) and, if it stays down,
+        // fail cleanly with a refund — never ship a generic book.
+        console.error("parent story plan failed; retryable (no silent fallback)", err);
+        throw err instanceof Error
+          ? err
+          : new Error("Story planner unavailable for parent book");
+      }
+      // Studio books keep the historical fail-open fallback.
       console.warn("text story plan unavailable; using local fallback", err);
       plan = await new MockTextProvider().generateStoryPlan(
         idea,
@@ -297,6 +307,19 @@ export class GenerationOrchestrator {
         audience,
         { originalIdea, childName, childGender, parentMode }
       );
+    }
+    if (parentMode) {
+      // Structural viability gate — a plan missing the story's mandatory
+      // cast or drawable actions must not reach the image pipeline.
+      const viable = assertParentPlanViable(plan, parentStory || originalIdea);
+      if (!viable.ok) {
+        console.error(
+          `parent plan not viable: ${viable.reasons.join(" | ").slice(0, 300)}`
+        );
+        throw new Error(
+          `Parent plan not viable: ${viable.reasons.slice(0, 3).join("; ")}`
+        );
+      }
     }
 
     // Parent identity is the source of truth. Text models may invent a local
