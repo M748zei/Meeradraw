@@ -11,7 +11,21 @@ import {
 } from "@/services/ai/prompts";
 import { styleImageCraftLine } from "@/services/ai/style-contracts";
 import { buildCompositionBlueprint } from "@/services/ai/composition-templates";
-import { canSoftAcceptCover } from "@/lib/cover-soft-accept";
+import {
+  createAttemptTracker,
+  recordAttempt,
+  strictGateOutcome,
+} from "@/lib/qc-attempts";
+import { seedForReroll } from "@/lib/generation-seed";
+import {
+  COLOR_SHEET_BOOST,
+  LINEART_BOOST,
+  ENV_BOOST,
+  EYES_BOOST,
+  STYLE_PRESERVE_BOOST,
+  routeBoostsForVerdicts,
+  type BoostRoutingContext,
+} from "@/services/ai/qc-boosts";
 import { withRetry } from "@/lib/async";
 import { isBlankOrTooFaint, hasPoorEnvironment, isColored } from "@/lib/image-quality";
 import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
@@ -101,25 +115,8 @@ export function isNonRetryableFalError(err: unknown): boolean {
     /fal\.ai error:.*"type"\s*:\s*"feature_not_supported"/i.test(msg)
   );
 }
-const ANTI_LINEUP_BOOST =
-  "CRITICAL: the characters must be IN MOTION doing the described action with distinct dynamic poses and a non-frontal camera angle — ABSOLUTELY NOT standing in a row, NOT front-facing side by side, NOT a static group photo, NOT a model sheet.";
-const CAST_FIX_BOOST =
-  "CRITICAL: draw EXACTLY the listed characters — correct number of figures, correct species for each (an animal character is a REAL animal of its species, never a human) — no extra characters, no missing characters.";
-const TITLE_FIX_BOOST =
-  "CRITICAL: the title text must be rendered LARGE, PERFECTLY LEGIBLE and CORRECTLY SPELLED in bold playful hand-lettering in the top band.";
-const ENV_BOOST =
-  "CRITICAL ENVIRONMENT: fill AT LEAST 70% of the page with colorable scenery that matches THIS scene — ground, sky, trees, buildings, furniture, props reaching the edges. The child is SMALLER in the frame. Absolutely NO empty white void, NO floating character on blank paper, NO portrait-only composition. Do NOT invent a market unless the scene is a market.";
-const EYES_BOOST =
-  "CRITICAL FACE: draw BOTH eyes with a dark pupil circle AND iris inside each eye outline — never blank white eyes, never empty ovals. Natural round child head, not elongated or deformed.";
-const LINEART_BOOST =
-  "STRICT BLACK AND WHITE LINE ART ONLY: pure black outlines on white paper, absolutely NO color, no colored fills, no shading, no grey — a printable coloring page, NOT a colored illustration. No artist signature, no watermark, no text in the corners.";
-const STYLE_PRESERVE_BOOST =
-  "CRITICAL STYLE PRESERVE: keep the EXACT same organic ink hand, character identities, proportions and coloring-book aesthetic as the rest of this book — do not switch artists or line styles.";
-const PREMIUM_PAGE_BOOST =
-  "PREMIUM PRODUCT GATE: ONE SINGLE FULL-PAGE CONTINUOUS COLORING SCENE — absolutely NO comic panels, split frames, grids, gutters, panel borders, speech bubbles, captions or text boxes. Coherent foreground, midground and background with at least 6 LARGE CLOSED scene-specific colorable objects; correct anatomy with no missing/extra/fused limbs; professional organic children's-book ink with gently varied line weight; no generic clipart and no giant glossy emoji eyes.";
-/** Re-roll nudge when the hero cast portrait came back B&W (degenerate) instead of colored. */
-const COLOR_SHEET_BOOST =
-  "IMPORTANT: render the characters in soft flat COLORS (colored skin, hair, outfits and fur) with bold cartoon outlines — this reference portrait must NOT be black-and-white line art.";
+// Boost texts + verdict-driven routing live in services/ai/qc-boosts.ts so the
+// reliability suite can test the routing decisions against the real strings.
 
 export class FalImageProvider implements ImageAIProvider {
   private storage = new StorageService();
@@ -378,49 +375,56 @@ export class FalImageProvider implements ImageAIProvider {
     const qcStats: ImageQcStats = input?.qcStats ?? {};
     if (input) input.qcStats = qcStats;
 
-    // Lower score = better (0 = clean). Keep the best attempt so we never fail the page.
-    let best:
+    // Best-attempt decision state (lib/qc-attempts): attemptHistory is pure
+    // telemetry; every accept / soft-accept / reject decision below reads the
+    // BEST attempt exclusively — earlier attempts can never contaminate it.
+    const tracker = createAttemptTracker();
+    /** Provider payload (url/buffer) of the attempt that owns tracker.best. */
+    let bestPayload:
       | {
           url: string;
           provider: string;
-          score: number;
-          blank: boolean;
-          colored: boolean;
           needsUpload: boolean;
           pngBuffer?: Buffer;
         }
       | null = null;
     let lastError: unknown = null;
-    // Track the previous attempt's defects so the next re-roll nudges the right way.
+    // Previous attempt's defects → targeted nudges for the next re-roll.
     let prevBlankOrEnv = false;
     let prevColored = false;
     let prevNotColored = false;
-    let prevVisionNudges: string[] = [];
-    /** Verdicts from the attempt that currently owns `best` (not the full history). */
-    let bestVerdicts: string[] = [];
+    let prevVerdicts: string[] = [];
+    const boostCtx: BoostRoutingContext = {
+      action: input?.action,
+      storySummary: input?.prompt,
+      cast: input?.expectedCast,
+      multiReference: (input?.referenceImageUrls?.length || 0) > 1,
+    };
 
     for (let attempt = 0; attempt <= maxRerolls; attempt++) {
-      // Consistency mode: keep seed in the same family (seed+attempt) so rerolls
-      // fix defects without jumping to a different artist aesthetic.
+      // Deterministic re-roll family: seedForReroll keeps the same run stable
+      // (idempotent resume) while making each re-roll a genuinely distinct seed.
       if (typeof baseSeed === "number" && Number.isFinite(baseSeed)) {
-        body.seed = (baseSeed + attempt) % 2147483647;
+        body.seed = seedForReroll(baseSeed, attempt);
       } else if (attempt > 0 && !consistencyMode) {
         delete body.seed; // legacy: fresh random seed on reroll
       }
 
       if (attempt > 0) {
-        const nudges: string[] = [...prevVisionNudges];
+        // Verdict-driven targeted boosts (story/action, identity-reference,
+        // anti-lineup, cast, anatomy…) from the PREVIOUS attempt's verdicts.
+        const nudges: string[] = routeBoostsForVerdicts(prevVerdicts, boostCtx);
         if (prevColored) nudges.push(LINEART_BOOST);
         if (prevNotColored) nudges.push(COLOR_SHEET_BOOST);
         if (
           prevBlankOrEnv ||
-          (!prevColored && !requireColored && !prevVisionNudges.length)
+          (!prevColored && !requireColored && !prevVerdicts.length)
         ) {
           nudges.push(ENV_BOOST);
           nudges.push(EYES_BOOST);
         }
         if (consistencyMode) nudges.push(STYLE_PRESERVE_BOOST);
-        body.prompt = `${basePrompt} ${nudges.join(" ")}`;
+        body.prompt = `${basePrompt} ${[...new Set(nudges)].join(" ")}`;
       }
 
       let current: {
@@ -442,7 +446,7 @@ export class FalImageProvider implements ImageAIProvider {
         // stop and keep it; otherwise try another re-roll before giving up.
         lastError = err;
         if (isNonRetryableFalError(err)) break;
-        if (best) break;
+        if (tracker.best) break;
         continue;
       }
 
@@ -471,8 +475,9 @@ export class FalImageProvider implements ImageAIProvider {
 
       // VISION QC (audit T4/T5/T6): only on pixel-clean images (score 0), with its
       // own re-roll cap. Fail-open: null verdict = cannot judge = accept.
+      // Verdict tags are the single signal — targeted boosts for the NEXT
+      // attempt are routed from these tags (routeBoostsForVerdicts).
       let visionScore = 0;
-      prevVisionNudges = [];
       let attemptVerdicts: string[] = [];
       if (score === 0 && input && visionRerollsUsed < maxVisionRerolls + 1) {
         const verdicts: string[] = [];
@@ -480,11 +485,9 @@ export class FalImageProvider implements ImageAIProvider {
           const cast = await checkCast(current.url, input.expectedCast);
           if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
             visionScore += 4;
-            prevVisionNudges.push(CAST_FIX_BOOST);
             verdicts.push("cast:vision-unavailable");
           } else if (cast && !cast.matches) {
             visionScore += 4;
-            prevVisionNudges.push(CAST_FIX_BOOST);
             verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
           }
         } else if (input.isCover) {
@@ -492,11 +495,9 @@ export class FalImageProvider implements ImageAIProvider {
             const title = await checkCoverTitle(current.url, input.coverTitle);
             if (!title && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
-              prevVisionNudges.push(TITLE_FIX_BOOST);
               verdicts.push("title:vision-unavailable");
             } else if (title && !title.titleLegible) {
               visionScore += 2;
-              prevVisionNudges.push(TITLE_FIX_BOOST);
               verdicts.push(`title:${title.issue || "illegible"}`);
             }
           }
@@ -504,11 +505,9 @@ export class FalImageProvider implements ImageAIProvider {
             const cast = await checkCast(current.url, input.expectedCast);
             if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
-              prevVisionNudges.push(CAST_FIX_BOOST);
               verdicts.push("cast:vision-unavailable");
             } else if (cast && !cast.matches) {
               visionScore += 4;
-              prevVisionNudges.push(CAST_FIX_BOOST);
               verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
             }
           }
@@ -519,20 +518,11 @@ export class FalImageProvider implements ImageAIProvider {
             const poster = await checkCoverAction(current.url, input.action);
             if (!poster && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
-              prevVisionNudges.push(PREMIUM_PAGE_BOOST);
               verdicts.push("cover-quality:vision-unavailable");
             } else if (poster) {
               const applied = applyCoverPosterVerdicts(poster);
               if (applied.verdicts.length) {
                 visionScore += applied.visionScore;
-                const softOnly = applied.verdicts.every(
-                  (tag) =>
-                    /^cover-lineup:/i.test(tag) ||
-                    /^cover-action-missing:/i.test(tag)
-                );
-                prevVisionNudges.push(
-                  softOnly ? ANTI_LINEUP_BOOST : PREMIUM_PAGE_BOOST
-                );
                 verdicts.push(...applied.verdicts);
               }
             }
@@ -542,28 +532,23 @@ export class FalImageProvider implements ImageAIProvider {
             const cast = await checkCast(current.url, input.expectedCast);
             if (!cast && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
               visionScore += 4;
-              prevVisionNudges.push(CAST_FIX_BOOST);
               verdicts.push("cast:vision-unavailable");
             } else if (cast && !cast.matches) {
               visionScore += 4;
-              prevVisionNudges.push(CAST_FIX_BOOST);
               verdicts.push(`cast:${cast.issue || `saw ${cast.count}`}`);
             }
           }
           const page = await checkPageAction(current.url, input.action || "");
           if (!page && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
             visionScore += 4;
-            prevVisionNudges.push(PREMIUM_PAGE_BOOST);
             verdicts.push("page-quality:vision-unavailable");
           } else if (page) {
             if (!page.singleFullPage) {
               visionScore += 5;
-              prevVisionNudges.push(PREMIUM_PAGE_BOOST);
               verdicts.push(`comic-layout:${page.issue || "panels, bubbles or split frames detected"}`);
             }
             if (page.lineup || !page.actionVisible) {
               visionScore += page.lineup ? 3 : 1;
-              prevVisionNudges.push(ANTI_LINEUP_BOOST);
               verdicts.push(
                 `${page.lineup ? "lineup" : "action-missing"}:${page.issue || input.action?.slice(0, 60) || ""}`
               );
@@ -571,17 +556,14 @@ export class FalImageProvider implements ImageAIProvider {
             }
             if (!page.environmentRich) {
               visionScore += 4;
-              prevVisionNudges.push(ENV_BOOST, PREMIUM_PAGE_BOOST);
               verdicts.push(`environment:${page.issue || "not enough colorable scenery"}`);
             }
             if (!page.anatomyValid) {
               visionScore += 4;
-              prevVisionNudges.push(PREMIUM_PAGE_BOOST);
               verdicts.push(`anatomy:${page.issue || "malformed anatomy"}`);
             }
             if (!page.professionalLineArt) {
               visionScore += 3;
-              prevVisionNudges.push(PREMIUM_PAGE_BOOST);
               verdicts.push(`craft:${page.issue || "generic or careless line art"}`);
             }
           }
@@ -601,12 +583,10 @@ export class FalImageProvider implements ImageAIProvider {
           );
           if (!identity && input.strictQuality && process.env.STRICT_VISION_REQUIRED === "true") {
             visionScore += 5;
-            prevVisionNudges.push(CAST_FIX_BOOST);
             verdicts.push("identity:vision-unavailable");
           } else if (identity && !identity.matches) {
             visionScore += 5;
             qcStats.identityMismatchDetected = true;
-            prevVisionNudges.push(CAST_FIX_BOOST);
             const scores = identity.scores
               .map((item) => `${item.name}=${item.score}`)
               .join(",");
@@ -629,18 +609,21 @@ export class FalImageProvider implements ImageAIProvider {
       }
 
       const totalScore = score + visionScore;
-      if (!best || totalScore < best.score) {
-        best = {
+      const record = recordAttempt(tracker, {
+        score: totalScore,
+        verdicts: attemptVerdicts,
+        blank,
+        colored,
+      });
+      if (tracker.best === record) {
+        bestPayload = {
           url: current.url,
           provider: current.provider,
-          score: totalScore,
-          blank,
-          colored,
           needsUpload: Boolean(current.needsUpload),
           pngBuffer: current.pngBuffer,
         };
-        bestVerdicts = attemptVerdicts;
       }
+      prevVerdicts = record.verdicts;
 
       if (totalScore === 0) break; // clean page → accept immediately
 
@@ -656,7 +639,7 @@ export class FalImageProvider implements ImageAIProvider {
       }
       if (attempt < maxRerolls) {
         console.warn(
-          `[${label}] quality re-roll (blank=${blank}, colored=${colored}, notColored=${notColored}, poorEnv=${poorEnv}, vision=${prevVisionNudges.length > 0}); pixel ${pixelRerollsUsed}/${maxQualityRerolls}, vision ${visionRerollsUsed}/${maxVisionRerolls}`
+          `[${label}] quality re-roll (attempt=${record.attemptId}, blank=${blank}, colored=${colored}, notColored=${notColored}, poorEnv=${poorEnv}, vision=${attemptVerdicts.length > 0}); pixel ${pixelRerollsUsed}/${maxQualityRerolls}, vision ${visionRerollsUsed}/${maxVisionRerolls}`
         );
       }
     }
@@ -664,23 +647,28 @@ export class FalImageProvider implements ImageAIProvider {
     // Last-resort rescue: if the best attempt is STILL blank, flux likely choked on the
     // long descriptive prompt. Retry with a short, high-adherence prompt a couple times —
     // short prompts render far more reliably. Keep the first non-blank result.
-    if (best && best.blank && recoveryPrompt && !input?.strictQuality) {
-      for (let r = 0; r < 2 && best.blank; r++) {
+    if (tracker.best?.blank && recoveryPrompt && !input?.strictQuality) {
+      for (let r = 0; r < 2 && tracker.best.blank; r++) {
         body.prompt = recoveryPrompt;
         try {
           const rescue = await callFal(endpoint, key, body, true);
           const stillBlank = rescue.bytes ? isBlankOrTooFaint(rescue.bytes) : false;
           if (!stillBlank) {
             console.warn(`[${label}] blank page rescued via short prompt (try ${r + 1})`);
-            best = {
-              url: rescue.url,
-              provider: rescue.provider,
+            const rescueRecord = recordAttempt(tracker, {
               score: 0,
+              verdicts: [],
               blank: false,
               colored: false,
-              needsUpload: Boolean(rescue.needsUpload),
-              pngBuffer: rescue.pngBuffer,
-            };
+            });
+            if (tracker.best === rescueRecord) {
+              bestPayload = {
+                url: rescue.url,
+                provider: rescue.provider,
+                needsUpload: Boolean(rescue.needsUpload),
+                pngBuffer: rescue.pngBuffer,
+              };
+            }
             break;
           }
         } catch (err) {
@@ -692,67 +680,62 @@ export class FalImageProvider implements ImageAIProvider {
     // Strict delivery never lets a short-prompt rescue or uninspected provider
     // response bypass the complete pixel + semantic quality gate.
     // Only a total inability to produce ANY image is a real failure.
-    if (!best) {
+    const best = tracker.best;
+    if (!best || !bestPayload) {
       throw lastError instanceof Error
         ? lastError
         : new Error("fal.ai produced no image");
     }
-    // Lineup still present after vision re-rolls on a reference path → force
+    // Telemetry: full attempt history + explicit best attempt (observability
+    // only — decisions below already came from `best`).
+    qcStats.attemptHistory = tracker.attemptHistory.map((a) => ({
+      attemptId: a.attemptId,
+      score: a.score,
+      verdicts: a.verdicts.slice(0, 8),
+    }));
+    qcStats.bestAttemptId = best.attemptId;
+    qcStats.bestScore = best.score;
+    qcStats.bestVerdicts = best.verdicts;
+    // Lineup still present on the BEST attempt of a reference path → force
     // text-only Ideogram fallback (composition bleed from the model sheet).
     const isRefPath = label === "fal-ref" || /kontext/i.test(endpoint);
     if (
       isRefPath &&
       input?.isColoringPage &&
-      qcStats.lineupDetected &&
       best.score > 0 &&
-      (qcStats.visionVerdicts || []).some((v) => v.startsWith("lineup"))
+      best.verdicts.some((v) => v.startsWith("lineup"))
     ) {
       throw new Error("lineup after vision re-rolls");
     }
-    // Color leakage on an otherwise clean page/cover is mechanically repairable:
-    // the print normalization below converts it to high-contrast grayscale. Do not
-    // discard a valid composition or fail the whole paid book for that one defect.
-    const repairableColorOnly =
-      best.colored &&
-      !best.blank &&
-      best.score === 2 &&
-      !(qcStats.visionVerdicts || []).length;
-    // Covers only: closed allowlist soft-accept (lineup/action-energy), never a
-    // global score<=2 rule. Identity/cast/anatomy/safety always hard-reject.
-    const softCoverAcceptable = canSoftAcceptCover({
+    // Final gate over the SELECTED best attempt only (lib/qc-attempts):
+    // clean / repairable-color / closed-allowlist soft-cover accept; otherwise
+    // strict → terminal error describing ONLY the best attempt.
+    const outcome = strictGateOutcome({
+      strictQuality: Boolean(input?.strictQuality),
       isCover: Boolean(input?.isCover),
-      blank: best.blank,
-      colored: best.colored,
-      score: best.score,
-      // Use ONLY the best attempt's verdicts — never stale hard tags from earlier rolls.
-      verdicts: bestVerdicts,
+      best,
     });
-    if (
-      input?.strictQuality &&
-      best.score > 0 &&
-      !repairableColorOnly &&
-      !softCoverAcceptable
-    ) {
-      throw new NonRetryableFalError(
-        `strict visual quality gate rejected image (score ${best.score}): ${(qcStats.visionVerdicts || []).slice(-4).join("; ") || "pixel quality defect"}`
-      );
+    if (!outcome.accept) {
+      throw new NonRetryableFalError(outcome.errorMessage);
     }
-    if (softCoverAcceptable) {
+    if (outcome.mode === "soft-cover") {
       console.warn(
-        `[${label}] accepting cover after soft QC (allowlist lineup/action only; score ${best.score})`
+        `[${label}] accepting cover after soft QC (allowlist lineup/action only; attempt ${best.attemptId}, score ${best.score})`
       );
     }
     if (best.score > 0) {
-      console.warn(`[${label}] keeping best available image after re-rolls (score ${best.score})`);
+      console.warn(
+        `[${label}] keeping best available image after re-rolls (attempt ${best.attemptId}, score ${best.score})`
+      );
     }
 
     // Normalize strict interior pages to a real print canvas (3:4 portrait,
     // 2400×3200 by default). This preserves aspect ratio with white padding,
     // removes residual chroma, and avoids stretching a 1024px square in the PDF.
-    if ((input?.isColoringPage || input?.isCover) && best.pngBuffer) {
+    if ((input?.isColoringPage || input?.isCover) && bestPayload.pngBuffer) {
       try {
         const sharp = (await import("sharp")).default;
-        const printPng = await sharp(best.pngBuffer)
+        const printPng = await sharp(bestPayload.pngBuffer)
           .resize({
             width: PRINT_PAGE_WIDTH_PX,
             height: PRINT_PAGE_HEIGHT_PX,
@@ -770,7 +753,7 @@ export class FalImageProvider implements ImageAIProvider {
           printPng,
           "image/png"
         );
-        return { url, provider: best.provider };
+        return { url, provider: bestPayload.provider };
       } catch (err) {
         if (input.strictQuality) {
           throw new Error(
@@ -783,19 +766,19 @@ export class FalImageProvider implements ImageAIProvider {
 
     // The raw fal URL for webp/other formats is unusable by pdf-lib and is short-lived;
     // persist the converted PNG to Storage and return that stable URL instead.
-    if (best.needsUpload && best.pngBuffer) {
+    if (bestPayload.needsUpload && bestPayload.pngBuffer) {
       try {
         const url = await this.storage.uploadBytes(
           `generated/${randomUUID()}.png`,
-          best.pngBuffer,
+          bestPayload.pngBuffer,
           "image/png"
         );
-        return { url, provider: best.provider };
+        return { url, provider: bestPayload.provider };
       } catch (err) {
         console.warn(`[${label}] PNG upload failed; returning raw fal URL`, err);
       }
     }
-    return { url: best.url, provider: best.provider };
+    return { url: bestPayload.url, provider: bestPayload.provider };
   }
 
   /** Final check: did the shipped image fail the B&W line-art gate? */

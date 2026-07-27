@@ -17,7 +17,7 @@ import { persistCoverWithOptionalTitle } from "@/lib/cover-persist";
 import type { ImageQcStats, SettingBible, StoryPlan } from "@/services/ai/types";
 import { getImageProvider, getTextProvider } from "@/services/ai";
 import { MockTextProvider } from "@/services/ai/mock-provider";
-import { pageStyleSeed } from "@/lib/book-style-seed";
+import { generationSeed } from "@/lib/generation-seed";
 import { heroGenderPromptBits } from "@/services/ai/prompts";
 import { BookService } from "@/services/book-service";
 import { CreditService } from "@/services/credit-service";
@@ -44,6 +44,11 @@ function envInt(value: string | undefined, fallback: number) {
 /** Short parent-facing failure copy — never dump fal/provider JSON into the UI. */
 function userFacingGenerationError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err ?? "Erreur inconnue");
+  if (/strict visual quality gate/i.test(msg)) {
+    // Technical verdicts stay in the generation telemetry (qc_images) — the
+    // parent gets a reassuring, non-technical explanation.
+    return "L'illustration n'a pas atteint notre niveau de qualité (ressemblance du héros ou fidélité à l'histoire). Vos crédits ont été remboursés — relancez : chaque nouvelle tentative explore une composition différente.";
+  }
   if (/cannot be 'DESIGN'|style_preset|feature_not_supported/i.test(msg)) {
     return "L'illustration a échoué (réglage technique). Vos crédits ont été remboursés — réessayez.";
   }
@@ -524,7 +529,12 @@ export class GenerationOrchestrator {
           ...(strictVisual
             ? {
                 ...PARENT_FAL_CAPS,
-                seed: pageStyleSeed(bookId, 900 + attempt),
+                seed: generationSeed({
+                  bookId,
+                  generationId,
+                  assetType: "sheet",
+                  reroll: attempt,
+                }),
                 consistencyMode: true,
               }
             : STUDIO_FAL_CAPS),
@@ -599,7 +609,13 @@ export class GenerationOrchestrator {
             ...(strictVisual
               ? {
                   ...PARENT_FAL_CAPS,
-                  seed: pageStyleSeed(bookId, 1000 + characterIndex * 10 + attempt),
+                  seed: generationSeed({
+                    bookId,
+                    generationId,
+                    assetType: "portrait",
+                    index: characterIndex,
+                    reroll: attempt,
+                  }),
                   consistencyMode: true,
                 }
               : STUDIO_FAL_CAPS),
@@ -757,7 +773,9 @@ export class GenerationOrchestrator {
     const coverGender =
       (typeof book.child_gender === "string" && book.child_gender.trim()) ||
       undefined;
-    const cover = await imageProvider.generateImage({
+    let cover: { url: string; provider: string };
+    try {
+      cover = await imageProvider.generateImage({
       prompt: `${plan.title}. ${plan.summary}`,
       style,
       characterBible: formatCharacterLock(coverHero),
@@ -784,14 +802,19 @@ export class GenerationOrchestrator {
       ...(parentMode
         ? {
             ...PARENT_FAL_CAPS,
-            seed: pageStyleSeed(bookId, 0),
+            seed: generationSeed({ bookId, generationId, assetType: "cover" }),
             stylePreset: "COLORING_BOOK_I",
             heroGender: coverGender,
             consistencyMode: true,
           }
         : STUDIO_FAL_CAPS),
-    });
-    await this.setQcImage(generationId, "cover", coverStats);
+      });
+    } finally {
+      // Persist attempt telemetry even when the strict gate rejects the cover —
+      // the terminal error must stay explainable from the generation doc
+      // (attemptHistory + bestAttemptId + bestVerdicts).
+      await this.setQcImage(generationId, "cover", coverStats);
+    }
     await this.ensureActive(userId, bookId, generationId);
     await this.touchHeartbeat(generationId);
     const persistedCover = await this.persistCover(
@@ -989,6 +1012,9 @@ export class GenerationOrchestrator {
     const imageProvider = getImageProvider();
 
     await pagesCol.doc(pageId).update({ generation_status: "generating" });
+    // Declared outside the try so a strict-gate rejection still persists the
+    // page's attempt telemetry (attemptHistory/bestVerdicts) on the page doc.
+    const pageStats: ImageQcStats = {};
     try {
       const parentMode = isParentBook(book);
       const childGender =
@@ -1005,7 +1031,6 @@ export class GenerationOrchestrator {
         .filter(Boolean)
         .join(" ");
 
-      const pageStats: ImageQcStats = {};
       const pageCharacters = planPage
         ? charactersForPage(plan, planPage)
         : plan.characters.filter((character) =>
@@ -1063,7 +1088,12 @@ export class GenerationOrchestrator {
         ...(requiresPremiumVisualQuality(book)
           ? {
               ...PARENT_FAL_CAPS,
-              seed: pageStyleSeed(bookId, pageNumber),
+              seed: generationSeed({
+                bookId,
+                generationId,
+                assetType: "page",
+                index: pageNumber,
+              }),
               stylePreset: "COLORING_BOOK_I",
               heroGender: childGender,
               consistencyMode: true,
@@ -1106,6 +1136,7 @@ export class GenerationOrchestrator {
       await pagesCol.doc(pageId).update({
         illustration_url: null,
         generation_status: "failed",
+        qc_stats: firestoreSafe(pageStats),
         updated_at: new Date().toISOString(),
       });
       await this.updatePageProgress(generationId, bookId);
@@ -1503,7 +1534,7 @@ export class GenerationOrchestrator {
       const existing =
         (snap.data()?.qc_images as Record<string, ImageQcStats>) || {};
       await this.updateGeneration(generationId, {
-        qc_images: { ...existing, [key]: stats },
+        qc_images: firestoreSafe({ ...existing, [key]: stats }),
       });
     } catch (err) {
       console.error(`[gen ${generationId}] setQcImage failed (ignored)`, err);

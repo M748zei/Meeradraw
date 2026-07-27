@@ -12,7 +12,7 @@ import {
   settingElementsForScene,
 } from "@/services/ai/character-bible";
 import type { ImageQcStats, SettingBible, StoryPlan } from "@/services/ai/types";
-import { pageStyleSeed } from "@/lib/book-style-seed";
+import { generationSeed } from "@/lib/generation-seed";
 import { LicenseService } from "@/services/license-service";
 import { CreditService } from "@/services/credit-service";
 import { StorageService } from "@/services/storage-service";
@@ -281,7 +281,14 @@ export async function POST(request: Request) {
                   maxQualityRerolls: 2,
                   maxProviderAttempts: 2,
                   skipRecovery: false,
-                  seed: pageStyleSeed(body.book_id, Number(page.page_number) || 1),
+                  // Keyed on the retry token: a page retry must explore a NEW
+                  // composition, never replay the seed that just failed.
+                  seed: generationSeed({
+                    bookId: body.book_id,
+                    generationId: retryToken,
+                    assetType: "page",
+                    index: Number(page.page_number) || 1,
+                  }),
                   stylePreset: "COLORING_BOOK_I",
                   heroGender:
                     typeof book.child_gender === "string"
