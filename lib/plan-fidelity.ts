@@ -511,3 +511,69 @@ export function assertPoseDiversity(plan: StoryPlan): FidelityResult {
 
   return reasons.length ? { ok: false, reasons } : { ok: true };
 }
+
+/**
+ * Viability gate for PAID parent-book plans (prod gen 46a9262b): a Groq
+ * outage silently degraded to the local fallback planner, whose plan (one
+ * characterless-kind hero, empty actions on every page) burned the whole run
+ * downstream. A paid parent book must run on a REAL, structurally complete
+ * plan — otherwise the story step must fail (retryable) instead of shipping
+ * a generic book.
+ */
+export function assertParentPlanViable(
+  plan: StoryPlan,
+  parentStory: string
+): FidelityResult {
+  const reasons: string[] = [];
+  const characters = plan.characters || [];
+  const pages = plan.pages || [];
+
+  if (characters.length === 0) reasons.push("Aucun personnage dans le plan.");
+  for (const character of characters) {
+    if (!String(character.kind || "").trim()) {
+      reasons.push(`Personnage « ${character.name} » sans kind (espèce).`);
+    }
+    if (String(character.visualLock || "").trim().length < 20) {
+      reasons.push(`Personnage « ${character.name} » sans visualLock exploitable.`);
+    }
+  }
+  const emptyActions = pages.filter(
+    (p) => String(p.action || "").trim().length < 8
+  ).length;
+  if (emptyActions > 0) {
+    reasons.push(`${emptyActions} page(s) sans action concrète dessinable.`);
+  }
+  const emptyText = pages.filter(
+    (p) => String(p.storyText || "").trim().length < 8
+  ).length;
+  if (emptyText > 0) {
+    reasons.push(`${emptyText} page(s) sans texte d'histoire.`);
+  }
+
+  const story = String(parentStory || "").toLowerCase();
+  const nonHero = characters.slice(1);
+  if (/\bparents?\b/.test(story)) {
+    const adults = nonHero.filter(
+      (c) =>
+        (c.kind || "").toLowerCase() === "human" &&
+        /adult|parent|maman|papa|mère|père|mother|father|woman|man/i.test(
+          `${c.visualLock} ${c.description} ${c.name}`
+        )
+    );
+    if (adults.length < 2) {
+      reasons.push(
+        `L'histoire exige les parents mais le plan ne contient que ${adults.length} adulte(s) nommé(s).`
+      );
+    }
+  }
+  if (/\b(chien|dog|chat|cat|chaton|puppy|chiot)\b/.test(story)) {
+    const animals = characters.filter(
+      (c) => (c.kind || "").toLowerCase() !== "human" && String(c.kind || "").trim()
+    );
+    if (animals.length === 0) {
+      reasons.push("L'histoire exige un animal mais le plan n'en contient aucun.");
+    }
+  }
+
+  return reasons.length ? { ok: false, reasons } : { ok: true };
+}

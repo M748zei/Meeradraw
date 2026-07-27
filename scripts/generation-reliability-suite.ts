@@ -2107,9 +2107,90 @@ async function main() {
   await runStrictPagePrintIntegrationTests();
   await runNarrativeTextTests();
   await runFamilyCastTests();
+  await runParentPlanViabilityTests();
   await runEmulatorLedgerTests();
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
+}
+
+/**
+ * P0 — parent plan viability gate (prod gen 46a9262b): a Groq outage
+ * silently degraded a paid parent book to the local fallback planner (one
+ * bare hero, empty actions) and burned the run downstream.
+ */
+async function runParentPlanViabilityTests() {
+  console.log("\n── viabilité du plan parent (anti-fallback silencieux) ──");
+  const { assertParentPlanViable } = await import("../lib/plan-fidelity");
+  const STORY = "khadija et ses parents adoptent un chien";
+  const world = { setting: "maison", palette: "chaud", mood: "tendre" };
+  const child = (over: Record<string, unknown> = {}) => ({
+    id: "char_1",
+    name: "Khadija",
+    description: "héroïne",
+    appearance: "petite fille",
+    visualLock: "young girl child named Khadija, about 7 years old",
+    personality: "curieuse",
+    kind: "human",
+    ...over,
+  });
+  const goodPages = [1, 2, 3, 4, 5, 6].map((n) => ({
+    pageNumber: n,
+    title: `Étape ${n}`,
+    storyText: `Khadija et ses parents vivent l'étape ${n}.`,
+    illustrationDescription: "family adoption scene",
+    characterIds: ["char_1", "char_2", "char_3", "char_4"],
+    action: `Khadija and her parents do adoption step ${n} with the dog`,
+  }));
+  const familyPlan = {
+    title: "t",
+    summary: "s",
+    audienceAge: "6-8",
+    world,
+    characters: [
+      child(),
+      child({ id: "char_2", name: "Maman Aïcha", visualLock: "adult woman parent of Khadija, warm smile" }),
+      child({ id: "char_3", name: "Papa Moussa", visualLock: "adult man parent of Khadija, gentle bearded" }),
+      child({ id: "char_4", name: "Bello", kind: "dog", visualLock: "small friendly floppy-eared dog" }),
+    ],
+    pages: goodPages,
+  };
+
+  await test("plan familial complet → viable", () => {
+    assert.deepEqual(assertParentPlanViable(structuredClone(familyPlan), STORY), { ok: true });
+  });
+
+  await test("REPRO 46a9262b: plan fallback (1 perso sans kind, actions vides) → rejeté", () => {
+    const degraded = {
+      ...structuredClone(familyPlan),
+      characters: [child({ kind: undefined, visualLock: "khadija" })],
+      pages: goodPages.map((p) => ({ ...p, action: "", characterIds: ["char_1"] })),
+    };
+    const res = assertParentPlanViable(degraded, STORY);
+    assert.equal(res.ok, false);
+    const text = (res as { ok: false; reasons: string[] }).reasons.join(" ");
+    assert.match(text, /sans kind|action concrète|adulte|parents/i);
+  });
+
+  await test("histoire avec parents mais 0 adulte nommé → rejeté", () => {
+    const noAdults = {
+      ...structuredClone(familyPlan),
+      characters: [
+        child(),
+        child({ id: "char_4", name: "Bello", kind: "dog", visualLock: "small friendly floppy-eared dog" }),
+      ],
+    };
+    assert.equal(assertParentPlanViable(noAdults, STORY).ok, false);
+  });
+
+  await test("histoire avec chien mais aucun animal → rejeté", () => {
+    const noDog = {
+      ...structuredClone(familyPlan),
+      characters: familyPlan.characters
+        .filter((c) => c.kind === "human")
+        .map((c) => ({ ...c })),
+    };
+    assert.equal(assertParentPlanViable(structuredClone(noDog), STORY).ok, false);
+  });
 }
 
 main().catch((err) => {
