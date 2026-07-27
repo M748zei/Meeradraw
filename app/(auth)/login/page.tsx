@@ -2,12 +2,11 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useState } from "react";
 import {
-  getRedirectResult,
   GoogleAuthProvider,
   signInWithEmailAndPassword,
-  signInWithRedirect,
+  signInWithPopup,
 } from "firebase/auth";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
@@ -58,6 +57,12 @@ function friendlyGoogleError(error: unknown): string {
   if (code === "auth/network-request-failed") {
     return "Connexion réseau interrompue. Vérifiez Internet puis réessayez.";
   }
+  if (code === "auth/popup-blocked") {
+    return "Le navigateur a bloqué la fenêtre Google. Autorisez les fenêtres contextuelles pour MeeraDraw puis réessayez.";
+  }
+  if (code === "auth/popup-closed-by-user") {
+    return "La fenêtre Google a été fermée avant la fin de la connexion.";
+  }
   return error instanceof Error ? error.message : "Connexion Google impossible";
 }
 
@@ -70,28 +75,6 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (!isFirebaseConfigured()) return;
-    let active = true;
-    void (async () => {
-      try {
-        const result = await getRedirectResult(getClientAuth());
-        if (!result || !active) return;
-        setLoading(true);
-        await establishSession();
-        router.push(await resolvePostAuthPath(next));
-        router.refresh();
-      } catch (err) {
-        if (active) setError(friendlyGoogleError(err));
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [next, router]);
-
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -103,8 +86,7 @@ function LoginForm() {
       }
       await signInWithEmailAndPassword(getClientAuth(), email, password);
       await establishSession();
-      router.push(await resolvePostAuthPath(next));
-      router.refresh();
+      window.location.replace(await resolvePostAuthPath(next));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connexion impossible");
     } finally {
@@ -122,9 +104,12 @@ function LoginForm() {
       }
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: "select_account" });
-      await signInWithRedirect(getClientAuth(), provider);
+      await signInWithPopup(getClientAuth(), provider);
+      await establishSession();
+      window.location.replace(await resolvePostAuthPath(next));
     } catch (err) {
       setError(friendlyGoogleError(err));
+    } finally {
       setLoading(false);
     }
   }
