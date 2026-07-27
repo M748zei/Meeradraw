@@ -1,7 +1,6 @@
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import {
   createSessionCookie,
-  clearSessionCookie,
   getSessionUser,
   SESSION_COOKIE,
   SESSION_COOKIE_OPTIONS,
@@ -20,6 +19,14 @@ import { clientIp, rateLimit } from "@/lib/rate-limit-store";
 import { z } from "zod";
 
 const schema = z.object({ idToken: z.string().min(10) });
+
+function expireSessionCookie<T extends Response>(response: T): T {
+  response.headers.append(
+    "Set-Cookie",
+    `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax${SESSION_COOKIE_OPTIONS.secure ? "; Secure" : ""}`
+  );
+  return response;
+}
 
 export async function POST(request: Request) {
   try {
@@ -117,7 +124,9 @@ export async function GET() {
   try {
     const session = await getSessionUser();
     if (!session) {
-      return apiError(new AppError("UNAUTHORIZED", "Session non conservée", 401));
+      return expireSessionCookie(
+        apiError(new AppError("UNAUTHORIZED", "Session non conservée", 401))
+      );
     }
     return apiSuccess({ uid: session.uid });
   } catch (e) {
@@ -127,8 +136,7 @@ export async function GET() {
 
 export async function DELETE() {
   try {
-    await clearSessionCookie();
-    return apiSuccess({ signedOut: true });
+    return expireSessionCookie(apiSuccess({ signedOut: true }));
   } catch (e) {
     return apiError(e);
   }

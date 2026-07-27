@@ -47,11 +47,9 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(redirectUrl);
   }
 
-  if (session && isAuthRoute) {
-    const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/dashboard";
-    return NextResponse.redirect(redirectUrl);
-  }
+  // A cookie's presence is not proof that Firebase can still verify it.
+  // Let auth pages render so an expired/revoked cookie can be replaced instead
+  // of bouncing forever between /login and the protected app layout.
 
   return NextResponse.next();
 }
