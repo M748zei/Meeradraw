@@ -650,6 +650,10 @@ export class FalImageProvider implements ImageAIProvider {
     if (tracker.best?.blank && recoveryPrompt && !input?.strictQuality) {
       for (let r = 0; r < 2 && tracker.best.blank; r++) {
         body.prompt = recoveryPrompt;
+        // Rescue attempts get their own distinct deterministic seeds too.
+        if (typeof baseSeed === "number" && Number.isFinite(baseSeed)) {
+          body.seed = seedForReroll(baseSeed, maxRerolls + 1 + r);
+        }
         try {
           const rescue = await callFal(endpoint, key, body, true);
           const stillBlank = rescue.bytes ? isBlankOrTooFaint(rescue.bytes) : false;
