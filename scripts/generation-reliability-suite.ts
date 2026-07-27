@@ -1066,6 +1066,42 @@ async function runEmulatorLedgerTests() {
     assert.equal(step.data()?.attempt, 1);
     assert.equal(step.data()?.request_id, null);
   });
+
+  await test("recréation payante: purge des artefacts périmés (prod 6350c675)", async () => {
+    const { resetBookArtifactsForPaidRecreate } = await import(
+      "../lib/book-recreate-reset"
+    );
+    const bookId = randomUUID();
+    const bookRef = db.collection("books").doc(bookId);
+    await bookRef.set({
+      user_id: uid,
+      status: "draft",
+      cover_image: "https://storage.googleapis.com/x/old-black-cover.png",
+      cover_image_path: "books/x/cover.png",
+      pdf_url: "https://storage.googleapis.com/x/old.pdf",
+      created_at: new Date().toISOString(),
+    });
+    for (let n = 1; n <= 3; n++) {
+      await bookRef.collection("pages").doc(`p${n}`).set({
+        page_number: n,
+        generation_status: "completed",
+        illustration_url: `https://storage.googleapis.com/x/black-${n}.png`,
+      });
+    }
+    const result = await resetBookArtifactsForPaidRecreate(db, bookId);
+    assert.equal(result.pagesDeleted, 3);
+    assert.equal(result.coverCleared, true);
+    const after = await bookRef.get();
+    assert.equal(after.data()?.cover_image, null);
+    assert.equal(after.data()?.cover_image_path, null);
+    assert.equal(after.data()?.pdf_url, null);
+    const pagesAfter = await bookRef.collection("pages").get();
+    assert.equal(pagesAfter.size, 0, "aucune page périmée ne survit à la recréation payante");
+    // Idempotent: second run is a harmless no-op.
+    const second = await resetBookArtifactsForPaidRecreate(db, bookId);
+    assert.equal(second.pagesDeleted, 0);
+    assert.equal(second.coverCleared, false);
+  });
 }
 
 /**
