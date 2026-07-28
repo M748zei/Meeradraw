@@ -534,7 +534,8 @@ export class GenerationOrchestrator {
     bookId: string,
     generationId: string,
     characterId: string,
-    characterIndex: number
+    characterIndex: number,
+    workflowAttempt = 1
   ): Promise<void> {
     await this.ensureActive(userId, bookId, generationId);
     await this.touchHeartbeat(generationId);
@@ -612,7 +613,12 @@ export class GenerationOrchestrator {
             generationId,
             assetType: "portrait",
             index: characterIndex,
-            reroll: attempt,
+            // Fresh seeds on every WORKFLOW attempt too — a step retry that
+            // replays the same deterministic seeds can only reproduce the
+            // same rejected images (prod gen b249733d).
+            reroll:
+              (Math.max(1, workflowAttempt) - 1) * PARENT_SHEET_MAX_ATTEMPTS +
+              attempt,
           }),
           consistencyMode: true,
         });
