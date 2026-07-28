@@ -2270,6 +2270,50 @@ async function runFamilyCastRepairTests() {
     }
   });
 
+  await test("REPRO 29daf67a: sujet du portrait dérivé du personnage (adulte / espèce / enfant)", async () => {
+    const { portraitSubjectLine } = await import("../services/ai/character-bible");
+    const mk = (over: Record<string, unknown>) => ({
+      id: "x",
+      name: "X",
+      description: "",
+      appearance: "",
+      visualLock: "",
+      personality: "",
+      ...over,
+    });
+    const mom = portraitSubjectLine(
+      mk({
+        name: "Maman de Khadija",
+        visualLock: "adult woman, Khadija's mother, kind warm smile, adult proportions",
+        kind: "human",
+        ageBand: "adult",
+      })
+    );
+    assert.match(mom, /EXACTLY ONE adult woman/);
+    assert.match(mom, /NOT a child/);
+    const dad = portraitSubjectLine(
+      mk({
+        name: "Papa de Khadija",
+        visualLock: "adult man, Khadija's father, kind gentle smile",
+        kind: "human",
+      })
+    );
+    assert.match(dad, /EXACTLY ONE adult man/);
+    const dog = portraitSubjectLine(
+      mk({ name: "Compagnon", visualLock: "cute friendly young dog", kind: "dog" })
+    );
+    assert.match(dog, /EXACTLY ONE dog/);
+    assert.match(dog, /never humanoid/);
+    const kid = portraitSubjectLine(
+      mk({
+        name: "Khadija",
+        visualLock: "young girl child named Khadija, about 7 years old",
+        kind: "human",
+      })
+    );
+    assert.match(kid, /EXACTLY ONE child/);
+  });
+
   await test("cast familial déjà complet → inchangé", () => {
     const full = ensureMandatoryFamilyCast(
       {

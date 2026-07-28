@@ -8,6 +8,7 @@ import {
   expectedCastFor,
   formatCharacterLock,
   formatPageCharacterLock,
+  portraitSubjectLine,
   settingElementsForScene,
 } from "@/services/ai/character-bible";
 import { buildWorldNegative } from "@/services/ai/prompts";
@@ -94,7 +95,10 @@ const PARENT_PAGE_WAVE = envInt(process.env.PARENT_PAGE_GEN_CONCURRENCY, 5);
 /** How many times to (re)generate the character model sheet if it comes back blank/poor. */
 const SHEET_MAX_ATTEMPTS = envInt(process.env.SHEET_MAX_ATTEMPTS, 3);
 /** Paid parent books always build a validated cast sheet before any page. */
-const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 2);
+// 3 seeds per portrait: with QUALITY_GATE classified permanent (no Workflow
+// retry), two internal attempts left a paid run one unlucky seed from death
+// (prod gen 29daf67a, mother portrait).
+const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 3);
 /** Studio heal passes (failed-page re-gen). Capped to avoid fal retry storms. */
 const STUDIO_HEAL_PASSES = envInt(process.env.STUDIO_HEAL_PASSES, 2);
 /** Parent promise: retry missing pages automatically before declaring no delivery. */
@@ -585,7 +589,7 @@ export class GenerationOrchestrator {
         const portrait = await imageProvider.generateImage({
           prompt: photoReference
             ? "single premium cartoon portrait of the exact child in the reference photo; preserve the child's name and exact outfit"
-            : "single premium cartoon character portrait",
+            : `single premium cartoon character portrait — ${portraitSubjectLine(character)}`,
           style,
           characterBible: photoIdentityLock || formatCharacterLock([character]),
           worldSetting,
