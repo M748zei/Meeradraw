@@ -78,6 +78,20 @@ export class StorageService {
     }
   }
 
+  /**
+   * Signed URLs require real service-account credentials (signBlob) — the
+   * Storage EMULATOR cannot produce them. Under the emulator, return its
+   * direct media URL instead. Inert in production (env var absent).
+   */
+  private emulatorUrl(bucketName: string, path: string): string | null {
+    const host =
+      process.env.FIREBASE_STORAGE_EMULATOR_HOST ||
+      process.env.STORAGE_EMULATOR_HOST;
+    if (!host) return null;
+    const base = host.startsWith("http") ? host : `http://${host}`;
+    return `${base}/v0/b/${bucketName}/o/${encodeURIComponent(path)}?alt=media`;
+  }
+
   async uploadBytes(
     path: string,
     bytes: Uint8Array | Buffer,
@@ -99,6 +113,9 @@ export class StorageService {
           metadata: { ownerPath: path, urlKind: kind },
         },
       });
+
+      const emulator = this.emulatorUrl(bucket.name, path);
+      if (emulator) return emulator;
 
       // Owner-only Storage rules: short-lived signed URL (re-sign on read).
       const [url] = await file.getSignedUrl({
@@ -127,6 +144,8 @@ export class StorageService {
           : "bookAsset");
     try {
       const bucket = getAdminStorage().bucket();
+      const emulator = this.emulatorUrl(bucket.name, path);
+      if (emulator) return emulator;
       const file = bucket.file(path);
       const [url] = await file.getSignedUrl({
         action: "read",

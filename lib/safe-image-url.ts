@@ -20,6 +20,19 @@ function isAllowedHttpMock(parsed: URL): boolean {
 }
 
 /**
+ * The Firebase Storage EMULATOR serves plain-HTTP media URLs on localhost.
+ * Allowed ONLY when the emulator env var is present (never set in prod).
+ */
+function isStorageEmulatorUrl(parsed: URL): boolean {
+  const host =
+    process.env.FIREBASE_STORAGE_EMULATOR_HOST ||
+    process.env.STORAGE_EMULATOR_HOST;
+  if (!host) return false;
+  const normalized = host.replace(/^https?:\/\//, "");
+  return parsed.protocol === "http:" && parsed.host === normalized;
+}
+
+/**
  * Parse and validate an image URL before the server fetches it.
  * Requires HTTPS, except plain HTTP placehold.co in non-production mocks.
  */
@@ -30,14 +43,18 @@ export function assertSafeImageUrl(url: string): URL {
   } catch {
     throw new Error("invalid image URL");
   }
-  if (parsed.protocol !== "https:" && !isAllowedHttpMock(parsed)) {
+  if (
+    parsed.protocol !== "https:" &&
+    !isAllowedHttpMock(parsed) &&
+    !isStorageEmulatorUrl(parsed)
+  ) {
     throw new Error(`unsupported scheme: ${parsed.protocol}`);
   }
   // Disallow credentials in URL (userinfo SSRF / log injection).
   if (parsed.username || parsed.password) {
     throw new Error("credentials in URL not allowed");
   }
-  if (!isAllowedImageHost(parsed.hostname)) {
+  if (!isAllowedImageHost(parsed.hostname) && !isStorageEmulatorUrl(parsed)) {
     throw new Error(`host not allowed: ${parsed.hostname}`);
   }
   return parsed;
@@ -56,6 +73,11 @@ export async function fetchSafeImageBytes(
     res = await fetchWithTimeout(parsed.toString(), {
       timeoutMs: opts?.timeoutMs ?? 25_000,
       redirect: "manual",
+      // Storage-emulator convention: "Bearer owner" = admin bypass of the
+      // owner-only rules. Only ever sent to the local emulator host.
+      ...(isStorageEmulatorUrl(parsed)
+        ? { headers: { Authorization: "Bearer owner" } }
+        : {}),
     });
     if (res.status < 300 || res.status > 399) break;
     const location = res.headers.get("location");

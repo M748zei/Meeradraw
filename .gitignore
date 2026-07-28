@@ -69,3 +69,5 @@ bench-out/
 firebase-debug.log
 firestore-debug.log
 /.swc
+.forensic/
+scripts/.*.tmp.ts
