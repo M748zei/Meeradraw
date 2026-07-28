@@ -35,33 +35,47 @@ import {
 } from "@/lib/plan-fidelity";
 import { AppError } from "@/lib/errors";
 
+/**
+ * Groq keeps a short timeout: its inference is fast, and failing over quickly
+ * is the point. OpenAI is the failover of last resort — a full JSON story plan
+ * routinely needs more than 30s there, so it gets a wide envelope (prod gen
+ * 3296e412: every Groq 429/400 failover died on "Request timed out." at 30s,
+ * killing the whole paid run). Steps are durable, the function budget absorbs it.
+ */
+const GROQ_TIMEOUT_MS = 30_000;
+const OPENAI_TIMEOUT_MS = 120_000;
+
 function createTextClient(prefer: "groq" | "openai" = "groq"): OpenAI {
   const groqKey = process.env.GROQ_API_KEY?.trim();
   const openaiKey = process.env.OPENAI_API_KEY?.trim();
 
   if (prefer === "openai" && openaiKey) {
-    return new OpenAI({ apiKey: openaiKey, timeout: 30_000, maxRetries: 0 });
+    return new OpenAI({ apiKey: openaiKey, timeout: OPENAI_TIMEOUT_MS, maxRetries: 0 });
   }
   if (prefer === "groq" && groqKey) {
     return new OpenAI({
       apiKey: groqKey,
       baseURL: "https://api.groq.com/openai/v1",
-      timeout: 30_000,
+      timeout: GROQ_TIMEOUT_MS,
       maxRetries: 0,
     });
   }
   if (openaiKey) {
-    return new OpenAI({ apiKey: openaiKey, timeout: 30_000, maxRetries: 0 });
+    return new OpenAI({ apiKey: openaiKey, timeout: OPENAI_TIMEOUT_MS, maxRetries: 0 });
   }
   if (groqKey) {
     return new OpenAI({
       apiKey: groqKey,
       baseURL: "https://api.groq.com/openai/v1",
-      timeout: 30_000,
+      timeout: GROQ_TIMEOUT_MS,
       maxRetries: 0,
     });
   }
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30_000, maxRetries: 0 });
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    timeout: OPENAI_TIMEOUT_MS,
+    maxRetries: 0,
+  });
 }
 
 function resolveTextModel(prefer: "groq" | "openai" = "groq"): string {
@@ -329,16 +343,16 @@ export class OpenAITextProvider implements TextAIProvider {
         );
       }
 
-      const content = await this.completeJson({
+      const planRequest = {
         temperature: opts?.parentMode ? 0.55 : 0.75,
-        response_format: { type: "json_object" },
+        response_format: { type: "json_object" as const },
         messages: [
           {
-            role: "system",
+            role: "system" as const,
             content: buildStorySystemPrompt(pageCount, style, audience),
           },
           {
-            role: "user",
+            role: "user" as const,
             content: buildStoryUserPrompt({
               idea,
               pageCount,
@@ -352,13 +366,36 @@ export class OpenAITextProvider implements TextAIProvider {
             }),
           },
         ],
-      });
+      };
+      const parsePlan = (content: string): StoryPlan => {
+        const plan = parseJson<StoryPlan>(content, "story plan");
+        if (!Array.isArray(plan.pages) || plan.pages.length === 0) {
+          throw new Error("Story plan missing pages");
+        }
+        return plan;
+      };
 
-      const plan = parseJson<StoryPlan>(content, "story plan");
-      if (!Array.isArray(plan.pages) || plan.pages.length === 0) {
-        throw new Error("Story plan missing pages");
+      try {
+        return finalize(parsePlan(await this.completeJson(planRequest)));
+      } catch (err) {
+        // Groq can return well-formed HTTP with a semantically empty plan
+        // (prod gen 3296e412 attempt 3: "Story plan missing pages") —
+        // chatJsonCompletion's failover never sees it. Retry once on OpenAI.
+        if (!hasOpenAIFailover()) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[text] story plan invalid from primary (${msg.slice(0, 120)}); semantic failover → OpenAI`
+        );
+        return finalize(
+          parsePlan(
+            await chatJsonCompletion(
+              createTextClient("openai"),
+              resolveTextModel("openai"),
+              planRequest
+            )
+          )
+        );
       }
-      return finalize(plan);
     };
 
     let plan = await buildOnce();
