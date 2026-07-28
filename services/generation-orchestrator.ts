@@ -601,8 +601,8 @@ export class GenerationOrchestrator {
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= PARENT_SHEET_MAX_ATTEMPTS; attempt++) {
       await this.touchHeartbeat(generationId);
+      const portraitStats: ImageQcStats = {};
       try {
-        const portraitStats: ImageQcStats = {};
         const portrait = await imageProvider.generateImage({
           prompt: photoReference
             ? "single premium cartoon portrait of the exact child in the reference photo; preserve the child's name and exact outfit"
@@ -661,6 +661,28 @@ export class GenerationOrchestrator {
           `character portrait ${character.name} attempt ${attempt}/${PARENT_SHEET_MAX_ATTEMPTS} failed`,
           portraitError
         );
+        // Forensic: persist every judged candidate of the failed attempt so a
+        // human can SEE what the generator produced and what the judge saw
+        // (gens 0e48ff79/028e13a3: 12 blind rejections each, no way to
+        // arbitrate generator-vs-judge). Never blocks or fails the run.
+        try {
+          const rejected = (portraitStats.attemptHistory || []).filter((a) => a.url);
+          for (const a of rejected) {
+            await this.storage
+              .persistImageFromUrl(
+                String(a.url),
+                `universes/${universeId}/books/${bookId}/generations/${generationId}/forensic/${character.id}_wf${workflowAttempt}_i${attempt}_${a.attemptId}.png`
+              )
+              .catch(() => null);
+          }
+          if (rejected.length) {
+            console.warn(
+              `[qc-forensic] persisted ${rejected.length} rejected candidate(s) for ${character.id} (wf ${workflowAttempt}, internal ${attempt})`
+            );
+          }
+        } catch {
+          /* forensic only */
+        }
       }
     }
     if (!persistedRef) {

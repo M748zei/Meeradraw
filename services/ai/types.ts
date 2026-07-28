@@ -208,6 +208,8 @@ export interface ImageQcStats {
     attemptId: string;
     score: number;
     verdicts: string[];
+    /** Provider URL of the attempt's candidate (forensic inspection of rejects). */
+    url?: string;
   }>;
   /** Attempt selected as best — the ONLY attempt the final decision was made on. */
   bestAttemptId?: string;
