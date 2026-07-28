@@ -99,6 +99,16 @@ const SHEET_MAX_ATTEMPTS = envInt(process.env.SHEET_MAX_ATTEMPTS, 3);
 // retry), two internal attempts left a paid run one unlucky seed from death
 // (prod gen 29daf67a, mother portrait).
 const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 3);
+
+/**
+ * Cast lock for the hero's photo-referenced portrait. Must stay verifiable
+ * from the generated image alone — checkCast never sees the reference photo.
+ */
+function photoPortraitCastLock(childGender: unknown): string {
+  const noun =
+    childGender === "girl" ? "girl" : childGender === "boy" ? "boy" : "child";
+  return `ONE young ${noun} with real child proportions (large head, short limbs), single character cartoon portrait`;
+}
 /** Studio heal passes (failed-page re-gen). Capped to avoid fal retry storms. */
 const STUDIO_HEAL_PASSES = envInt(process.env.STUDIO_HEAL_PASSES, 2);
 /** Parent promise: retry missing pages automatically before declaring no delivery. */
@@ -601,8 +611,14 @@ export class GenerationOrchestrator {
             ? [{
                 name: String(book.child_name || character.name),
                 kind: "human",
-                visualLock:
-                  "same child identity, age and gender as the provided reference photo; outfit comes from the photo",
+                // checkCast judges from the generated image ALONE — it never
+                // receives the reference photo, so this lock must be
+                // verifiable without it (prod gens b249733d/6fcb8efb: the old
+                // "same as the provided reference photo" wording was
+                // unverifiable and the vision judge rejected seed after
+                // seed). Photo identity stays enforced by the reference
+                // conditioning at generation time and isImplausibleHero.
+                visualLock: photoPortraitCastLock(book.child_gender),
               }]
             : expectedCastFor([character]),
           qcStats: portraitStats,
@@ -841,7 +857,7 @@ export class GenerationOrchestrator {
               ? [{
                   name: String(book.child_name || character.name),
                   kind: "human",
-                  visualLock: "same child identity, age and gender as the provided reference photo; outfit comes from the photo",
+                  visualLock: photoPortraitCastLock(book.child_gender),
                 }]
               : expectedCastFor([character]),
             qcStats: portraitStats,
