@@ -729,20 +729,27 @@ async function runMockAiTests() {
     assert(bible.forbiddenElements.length > 0, "forbidden");
   });
 
-  await test("mock images are synthesized into OUR storage (no external host)", async () => {
+  await test("mock images land in OUR storage (or placehold fallback sans Storage)", async () => {
+    const storageAvailable = Boolean(
+      process.env.FIREBASE_STORAGE_EMULATOR_HOST || process.env.STORAGE_EMULATOR_HOST
+    );
+    const expectUrl = (url: string) =>
+      storageAvailable
+        ? assert(/\/mock%2F|\/mock\//.test(url), url)
+        : assert(/placehold\.co|\/mock%2F|\/mock\//.test(url), url);
     const cover = await image.generateImage({
       prompt: "cover",
       style: "cute",
       isCover: true,
       isColoringPage: false,
     });
-    assert(/\/mock%2F|\/mock\//.test(cover.url), cover.url);
+    expectUrl(cover.url);
     const page = await image.generateImage({
       prompt: "enfant au marché",
       style: "cute",
       isColoringPage: true,
     });
-    assert(/\/mock%2F|\/mock\//.test(page.url), page.url);
+    expectUrl(page.url);
   });
 }
 

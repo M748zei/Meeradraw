@@ -292,12 +292,22 @@ export class MockImageProvider implements ImageAIProvider {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">${body}
       <text x="512" y="1000" font-size="28" text-anchor="middle" fill="black">${label}</text></svg>`;
     const png = await sharp(Buffer.from(svg)).png().toBuffer();
-    const { StorageService } = await import("@/services/storage-service");
-    const url = await new StorageService().uploadBytes(
-      `mock/${randomUUID()}.png`,
-      png,
-      "image/png"
-    );
-    return { url, provider: "mock" };
+    try {
+      const { StorageService } = await import("@/services/storage-service");
+      const url = await new StorageService().uploadBytes(
+        `mock/${randomUUID()}.png`,
+        png,
+        "image/png"
+      );
+      return { url, provider: "mock" };
+    } catch {
+      // No Storage available (pure logic tests, CI without emulator):
+      // fall back to the historical placeholder URL — enough for tests that
+      // never fetch the bytes.
+      return {
+        url: `https://placehold.co/1024x1024/ffffff/222222/png?text=${encodeURIComponent(label)}`,
+        provider: "mock",
+      };
+    }
   }
 }
