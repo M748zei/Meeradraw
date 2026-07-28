@@ -317,7 +317,7 @@ async function stepCover(args: GenerateBookArgs) {
   });
   try {
     const orch = new GenerationOrchestrator(db);
-    await orch.runCoverPhase(args.userId, args.bookId, args.generationId);
+    await orch.runCoverPhase(args.userId, args.bookId, args.generationId, attempt);
     await persistGenerationStep(db, args.generationId, {
       stepKey: "cover",
       status: "succeeded",
@@ -332,6 +332,17 @@ async function stepCover(args: GenerateBookArgs) {
       error: err,
       errorCode: classifyGenerationError(err).code,
     });
+    // Cover QC rejections are seed-dependent — each workflow retry explores
+    // a fresh seed (attempt feeds the cover seed), so let the runtime retry
+    // instead of dying on one unlucky roll (gen 5171a5a4: score-4 borderline
+    // identity mismatch killed the run at the very first cover attempt).
+    if (
+      !(err instanceof GenerationCancelledError) &&
+      !(err instanceof FatalError) &&
+      classifyGenerationError(err).code === "QUALITY_GATE"
+    ) {
+      throw err;
+    }
     rethrowStepError(err);
   }
 }
@@ -397,7 +408,8 @@ async function stepOnePage(args: GenerateBookArgs, pageId: string) {
       args.userId,
       args.bookId,
       args.generationId,
-      pageId
+      pageId,
+      attempt
     );
     await persistGenerationStep(db, args.generationId, {
       stepKey: "page",
@@ -415,6 +427,15 @@ async function stepOnePage(args: GenerateBookArgs, pageId: string) {
       error: err,
       errorCode: classifyGenerationError(err).code,
     });
+    // Same retry policy as portraits/cover: fresh-seed workflow retries on
+    // seed-dependent QC rejections (gen 5171a5a4).
+    if (
+      !(err instanceof GenerationCancelledError) &&
+      !(err instanceof FatalError) &&
+      classifyGenerationError(err).code === "QUALITY_GATE"
+    ) {
+      throw err;
+    }
     rethrowStepError(err);
   }
 }
