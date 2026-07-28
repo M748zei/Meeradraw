@@ -639,6 +639,15 @@ export function buildCharacterSheetPrompt(params: {
   castCount?: number;
   /** When true, keep likeness of a real child photo (Kontext/img2img). */
   identityFromPhoto?: boolean;
+  /** Explicit subject line placed FIRST (e.g. "EXACTLY ONE adult woman…"). */
+  subject?: string;
+  /**
+   * True when the LISTED cast itself contains an adult. The closing negative
+   * must not forbid adults then: prod gen 575e1358 asked for "adult woman"
+   * and ended with "NO adults" — the model obeyed the ban and drew 4
+   * children, 12 seeds out of 12.
+   */
+  castIncludesAdult?: boolean;
 }): string {
   const referenceCraft =
     "PREMIUM COLORED CHARACTER DESIGN REFERENCE: soft flat colors, crisp organic outlines, clean readable silhouette, accurate child anatomy or natural animal anatomy, plain white background. This is NOT a coloring page: no B&W-only rule, no scenery, no text.";
@@ -660,16 +669,24 @@ export function buildCharacterSheetPrompt(params: {
       .join(" ");
   }
   return [
+    params.subject ? `${params.subject}.` : "",
     "Children's picture-book character reference portrait: the story's main cast side by side on a plain white background, FULL BODY head-to-toe, large, clearly visible, clearly separated. HUMAN characters face the viewer standing; ANIMAL characters are shown in SIDE PROFILE standing naturally on ALL FOUR LEGS.",
     `DRAW EXACTLY THIS CAST — one figure per listed character, nobody else: ${params.characters}.`,
+    params.castIncludesAdult
+      ? "An ADULT character stays a full-grown ADULT: adult height, adult face, adult body proportions — NEVER drawn as a child."
+      : "",
     countClause,
     CHILD_SAFE_FACE_POSITIVE,
     referenceCraft,
     "Each character keeps their exact species, gender, age, skin tone, hairstyle and outfit as described — no substitutions, no duplicates, no twins.",
     "Any ANIMAL character is a REAL animal of its species standing ON ALL FOUR LEGS in natural side profile (a fox = real four-legged fox with pointy ears, slender snout, bushy tail; an elephant = real elephant calf on four legs with its trunk down) — NOT a dog, NOT a human child, NOT standing upright on two legs, NOT wearing a collar or clothes, NOT anthropomorphic.",
     "Soft flat COLORS with clean bold cartoon outlines, friendly and warm, simple shapes for young children.",
-    "NO other people, NO extra children, NO adults, NO crowd, no scene background, no props, no text, no letters, no watermark.",
-  ].join(" ");
+    params.castIncludesAdult
+      ? "NO people beyond the listed cast, NO extra children, NO crowd, no scene background, no props, no text, no letters, no watermark."
+      : "NO other people, NO extra children, NO adults, NO crowd, no scene background, no props, no text, no letters, no watermark.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /**

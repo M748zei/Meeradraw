@@ -1113,6 +1113,14 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
       style: input.style,
       castCount: input.expectedCast?.length,
       identityFromPhoto: Boolean(input.identityFromPhoto),
+      // input.prompt carries the caller's subject line (portraitSubjectLine);
+      // it was silently dropped for character sheets until prod gen 575e1358.
+      subject: input.prompt,
+      castIncludesAdult: (input.expectedCast || []).some((c) =>
+        /adult|mother|father|maman|papa|woman|\bman\b/i.test(
+          `${c.visualLock || ""} ${c.name || ""}`
+        )
+      ),
     });
   }
   if (input.isCover) {

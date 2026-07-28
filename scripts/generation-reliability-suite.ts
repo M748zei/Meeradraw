@@ -2314,6 +2314,28 @@ async function runFamilyCastRepairTests() {
     assert.match(kid, /EXACTLY ONE child/);
   });
 
+  await test("REPRO 575e1358: le prompt sheet d'un cast adulte n'interdit plus les adultes et porte le sujet", async () => {
+    const { buildCharacterSheetPrompt } = await import("../services/ai/prompts");
+    const adultPrompt = buildCharacterSheetPrompt({
+      characters:
+        "Maman de Khadija (human); locked appearance: adult woman, Khadija's mother, kind warm smile, adult proportions",
+      style: "cute",
+      castCount: 1,
+      subject:
+        "single premium cartoon character portrait — EXACTLY ONE adult woman alone in frame — NOT a child",
+      castIncludesAdult: true,
+    });
+    assert.equal(/NO adults/.test(adultPrompt), false);
+    assert.match(adultPrompt, /^single premium cartoon character portrait/);
+    assert.match(adultPrompt, /ADULT character stays a full-grown ADULT/);
+    const childPrompt = buildCharacterSheetPrompt({
+      characters: "Khadija (human); locked appearance: young girl child",
+      style: "cute",
+      castCount: 1,
+    });
+    assert.match(childPrompt, /NO adults/);
+  });
+
   await test("cast familial déjà complet → inchangé", () => {
     const full = ensureMandatoryFamilyCast(
       {
