@@ -986,7 +986,8 @@ export class GenerationOrchestrator {
   async runCoverPhase(
     userId: string,
     bookId: string,
-    generationId: string
+    generationId: string,
+    workflowAttempt = 1
   ): Promise<void> {
     await this.ensureActive(userId, bookId, generationId);
     const book = await this.books.get(userId, bookId);
@@ -1094,7 +1095,15 @@ export class GenerationOrchestrator {
       ...(parentMode
         ? {
             ...PARENT_FAL_CAPS,
-            seed: generationSeed({ bookId, generationId, assetType: "cover" }),
+            // Fresh seed per WORKFLOW attempt (gen 5171a5a4: a replayed
+            // attempt with the same seed can only reproduce the same
+            // rejected cover).
+            seed: generationSeed({
+              bookId,
+              generationId,
+              assetType: "cover",
+              reroll: Math.max(1, workflowAttempt),
+            }),
             stylePreset: "COLORING_BOOK_I",
             heroGender: coverGender,
             consistencyMode: true,
@@ -1242,7 +1251,8 @@ export class GenerationOrchestrator {
     userId: string,
     bookId: string,
     generationId: string,
-    pageId: string
+    pageId: string,
+    workflowAttempt = 1
   ): Promise<"ok" | "fail"> {
     await this.ensureActive(userId, bookId, generationId);
     // Heartbeat before long fal wait so the reaper won't kill a live page gen.
@@ -1385,6 +1395,9 @@ export class GenerationOrchestrator {
                 generationId,
                 assetType: "page",
                 index: pageNumber,
+                // Fresh seed per WORKFLOW attempt — same rationale as the
+                // portrait and cover steps (gen 5171a5a4).
+                reroll: Math.max(1, workflowAttempt),
               }),
               stylePreset: "COLORING_BOOK_I",
               heroGender: childGender,
