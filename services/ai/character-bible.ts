@@ -229,6 +229,30 @@ export function sanitizeParentNarrative(source: string): string {
 }
 
 /**
+ * Solo-portrait view of a character: strip RELATIONAL clauses from the locks.
+ * "DISTINCT from hero khadija, never a twin or clone" is essential in group
+ * scenes but poison in a solo portrait — image models handle negation poorly,
+ * so naming the hero (and "twin") summons a second character into frame
+ * (prod gen 0e48ff79: every non-hero portrait rejected "more than one
+ * character present" seed after seed).
+ */
+export function soloPortraitCharacter(c: StoryCharacter): StoryCharacter {
+  const strip = (s: string | undefined) =>
+    String(s || "")
+      .replace(/,?\s*DISTINCT from (the )?hero[^,;.]*/gi, "")
+      .replace(/,?\s*never a twin or clone[^,;.]*/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .replace(/\s+,/g, ",")
+      .trim();
+  return {
+    ...c,
+    visualLock: strip(c.visualLock),
+    appearance: strip(c.appearance),
+    description: strip(c.description),
+  };
+}
+
+/**
  * Explicit portrait subject line derived from the character itself. The
  * generic "cartoon character portrait" prompt loses against the child-styled
  * style contract: prod gen 29daf67a drew the MOTHER as a group of children
