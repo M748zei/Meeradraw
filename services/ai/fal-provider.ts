@@ -676,6 +676,7 @@ export class FalImageProvider implements ImageAIProvider {
         verdicts: attemptVerdicts,
         blank,
         colored,
+        url: current.url,
       });
       if (tracker.best === record) {
         bestPayload = strictPrint
@@ -736,6 +737,7 @@ export class FalImageProvider implements ImageAIProvider {
               verdicts: [],
               blank: false,
               colored: false,
+              url: rescue.url,
             });
             if (tracker.best === rescueRecord) {
               bestPayload = {
@@ -768,6 +770,7 @@ export class FalImageProvider implements ImageAIProvider {
       attemptId: a.attemptId,
       score: a.score,
       verdicts: a.verdicts.slice(0, 8),
+      ...(a.url ? { url: a.url } : {}),
     }));
     qcStats.bestAttemptId = best.attemptId;
     qcStats.bestScore = best.score;

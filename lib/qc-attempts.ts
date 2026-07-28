@@ -25,6 +25,8 @@ export interface QcAttemptRecord {
   verdicts: string[];
   blank: boolean;
   colored: boolean;
+  /** Provider URL of THIS attempt's candidate (forensic inspection of rejects). */
+  url?: string;
 }
 
 export interface QcAttemptTracker {
@@ -65,6 +67,7 @@ export function recordAttempt(
     verdicts: dedupeVerdicts(attempt.verdicts),
     blank: attempt.blank,
     colored: attempt.colored,
+    ...(attempt.url ? { url: attempt.url } : {}),
   };
   tracker.attemptHistory.push(record);
   if (!tracker.best || record.score < tracker.best.score) {
