@@ -201,7 +201,8 @@ async function stepPortrait(
       args.bookId,
       args.generationId,
       characterId,
-      characterIndex
+      characterIndex,
+      attempt
     );
     await persistGenerationStep(db, args.generationId, {
       stepKey: "portrait",
@@ -219,6 +220,17 @@ async function stepPortrait(
       error: err,
       errorCode: classifyGenerationError(err).code,
     });
+    // Portrait QC rejections are seed-dependent, not permanent: each workflow
+    // retry runs FRESH seeds (attempt feeds the seed above), so let the
+    // runtime retry instead of dying on one unlucky seed batch (gen b249733d:
+    // hero portrait passed one run, failed 3/3 the next, same settings).
+    if (
+      !(err instanceof GenerationCancelledError) &&
+      !(err instanceof FatalError) &&
+      classifyGenerationError(err).code === "QUALITY_GATE"
+    ) {
+      throw err;
+    }
     rethrowStepError(err);
   }
 }
