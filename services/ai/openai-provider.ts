@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import {
   enforceParentChildHero,
+  ensureMandatoryFamilyCast,
   lockPlanToParentNarrative,
   normalizeStoryPlan,
 } from "@/services/ai/character-bible";
@@ -331,6 +332,13 @@ export class OpenAITextProvider implements TextAIProvider {
           childGender: opts.childGender,
           audience,
         });
+        plan = normalizeStoryPlan(plan, pageCount, parentNormOpts);
+      }
+      if (opts?.parentMode) {
+        // The story's mandatory family cast (parents / pet) must exist as
+        // named characters no matter which provider planned — the viability
+        // gate downstream is a check, not a place to die on a model's omission.
+        plan = ensureMandatoryFamilyCast(plan, originalIdea);
         plan = normalizeStoryPlan(plan, pageCount, parentNormOpts);
       }
       return plan;
