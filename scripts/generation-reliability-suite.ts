@@ -2108,6 +2108,7 @@ async function main() {
   await runNarrativeTextTests();
   await runFamilyCastTests();
   await runParentPlanViabilityTests();
+  await runFamilyCastRepairTests();
   await runEmulatorLedgerTests();
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
@@ -2190,6 +2191,124 @@ async function runParentPlanViabilityTests() {
         .map((c) => ({ ...c })),
     };
     assert.equal(assertParentPlanViable(structuredClone(noDog), STORY).ok, false);
+  });
+}
+
+/**
+ * P0 — repro prod gen 10de421f: (1) the enforced anti-boy negation ("NOT a
+ * boy") tripped the boy-marker regex, so every girl plan took the last-resort
+ * rewrite; (2) a hero-only cast then died on the viability gate instead of
+ * being completed with the story's mandatory family.
+ */
+async function runFamilyCastRepairTests() {
+  console.log("\n── réparation du cast familial + genre sans faux positifs ──");
+  const { assertHeroGender, assertParentPlanViable } = await import("../lib/plan-fidelity");
+  const { enforceParentChildHero, ensureMandatoryFamilyCast } = await import(
+    "../services/ai/character-bible"
+  );
+  const STORY = "khadija et ses parents adoptent un chien";
+  const world = { setting: "maison", palette: "chaud", mood: "tendre" };
+  const heroOnlyPlan = () => ({
+    title: "t",
+    summary: "s",
+    audienceAge: "6-8",
+    world,
+    characters: [
+      {
+        id: "char_1",
+        name: "Khadija",
+        description: "Khadija et son nouveau compagnon",
+        appearance: "petite fille",
+        visualLock: "young girl child named Khadija, about 7 years old",
+        personality: "curieuse",
+        kind: "human",
+      },
+    ],
+    pages: [1, 2, 3, 4, 5, 6].map((n) => ({
+      pageNumber: n,
+      title: `Étape ${n}`,
+      storyText: `Khadija vit l'étape ${n} de l'adoption.`,
+      illustrationDescription: "adoption scene",
+      characterIds: ["char_1"],
+      action: `Khadija does adoption step ${n} with joy and care`,
+    })),
+  });
+
+  await test("REPRO 10de421f: le lock enforcé (« NOT a boy ») ne déclenche plus le détecteur garçon", () => {
+    const enforced = enforceParentChildHero(heroOnlyPlan(), {
+      childName: "Khadija",
+      childGender: "girl",
+      audience: "6-8",
+    });
+    assert.deepEqual(assertHeroGender(enforced, "girl", "Khadija"), { ok: true });
+  });
+
+  await test("possessif français « son » ne marque plus une fille comme garçon", () => {
+    const plan = heroOnlyPlan();
+    plan.characters[0].description = "khadija aime son chien et son papa";
+    assert.deepEqual(assertHeroGender(plan, "girl", "Khadija"), { ok: true });
+  });
+
+  await test("symétrique garçon: « NOT a girl » ne déclenche pas le détecteur fille", () => {
+    const plan = heroOnlyPlan();
+    plan.characters[0].name = "Moussa";
+    plan.characters[0].visualLock =
+      "young boy child named Moussa, about 7 years old, NOT a girl, NOT a female child";
+    assert.deepEqual(assertHeroGender(plan, "boy", "Moussa"), { ok: true });
+  });
+
+  await test("REPRO 10de421f: cast héros-seul + histoire familiale → complété et viable", () => {
+    const repaired = ensureMandatoryFamilyCast(heroOnlyPlan(), STORY);
+    assert.deepEqual(assertParentPlanViable(repaired, STORY), { ok: true });
+    assert.equal(repaired.characters.length, 4);
+    const kinds = repaired.characters.map((c) => c.kind);
+    assert.equal(kinds.filter((k) => k === "human").length, 3);
+    assert.equal(kinds.includes("dog"), true);
+    for (const page of repaired.pages) {
+      assert.equal(page.characterIds.length, 4);
+      assert.equal(page.characterIds[0], "char_1");
+    }
+  });
+
+  await test("cast familial déjà complet → inchangé", () => {
+    const full = ensureMandatoryFamilyCast(
+      {
+        ...heroOnlyPlan(),
+        characters: [
+          heroOnlyPlan().characters[0],
+          {
+            id: "char_2",
+            name: "Maman Aïcha",
+            description: "maman",
+            appearance: "maman",
+            visualLock: "adult woman parent of Khadija, warm smile",
+            personality: "douce",
+            kind: "human",
+          },
+          {
+            id: "char_3",
+            name: "Papa Moussa",
+            description: "papa",
+            appearance: "papa",
+            visualLock: "adult man parent of Khadija, gentle bearded",
+            personality: "calme",
+            kind: "human",
+          },
+          {
+            id: "char_4",
+            name: "Bello",
+            description: "chien",
+            appearance: "chiot",
+            visualLock: "small friendly floppy-eared dog",
+            personality: "joueur",
+            kind: "dog",
+          },
+        ],
+      },
+      STORY
+    );
+    assert.equal(full.characters.length, 4);
+    assert.equal(full.characters.some((c) => c.id === "char_maman"), false);
   });
 }
 

@@ -228,6 +228,114 @@ export function sanitizeParentNarrative(source: string): string {
   return text;
 }
 
+/**
+ * Deterministic completion of the mandatory family cast. When the parent's
+ * story demands the parents and/or a pet but the plan's named cast lacks them
+ * (prod gen 10de421f: OpenAI failover planned Khadija alone, so the viability
+ * gate killed all 4 attempts), synthesize the missing characters instead of
+ * failing the paid run — and put them in every scene, per the family-cast
+ * contract (child + parents + pet).
+ */
+export function ensureMandatoryFamilyCast(
+  plan: StoryPlan,
+  sourceStory: string
+): StoryPlan {
+  const story = String(sourceStory || "").toLowerCase();
+  const characters = [...(plan.characters || [])];
+  const hero = characters[0];
+  if (!hero) return plan;
+  const heroName = hero.name;
+
+  const needsParents = /\bparents?\b/.test(story);
+  const animalWord = ANIMAL_WORDS.find(([re]) => re.test(story));
+
+  const describes = (c: StoryCharacter) =>
+    `${c.visualLock || ""} ${c.description || ""} ${c.name || ""}`;
+  const isHuman = (c: StoryCharacter) => (c.kind || "").toLowerCase() === "human";
+  const nonHero = characters.slice(1);
+  const adults = nonHero.filter(
+    (c) =>
+      isHuman(c) &&
+      /adult|parent|maman|papa|mère|père|mother|father|woman|man/i.test(describes(c))
+  );
+  const animals = characters.filter(
+    (c) => String(c.kind || "").trim() && !isHuman(c)
+  );
+
+  const additions: StoryCharacter[] = [];
+  if (needsParents && adults.length < 2) {
+    const hasMom = adults.some((c) =>
+      /maman|mère|mother|woman|female/i.test(describes(c))
+    );
+    const hasDad = adults.some((c) =>
+      /papa|père|father|\bman\b|male/i.test(describes(c))
+    );
+    if (!hasMom) {
+      additions.push({
+        id: "char_maman",
+        name: `Maman de ${heroName}`,
+        description: `La maman de ${heroName}, douce et attentionnée`,
+        appearance: `maman adulte souriante de ${heroName}`,
+        visualLock: `adult woman, ${heroName}'s mother, kind warm smile, adult proportions, simple elegant outfit, identical face hair outfit every page, DISTINCT from hero ${heroName}`,
+        personality: "douce, protectrice, joyeuse",
+        kind: "human",
+        ageBand: "adult",
+        introducedOnPage: 1,
+      });
+    }
+    if (!hasDad) {
+      additions.push({
+        id: "char_papa",
+        name: `Papa de ${heroName}`,
+        description: `Le papa de ${heroName}, bienveillant et solide`,
+        appearance: `papa adulte souriant de ${heroName}`,
+        visualLock: `adult man, ${heroName}'s father, kind gentle smile, adult proportions, simple casual outfit, identical face hair outfit every page, DISTINCT from hero ${heroName}`,
+        personality: "bienveillant, calme, encourageant",
+        kind: "human",
+        ageBand: "adult",
+        introducedOnPage: 1,
+      });
+    }
+  }
+  if (animalWord && animals.length === 0) {
+    const species = animalWord[1];
+    additions.push({
+      id: "char_animal",
+      name: "Compagnon",
+      description: `Le ${species === "dog" ? "chien" : species} adopté par la famille de ${heroName}`,
+      appearance: `adorable ${species} de la famille`,
+      visualLock: `cute friendly young ${species}, REAL ${species} anatomy (never humanoid), same fur markings every page, DISTINCT from every human character`,
+      personality: "joueur, affectueux, fidèle",
+      kind: species,
+      introducedOnPage: 1,
+    });
+  }
+
+  if (!additions.length) return plan;
+
+  const cap = maxCastForParentBook();
+  // Mandatory cast first so the cap can never evict it: hero, existing
+  // adults, existing animals, synthesized family, then the rest.
+  const mandatory = [hero, ...adults, ...animals.filter((c) => c !== hero), ...additions];
+  const rest = characters.filter((c) => !mandatory.includes(c));
+  const seen = new Set<string>();
+  const nextChars = [...mandatory, ...rest]
+    .filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)))
+    .slice(0, cap);
+  const keptIds = new Set(nextChars.map((c) => c.id));
+
+  const pages = (plan.pages || []).map((p) => {
+    const ids = [
+      hero.id,
+      ...nextChars.slice(1).map((c) => c.id),
+      ...(p.characterIds || []),
+    ].filter((id, i, arr) => keptIds.has(id) && arr.indexOf(id) === i);
+    return { ...p, characterIds: ids.slice(0, cap) };
+  });
+
+  return { ...plan, characters: nextChars, pages };
+}
+
 export function lockPlanToParentNarrative(
   plan: StoryPlan,
   opts: {
@@ -250,6 +358,9 @@ export function lockPlanToParentNarrative(
     childGender: opts.childGender,
     audience: opts.audience,
   });
+  // The last-resort rewrite must stay viable: never hand the viability gate
+  // a plan whose mandatory family cast the rewrite itself dropped.
+  next = ensureMandatoryFamilyCast(next, source);
 
   const worldSetting =
     themeKey === "princess"

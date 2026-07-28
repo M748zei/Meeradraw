@@ -160,6 +160,16 @@ const SUBSTITUTE_TROPES: Array<{ id: string; re: RegExp; label: string }> = [
 /**
  * Parent books: hero visualLock must describe a CHILD, never an adult.
  */
+/**
+ * Negated segments must never trip the positive-marker regexes: the enforced
+ * child lock contains "NOT a boy, NOT a male child, NEVER an adult woman or
+ * man" BY DESIGN (prod gen 10de421f: the anti-boy negation itself matched the
+ * boy-marker regex, forcing every girl plan through the last-resort rewrite).
+ */
+function stripNegations(s: string): string {
+  return s.replace(/\b(?:not|never|jamais|pas)\b[^,.;]*/gi, " ");
+}
+
 export function assertHeroIsChild(
   plan: StoryPlan,
   childName?: string
@@ -172,8 +182,10 @@ export function assertHeroIsChild(
     plan.characters[0];
   if (!hero) return { ok: false, reasons: ["Aucun héros dans le plan."] };
 
-  const lock = normalize(
-    `${hero.visualLock || ""} ${hero.ageBand || ""} ${hero.appearance || ""} ${hero.body || ""}`
+  const lock = stripNegations(
+    normalize(
+      `${hero.visualLock || ""} ${hero.ageBand || ""} ${hero.appearance || ""} ${hero.body || ""}`
+    )
   );
   const reasons: string[] = [];
   if (
@@ -206,13 +218,17 @@ export function assertHeroGender(
     plan.characters[0];
   if (!hero) return { ok: false, reasons: ["Aucun héros dans le plan."] };
 
-  const lock = normalize(
-    `${hero.visualLock || ""} ${hero.appearance || ""} ${hero.description || ""} ${hero.body || ""}`
+  const lock = stripNegations(
+    normalize(
+      `${hero.visualLock || ""} ${hero.appearance || ""} ${hero.description || ""} ${hero.body || ""}`
+    )
   );
   const reasons: string[] = [];
 
   if (childGender === "girl") {
-    if (/\b(young )?boy\b|\bgarcon\b|\bson\b|\blittle boy\b/.test(lock)) {
+    // "son" only with an English possessive — the bare word is the French
+    // possessive ("khadija et son chien") and flagged real girl plans as boys.
+    if (/\b(young )?boy\b|\bgarcon\b|\b(his|her|their) son\b|\blittle boy\b/.test(lock)) {
       reasons.push(`« ${hero.name} » est décrit comme un garçon — doit être une fille.`);
     }
     if (!/\b(girl|fille|young girl|petite fille)\b/.test(lock)) {
