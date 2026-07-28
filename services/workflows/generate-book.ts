@@ -53,9 +53,14 @@ export async function generateBookWorkflow(args: GenerateBookArgs) {
     // monolithic sheet step was killed by 1800s instance recycling.
     const sheetPlan = await stepSheetCast(args);
     if (sheetPlan.strict) {
-      for (const character of sheetPlan.cast) {
-        await stepPortrait(args, character.id, character.index);
-      }
+      // Portraits are independent (each persists its own crop) — run them in
+      // PARALLEL like page waves. Sequential portraits cost ~2 min of pure
+      // wall-clock on a 4-character family book (user-visible: >10 min books).
+      await Promise.all(
+        sheetPlan.cast.map((character) =>
+          stepPortrait(args, character.id, character.index)
+        )
+      );
       await stepSheetFinalize(args);
     } else {
       await stepSheet(args);

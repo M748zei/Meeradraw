@@ -129,6 +129,9 @@ export function classifyGenerationError(err: unknown): {
   permanent: boolean;
 } {
   const msg = err instanceof Error ? err.message : String(err ?? "");
+  if (/Budget d'images dépassé/i.test(msg)) {
+    return { code: "IMAGE_BUDGET", permanent: true };
+  }
   if (/Exhausted balance|User is locked|feature_not_supported|invalid_request|422/i.test(msg)) {
     return { code: "PROVIDER_PERMANENT", permanent: true };
   }

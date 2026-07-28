@@ -139,6 +139,9 @@ export function enforceParentChildHero(
       prev.face ||
       `round ${genderEn} face, big friendly eyes with pupils, soft smile`,
     body: "small child body, not adult",
+    // The enforced hero is by definition a human child — the viability gate
+    // requires an explicit kind on every character.
+    kind: "human",
     introducedOnPage: 1,
   };
 
@@ -226,6 +229,40 @@ export function sanitizeParentNarrative(source: string): string {
   text = text.charAt(0).toUpperCase() + text.slice(1);
   if (!/[.!?…]$/.test(text)) text += ".";
   return text;
+}
+
+/**
+ * Provider-agnostic viability repair for PARENT plans. The OpenAI provider
+ * applies these guarantees inside its own finalize chain, but any other
+ * provider (mock, future engines) bypassed them and died on the viability
+ * gate. Deterministic only — no model calls:
+ *  - every character gets a kind (species word in its text, else human);
+ *  - every page gets a drawable action (fallback: its own description/text);
+ *  - the story's mandatory family cast is completed (parents / pet).
+ */
+export function repairParentPlanForViability(
+  plan: StoryPlan,
+  sourceStory: string
+): StoryPlan {
+  const withKinds: StoryPlan = {
+    ...plan,
+    characters: (plan.characters || []).map((c) => {
+      if (String(c.kind || "").trim()) return c;
+      const text = `${c.name} ${c.description} ${c.appearance} ${c.visualLock}`;
+      const animal = ANIMAL_WORDS.find(([re]) => re.test(text));
+      return { ...c, kind: animal ? animal[1] : "human" };
+    }),
+    pages: (plan.pages || []).map((p) => {
+      if (String(p.action || "").trim().length >= 8) return p;
+      const fallback = String(
+        p.illustrationDescription || p.storyText || plan.summary || ""
+      )
+        .trim()
+        .slice(0, 200);
+      return fallback.length >= 8 ? { ...p, action: fallback } : p;
+    }),
+  };
+  return ensureMandatoryFamilyCast(withKinds, sourceStory);
 }
 
 /**

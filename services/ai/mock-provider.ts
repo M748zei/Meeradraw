@@ -246,19 +246,58 @@ export class MockTextProvider implements TextAIProvider {
 }
 
 export class MockImageProvider implements ImageAIProvider {
+  /**
+   * Synthesize an image that satisfies the REAL downstream gates instead of a
+   * flat placeholder (which the plausibility check and the final raster gate
+   * rightly reject: "0% ink" pages, "no white" covers):
+   *  - coloring pages: white background + black line work (~5% ink);
+   *  - character sheets: colored figure on white (colored + non-blank);
+   *  - covers: colored scene with a calm white title band.
+   * The PNG is uploaded to our own Storage (emulator or real) — no external
+   * host, no provider cost.
+   */
   async generateImage(input: ImageGenerationInput) {
-    const label = encodeURIComponent(
+    const { default: sharp } = await import("sharp");
+    const { randomUUID } = await import("crypto");
+    const label = (
       input.isCharacterSheet
-        ? "ModelSheet"
+        ? "SHEET"
         : input.isCover
-          ? "Couverture"
-          : input.prompt.slice(0, 40)
+          ? "COVER"
+          : input.prompt.slice(0, 24)
+    ).replace(/[<>&"]/g, "");
+    const body = input.isCharacterSheet
+      ? `<rect width="1024" height="1024" fill="white"/>
+         <circle cx="512" cy="380" r="180" fill="#e8b06b" stroke="black" stroke-width="14"/>
+         <rect x="362" y="560" width="300" height="320" rx="40" fill="#4caf50" stroke="black" stroke-width="14"/>
+         <circle cx="452" cy="350" r="22" fill="black"/>
+         <circle cx="572" cy="350" r="22" fill="black"/>
+         <path d="M 440 450 Q 512 510 584 450" stroke="black" stroke-width="14" fill="none"/>`
+      : input.isCover
+        ? `<rect width="1024" height="1024" fill="white"/>
+           <rect y="560" width="1024" height="464" fill="#a8d8ff"/>
+           <circle cx="512" cy="760" r="150" fill="#ffd54f" stroke="black" stroke-width="12"/>
+           <rect x="140" y="940" width="744" height="60" fill="#66bb6a"/>`
+        : `<rect width="1024" height="1024" fill="white"/>
+           <g stroke="black" stroke-width="16" fill="none">
+             <circle cx="512" cy="400" r="220"/>
+             <circle cx="430" cy="360" r="24"/>
+             <circle cx="594" cy="360" r="24"/>
+             <path d="M 420 470 Q 512 540 604 470"/>
+             <rect x="220" y="680" width="584" height="220" rx="30"/>
+             <path d="M 60 950 L 964 950"/>
+             <path d="M 120 120 Q 200 60 280 120"/>
+             <path d="M 744 120 Q 824 60 904 120"/>
+           </g>`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">${body}
+      <text x="512" y="1000" font-size="28" text-anchor="middle" fill="black">${label}</text></svg>`;
+    const png = await sharp(Buffer.from(svg)).png().toBuffer();
+    const { StorageService } = await import("@/services/storage-service");
+    const url = await new StorageService().uploadBytes(
+      `mock/${randomUUID()}.png`,
+      png,
+      "image/png"
     );
-    const bg = input.isCover ? "a8d8ff" : "ffffff";
-    const fg = input.isCover ? "1e3a5f" : "222222";
-    return {
-      url: `https://placehold.co/1024x1024/${bg}/${fg}/png?text=${label}`,
-      provider: "mock",
-    };
+    return { url, provider: "mock" };
   }
 }

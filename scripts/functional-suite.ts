@@ -729,20 +729,20 @@ async function runMockAiTests() {
     assert(bible.forbiddenElements.length > 0, "forbidden");
   });
 
-  await test("mock image URLs are allowlisted placehold.co", async () => {
+  await test("mock images are synthesized into OUR storage (no external host)", async () => {
     const cover = await image.generateImage({
       prompt: "cover",
       style: "cute",
       isCover: true,
       isColoringPage: false,
     });
-    assert(cover.url.includes("placehold.co"), cover.url);
+    assert(/\/mock%2F|\/mock\//.test(cover.url), cover.url);
     const page = await image.generateImage({
       prompt: "enfant au marché",
       style: "cute",
       isColoringPage: true,
     });
-    assert(page.url.includes("placehold.co"), page.url);
+    assert(/\/mock%2F|\/mock\//.test(page.url), page.url);
   });
 }
 
@@ -1441,6 +1441,99 @@ async function runFirestoreIntegration() {
     if (withArt > 0) {
       assert(used >= 1, `trial consumed used=${used}`);
     }
+  });
+
+  await test("E2E parent strict décomposé (mock, 0$) : story→portraits→cover→pages→PDF→capture", async () => {
+    process.env.MOCK_AI = "true";
+    const { GenerationOrchestrator } = await import("../services/generation-orchestrator");
+    const book = await books.create(userA, {
+      universe_id: universeAId,
+      idea: "khadija joue avec ses parents",
+      page_count: 6,
+      style: "cute",
+      title: "E2E Parent Mock",
+      type: "colorbook",
+      source: "parent_create",
+      parent_story: "khadija joue avec ses parents",
+      child_name: "khadija",
+      child_gender: "girl",
+    } as Record<string, unknown> as Parameters<typeof books.create>[1]);
+    const genId = randomUUID();
+    const now = new Date().toISOString();
+    const cost = 18;
+    await db.collection("generations").doc(genId).set({
+      user_id: userA,
+      book_id: book.id,
+      generation_type: "full_book",
+      status: "queued",
+      progress: 0,
+      current_step: "queued",
+      credits_used: cost,
+      tokens_used: 0,
+      provider: null,
+      duration_ms: null,
+      error_message: null,
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+    });
+    await books.update(userA, book.id, {
+      status: "generating",
+      active_generation_id: genId,
+    });
+    const balanceBefore = await credits.getBalance(userA);
+    await credits.reserve(userA, cost, "E2E réservation", `gen:${genId}:reserve`);
+
+    // Même séquence de phases que generateBookWorkflow (le fichier workflow
+    // est un séquenceur fin — "use step" ne s'exécute pas hors runtime).
+    const orch = new GenerationOrchestrator(db);
+    const startedAt = Date.now();
+    await orch.runStoryPhase(userA, book.id, genId);
+    const sheetPlan = await orch.resolveSheetCast(userA, book.id);
+    assert(sheetPlan.strict, "parent book must take the strict portrait path");
+    assert(
+      sheetPlan.cast.length === 3,
+      `cast=${sheetPlan.cast.length} — « joue avec ses parents » = khadija + 2 parents, PAS d'animal`
+    );
+    await Promise.all(
+      sheetPlan.cast.map((c) =>
+        orch.runOnePortraitPhase(userA, book.id, genId, c.id, c.index)
+      )
+    );
+    await orch.runSheetFinalizePhase(userA, book.id, genId);
+    await orch.runCoverPhase(userA, book.id, genId);
+    const pageIds = await orch.runPagesSetupPhase(userA, book.id, genId);
+    assert(pageIds.length === 6, `pageIds=${pageIds.length}`);
+    const waveSize = await orch.resolvePageWaveSize(userA, book.id);
+    for (let i = 0; i < pageIds.length; i += waveSize) {
+      await Promise.all(
+        pageIds
+          .slice(i, i + waveSize)
+          .map((pageId) => orch.runOnePagePhase(userA, book.id, genId, pageId))
+      );
+    }
+    await orch.runHealFailedPagesPhase(userA, book.id, genId, 1);
+    await orch.runHealFailedPagesPhase(userA, book.id, genId, 2);
+    await orch.runFinalizePhase(userA, book.id, genId, cost, false, startedAt);
+
+    const afterBook = await books.getWithPages(userA, book.id);
+    assert(afterBook.status === "completed", `book status=${afterBook.status}`);
+    assert(afterBook.pages.length === 6, `pages=${afterBook.pages.length}`);
+    const illustrated = afterBook.pages.filter((p) => p.illustration_url).length;
+    assert(illustrated === 6, `illustrated=${illustrated}/6`);
+    assert(Boolean(afterBook.cover_image), "cover present");
+    const gen = (await db.collection("generations").doc(genId).get()).data()!;
+    assert(gen.status === "completed", `gen status=${gen.status}`);
+    // Kill-switch financier: consommation comptée et sous le plafond.
+    const imagesUsed = Number(gen.fal_images_used || 0);
+    assert(imagesUsed > 0, "fal_images_used tracked");
+    assert(imagesUsed < 40, `images=${imagesUsed} under hard cap`);
+    // Ledger: capture unique des 18 crédits, pas de remboursement.
+    const balanceAfter = await credits.getBalance(userA);
+    assert(
+      balanceAfter === balanceBefore - cost,
+      `balance ${balanceBefore}→${balanceAfter} (capture unique de ${cost})`
+    );
   });
 }
 

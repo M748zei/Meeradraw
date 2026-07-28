@@ -5,10 +5,13 @@ import {
   buildPageScene,
   charactersForPage,
   coverCharacters,
+  enforceParentChildHero,
   expectedCastFor,
   formatCharacterLock,
   formatPageCharacterLock,
+  normalizeStoryPlan,
   portraitSubjectLine,
+  repairParentPlanForViability,
   settingElementsForScene,
   soloPortraitCharacter,
 } from "@/services/ai/character-bible";
@@ -20,7 +23,7 @@ import type { ImageQcStats, SettingBible, StoryPlan } from "@/services/ai/types"
 import { getImageProvider, getTextProvider } from "@/services/ai";
 import { MockTextProvider } from "@/services/ai/mock-provider";
 import { generationSeed } from "@/lib/generation-seed";
-import { assertParentPlanViable } from "@/lib/plan-fidelity";
+import { assertParentPlanViable, inferNarrativeThemeKey } from "@/lib/plan-fidelity";
 import { heroGenderPromptBits } from "@/services/ai/prompts";
 import { BookService } from "@/services/book-service";
 import { CreditService } from "@/services/credit-service";
@@ -96,10 +99,22 @@ const PARENT_PAGE_WAVE = envInt(process.env.PARENT_PAGE_GEN_CONCURRENCY, 5);
 /** How many times to (re)generate the character model sheet if it comes back blank/poor. */
 const SHEET_MAX_ATTEMPTS = envInt(process.env.SHEET_MAX_ATTEMPTS, 3);
 /** Paid parent books always build a validated cast sheet before any page. */
-// 3 seeds per portrait: with QUALITY_GATE classified permanent (no Workflow
-// retry), two internal attempts left a paid run one unlucky seed from death
-// (prod gen 29daf67a, mother portrait).
-const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 3);
+// 2 seeds per portrait per WORKFLOW attempt: workflow retries already explore
+// fresh seeds (PR #29), so a deep internal loop only multiplied fal spend and
+// stretched failure detection (3 loops × ~3 internal rerolls × 4 workflow
+// attempts = up to 36 paid images for ONE doomed portrait).
+const PARENT_SHEET_MAX_ATTEMPTS = envInt(process.env.PARENT_SHEET_MAX_ATTEMPTS, 2);
+
+/**
+ * Hard per-generation fal image budget — the money kill-switch. A run that
+ * exceeds it fails fast (full refund) instead of silently burning provider
+ * balance in rejection loops (July 28: repeated 12-seed loops emptied the
+ * fal account). A clean 6-page book needs ~12–15 images; 40 is generous.
+ */
+const MAX_FAL_IMAGES_PER_GENERATION = envInt(
+  process.env.MAX_FAL_IMAGES_PER_GENERATION,
+  40
+);
 
 /**
  * Cast lock for the hero's photo-referenced portrait. Must stay verifiable
@@ -324,6 +339,24 @@ export class GenerationOrchestrator {
       );
     }
     if (parentMode) {
+      // Provider-agnostic guarantees BEFORE the gate: hero locked to the
+      // parent's child, kinds/actions/mandatory family cast completed. The
+      // OpenAI provider already applies these in its finalize chain, but the
+      // gate must not depend on WHICH provider produced the plan.
+      if (childName) {
+        plan = enforceParentChildHero(plan, {
+          childName,
+          childGender,
+          audience,
+        });
+      }
+      plan = repairParentPlanForViability(plan, parentStory || originalIdea);
+      plan = normalizeStoryPlan(plan, pageCount, {
+        parentMode: true,
+        narrativeLock: originalIdea,
+        themeKey: inferNarrativeThemeKey(originalIdea),
+        childGender,
+      });
       // Structural viability gate — a plan missing the story's mandatory
       // cast or drawable actions must not reach the image pipeline.
       const viable = assertParentPlanViable(plan, parentStory || originalIdea);
@@ -601,9 +634,11 @@ export class GenerationOrchestrator {
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= PARENT_SHEET_MAX_ATTEMPTS; attempt++) {
       await this.touchHeartbeat(generationId);
+      await this.assertImageBudget(generationId);
       const portraitStats: ImageQcStats = {};
       try {
-        const portrait = await imageProvider.generateImage({
+        const portrait = await this.withImageBudget(generationId, portraitStats, () =>
+          imageProvider.generateImage({
           prompt: photoReference
             ? "single premium cartoon portrait of the exact child in the reference photo; preserve the child's name and exact outfit"
             : `single premium cartoon character portrait — ${portraitSubjectLine(soloCharacter)}`,
@@ -643,7 +678,8 @@ export class GenerationOrchestrator {
               attempt,
           }),
           consistencyMode: true,
-        });
+          })
+        );
         await this.setQcImage(generationId, `character_${character.id}`, portraitStats);
         if (await this.isImplausibleHero(portrait.url)) continue;
         const persisted = await this.storage.persistImageFromUrl(
@@ -1069,9 +1105,11 @@ export class GenerationOrchestrator {
     const coverGender =
       (typeof book.child_gender === "string" && book.child_gender.trim()) ||
       undefined;
+    await this.assertImageBudget(generationId);
     let cover: { url: string; provider: string };
     try {
-      cover = await imageProvider.generateImage({
+      cover = await this.withImageBudget(generationId, coverStats, () =>
+        imageProvider.generateImage({
       prompt: `${plan.title}. ${plan.summary}`,
       style,
       characterBible: formatCharacterLock(coverHero),
@@ -1114,7 +1152,8 @@ export class GenerationOrchestrator {
             consistencyMode: true,
           }
         : STUDIO_FAL_CAPS),
-      });
+        })
+      );
     } finally {
       // Persist attempt telemetry even when the strict gate rejects the cover —
       // the terminal error must stay explainable from the generation doc
@@ -1371,7 +1410,9 @@ export class GenerationOrchestrator {
       ]
         .filter(Boolean)
         .join(", ");
-      const image = await imageProvider.generateImage({
+      await this.assertImageBudget(generationId);
+      const image = await this.withImageBudget(generationId, pageStats, () =>
+        imageProvider.generateImage({
         prompt: scenePrompt,
         style,
         characterBible:
@@ -1409,7 +1450,8 @@ export class GenerationOrchestrator {
               consistencyMode: true,
             }
           : STUDIO_FAL_CAPS),
-      });
+        })
+      );
 
       if (!image?.url) {
         throw new Error("Image provider returned empty URL");
@@ -2032,9 +2074,15 @@ export class GenerationOrchestrator {
       },
       {
         fetchCoverBytes: async (url) => {
-          const res = await fetch(url);
-          if (!res.ok) throw new Error(`fetch cover ${res.status}`);
-          return new Uint8Array(await res.arrayBuffer());
+          // SSRF-guarded fetch — also carries the Storage-emulator auth
+          // header so the overlay works in the free E2E environment.
+          try {
+            return await fetchSafeImageBytes(url);
+          } catch (err) {
+            throw new Error(
+              `fetch cover ${err instanceof Error ? err.message : err}`
+            );
+          }
         },
         uploadPng: (path, png) =>
           this.storage.uploadBytes(path, png, "image/png"),
@@ -2104,6 +2152,51 @@ export class GenerationOrchestrator {
         .update({ heartbeat_at: now, updated_at: now });
     } catch (err) {
       console.error(`[gen ${id}] heartbeat failed (ignored)`, err);
+    }
+  }
+
+  /**
+   * Money kill-switch: cumulative count of paid fal images for this
+   * generation. chargeImageBudget records what a generateImage call actually
+   * consumed (attempt history length); assertImageBudget fails the run FAST
+   * (permanent error → full refund) once the hard cap is crossed.
+   */
+  private async chargeImageBudget(generationId: string, stats: ImageQcStats) {
+    const consumed = Math.max(1, stats.attemptHistory?.length ?? 1);
+    try {
+      const ref = this.db.collection("generations").doc(generationId);
+      await this.db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const used = Number(snap.data()?.fal_images_used || 0) + consumed;
+        tx.set(ref, { fal_images_used: used }, { merge: true });
+      });
+    } catch (err) {
+      console.error(`[gen ${generationId}] image budget charge failed (ignored)`, err);
+    }
+  }
+
+  /** Run one generateImage call and charge its real image consumption, pass or fail. */
+  private async withImageBudget<T>(
+    generationId: string,
+    stats: ImageQcStats,
+    run: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await run();
+    } finally {
+      await this.chargeImageBudget(generationId, stats);
+    }
+  }
+
+  private async assertImageBudget(generationId: string) {
+    const snap = await this.db.collection("generations").doc(generationId).get();
+    const used = Number(snap.data()?.fal_images_used || 0);
+    if (used >= MAX_FAL_IMAGES_PER_GENERATION) {
+      throw new AppError(
+        "GENERATION_FAILED",
+        `Budget d'images dépassé (${used}/${MAX_FAL_IMAGES_PER_GENERATION}) — génération arrêtée pour protéger le solde du fournisseur.`,
+        422
+      );
     }
   }
 
