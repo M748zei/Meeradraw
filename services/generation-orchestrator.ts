@@ -1032,7 +1032,12 @@ export class GenerationOrchestrator {
     // 4). The old parent-mode hero-only cover hid the family from a family
     // story ("Khadidja et ses parents adoptent un chien" → cover sans parents).
     const coverHero = (() => {
-      const base = coverCharacters(plan);
+      // Parent books: the FULL mandatory family cast belongs on the cover.
+      // The no-spoiler page-1 filter excluded the adopted dog while the
+      // title/summary named it — the generator drew it anyway and the cast
+      // gate rejected "extra animal" (gen fbfeee1d). A pet named by the
+      // parent's own story is not a spoiler.
+      const base = parentMode ? plan.characters : coverCharacters(plan);
       const hero =
         plan.characters.find((c) => c.id === "char_1") || plan.characters[0];
       const ordered = hero
