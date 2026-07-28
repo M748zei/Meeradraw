@@ -229,6 +229,29 @@ export function sanitizeParentNarrative(source: string): string {
 }
 
 /**
+ * Explicit portrait subject line derived from the character itself. The
+ * generic "cartoon character portrait" prompt loses against the child-styled
+ * style contract: prod gen 29daf67a drew the MOTHER as a group of children
+ * twice and the strict QC (rightly) killed the paid run. The subject must
+ * state species / adulthood / solo-framing in the prompt itself.
+ */
+export function portraitSubjectLine(c: StoryCharacter): string {
+  const kind = (c.kind || "human").trim().toLowerCase();
+  if (kind && kind !== "human") {
+    return `EXACTLY ONE ${kind} alone in frame — REAL ${kind} anatomy of its species, never humanoid, no humans, no children in the image`;
+  }
+  const text = `${c.visualLock || ""} ${c.ageBand || ""} ${c.description || ""} ${c.name || ""}`.toLowerCase();
+  const isAdult = /adult|mother|father|maman|papa|m[eè]re|p[eè]re|grown[- ]?up/.test(text);
+  if (isAdult) {
+    const female = /woman|mother|maman|m[eè]re|female|lady/.test(text);
+    const male = /\bman\b|father|papa|p[eè]re|\bmale\b/.test(text);
+    const noun = female && !male ? "adult woman" : male && !female ? "adult man" : "adult person";
+    return `EXACTLY ONE ${noun} alone in frame — full ADULT height, adult face and adult body proportions, NOT a child, no children anywhere in the image`;
+  }
+  return `EXACTLY ONE child alone in frame — no other characters in the image`;
+}
+
+/**
  * Deterministic completion of the mandatory family cast. When the parent's
  * story demands the parents and/or a pet but the plan's named cast lacks them
  * (prod gen 10de421f: OpenAI failover planned Khadija alone, so the viability
