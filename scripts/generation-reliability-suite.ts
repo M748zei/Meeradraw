@@ -2336,6 +2336,25 @@ async function runFamilyCastRepairTests() {
     assert.match(childPrompt, /NO adults/);
   });
 
+  await test("REPRO 0e48ff79: le portrait solo perd les clauses relationnelles qui invoquent un 2e personnage", async () => {
+    const { soloPortraitCharacter } = await import("../services/ai/character-bible");
+    const solo = soloPortraitCharacter({
+      id: "char_2",
+      name: "Maman",
+      description: "La maman de Khadija, douce et attentionnée.",
+      appearance: "maman adulte",
+      visualLock:
+        "adult woman, about 30 years old, medium brown skin, long straight hair, warm smile, wearing a patterned blouse and long skirt, EXACT same age/species/face/body/outfit on every appearance, DISTINCT from hero khadija, never a twin or clone",
+      personality: "douce",
+      kind: "human",
+    });
+    assert.equal(/DISTINCT from hero/i.test(solo.visualLock), false);
+    assert.equal(/twin or clone/i.test(solo.visualLock), false);
+    assert.equal(/khadija/i.test(solo.visualLock), false);
+    assert.match(solo.visualLock, /adult woman, about 30 years old/);
+    assert.match(solo.visualLock, /EXACT same age\/species\/face\/body\/outfit on every appearance/);
+  });
+
   await test("cast familial déjà complet → inchangé", () => {
     const full = ensureMandatoryFamilyCast(
       {

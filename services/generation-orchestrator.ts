@@ -10,6 +10,7 @@ import {
   formatPageCharacterLock,
   portraitSubjectLine,
   settingElementsForScene,
+  soloPortraitCharacter,
 } from "@/services/ai/character-bible";
 import { buildWorldNegative } from "@/services/ai/prompts";
 import { firestoreSafe } from "@/lib/firestore-sanitize";
@@ -591,6 +592,11 @@ export class GenerationOrchestrator {
       ? `ONE young child hero named ${String(book.child_name || character.name)}. The reference photo is the absolute source of truth: preserve the same face, skin tone, hair, age, gender, body proportions and exact outfit; do not replace or redesign the clothing.`
       : null;
 
+    // Solo portrait: relational clauses ("DISTINCT from hero khadija, never a
+    // twin or clone") summon a second figure into frame — strip them from
+    // both the generation bible and the judge's expected cast.
+    const soloCharacter = soloPortraitCharacter(character);
+
     let persistedRef: { url: string; path: string } | null = null;
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= PARENT_SHEET_MAX_ATTEMPTS; attempt++) {
@@ -600,9 +606,9 @@ export class GenerationOrchestrator {
         const portrait = await imageProvider.generateImage({
           prompt: photoReference
             ? "single premium cartoon portrait of the exact child in the reference photo; preserve the child's name and exact outfit"
-            : `single premium cartoon character portrait — ${portraitSubjectLine(character)}`,
+            : `single premium cartoon character portrait — ${portraitSubjectLine(soloCharacter)}`,
           style,
-          characterBible: photoIdentityLock || formatCharacterLock([character]),
+          characterBible: photoIdentityLock || formatCharacterLock([soloCharacter]),
           worldSetting,
           isCharacterSheet: true,
           referenceImageUrl: photoReference,
@@ -620,7 +626,7 @@ export class GenerationOrchestrator {
                 // conditioning at generation time and isImplausibleHero.
                 visualLock: photoPortraitCastLock(book.child_gender),
               }]
-            : expectedCastFor([character]),
+            : expectedCastFor([soloCharacter]),
           qcStats: portraitStats,
           strictQuality: true,
           ...PARENT_FAL_CAPS,
