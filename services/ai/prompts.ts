@@ -443,6 +443,14 @@ export const PRINT_RENDER_CONTRACT =
 export const CHILD_SAFE_FACE_POSITIVE =
   "Friendly warm cartoon child faces: each eye MUST show a clear dark pupil AND iris inside a neat eye outline (closed shapes to color), soft rounded cheeks, gentle smile, natural round child head proportions — NEVER blank white eyes, NEVER hollow staring eyes, NEVER elongated or deformed skull, NEVER creepy.";
 
+/**
+ * Age-neutral variant for casts that include ADULTS: same safety rules, but
+ * proportions follow each character's stated age instead of forcing child
+ * heads onto everyone (prod gen 08e32ab0: the mother rendered as a girl).
+ */
+export const CAST_SAFE_FACE_POSITIVE =
+  "Friendly warm cartoon faces: each eye MUST show a clear dark pupil AND iris inside a neat eye outline (closed shapes to color), soft cheeks, gentle smile, head and body proportions matching each character's stated age — NEVER blank white eyes, NEVER hollow staring eyes, NEVER elongated or deformed skull, NEVER creepy.";
+
 export const CHILD_SAFE_FACE_NEGATIVE =
   "blank white eyes, hollow eyes, empty eyes, pupil-less eyes, staring void eyes, black empty sockets, creepy face, horror, nightmare, uncanny valley, traumatic expression, dead stare, sharp teeth, elongated skull, deformed head, misshapen cranium, giant forehead blob";
 
@@ -649,8 +657,18 @@ export function buildCharacterSheetPrompt(params: {
    */
   castIncludesAdult?: boolean;
 }): string {
-  const referenceCraft =
-    "PREMIUM COLORED CHARACTER DESIGN REFERENCE: soft flat colors, crisp organic outlines, clean readable silhouette, accurate child anatomy or natural animal anatomy, plain white background. This is NOT a coloring page: no B&W-only rule, no scenery, no text.";
+  // Every craft directive must be cast-aware: prod gen 08e32ab0's forensic
+  // captures showed the "adult woman" portrait rendered as a braided GIRL —
+  // "accurate child anatomy" and "child faces / child head proportions"
+  // outvoted the adult subject in the same prompt.
+  const referenceCraft = `PREMIUM COLORED CHARACTER DESIGN REFERENCE: soft flat colors, crisp organic outlines, clean readable silhouette, ${
+    params.castIncludesAdult
+      ? "accurate anatomy for each character's stated age (an ADULT keeps full adult anatomy and height)"
+      : "accurate child anatomy"
+  } or natural animal anatomy, plain white background. This is NOT a coloring page: no B&W-only rule, no scenery, no text.`;
+  const facePositive = params.castIncludesAdult
+    ? CAST_SAFE_FACE_POSITIVE
+    : CHILD_SAFE_FACE_POSITIVE;
   const countClause = params.castCount
     ? `EXACTLY ${params.castCount} figure${params.castCount > 1 ? "s" : ""} in the image — count them: ${params.castCount}, not one more, not one less.`
     : "";
@@ -676,7 +694,7 @@ export function buildCharacterSheetPrompt(params: {
       ? "An ADULT character stays a full-grown ADULT: adult height, adult face, adult body proportions — NEVER drawn as a child."
       : "",
     countClause,
-    CHILD_SAFE_FACE_POSITIVE,
+    facePositive,
     referenceCraft,
     "Each character keeps their exact species, gender, age, skin tone, hairstyle and outfit as described — no substitutions, no duplicates, no twins.",
     "Any ANIMAL character is a REAL animal of its species standing ON ALL FOUR LEGS in natural side profile (a fox = real four-legged fox with pointy ears, slender snout, bushy tail; an elephant = real elephant calf on four legs with its trunk down) — NOT a dog, NOT a human child, NOT standing upright on two legs, NOT wearing a collar or clothes, NOT anthropomorphic.",

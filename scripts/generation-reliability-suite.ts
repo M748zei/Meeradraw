@@ -2328,6 +2328,12 @@ async function runFamilyCastRepairTests() {
     assert.equal(/NO adults/.test(adultPrompt), false);
     assert.match(adultPrompt, /^single premium cartoon character portrait/);
     assert.match(adultPrompt, /ADULT character stays a full-grown ADULT/);
+    // REPRO 08e32ab0 (preuve visuelle : maman rendue en fillette à nattes) —
+    // aucune directive anatomie/visage ENFANT ne doit rester dans un prompt adulte.
+    assert.equal(/child anatomy/i.test(adultPrompt), false);
+    assert.equal(/child faces/i.test(adultPrompt), false);
+    assert.equal(/child head proportions/i.test(adultPrompt), false);
+    assert.match(adultPrompt, /stated age/);
     const childPrompt = buildCharacterSheetPrompt({
       characters: "Khadija (human); locked appearance: young girl child",
       style: "cute",
