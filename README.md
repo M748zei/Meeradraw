@@ -1,23 +1,28 @@
-# Griot
+# MeeraDraw — le Midjourney africain
 
-Griot fabrique des récits d'**histoires vraies africaines** prêts à publier sur
-Facebook et TikTok — le travail que l'auteur du « Scarabée Noir » fait à la main
-chaque jour : accroches, script à lire mot pour mot, plans avec images à
-chercher, description, question à épingler, hashtags, réponses aux commentaires,
-version TikTok, et la liste **« à vérifier avant de publier »** (jamais vide).
+L'utilisateur décrit une scène **en français, en une phrase**. Il ne voit jamais
+un prompt. Le style vient d'un des **30 presets** (portrait, commerce, famille,
+foi, récit, réseaux) et l'**ancrage africain** — peaux, tissus, matériaux,
+végétation, lumière — est injecté avant le sujet dans chaque image. C'est la
+différence avec les outils mondiaux : ailleurs « un homme d'affaires » donne un
+blanc à New York ; ici, un homme noir à Abidjan.
 
 ## Architecture
 
-- **Next.js (App Router)** sur Vercel — un seul écran : `/griot`.
+- **Next.js (App Router)** sur Vercel — trois écrans en un : `/studio`
+  (la scène · le style · le cadre), plus un « Mode avancé » replié
+  (consigne libre, modèle, région, graine).
 - **Auth : Supabase** (projet hub `arijliuqbprqgqztuseh`). Code par email
   fonctionnel ; bouton Google prêt (provider à activer, voir `BLOCAGE.md`).
-- **Portefeuille : celui du hub DigiAfrik, unique.** Débit de 8 crédits par
-  récit via `hub_debit_self('griot.recit', ref)`, remboursement automatique à
-  la même `ref` si la génération échoue (`hub_refund_self`). Jamais de clé de
-  service : les fonctions SQL sont `SECURITY DEFINER` cadrées sur `auth.uid()`.
-- **Moteur texte : Groq d'abord, OpenAI en secours** (`services/ai/openai-provider.ts`),
-  formule d'écriture et honnêteté factuelle dans `services/griot/`.
-- Les récits sont archivés dans `griot_recits` (RLS par utilisateur).
+- **Portefeuille : celui du hub DigiAfrik, unique.** 1 image = 2 crédits,
+  2 variantes = 3, 4 variantes = 6 (`hub_tarifs`, actions `studio.image*`).
+  Débit avant l'appel via `hub_debit_self`, remboursement automatique à la
+  même `ref` si tout échoue. Jamais de clé de service (SECURITY DEFINER sur
+  `auth.uid()`).
+- **Images : fal.ai** via le cœur éprouvé `callFal` (timeout, erreurs non
+  réessayables, allègement automatique du prompt sur 422
+  `content_policy_violation`). Compilateur pur dans `services/studio/`
+  (presets + ancrage + époque), texte incrusté au canvas, jamais généré.
 
 ## Développement
 
@@ -32,12 +37,13 @@ npm run lint
 Variables : voir `.env.example`. Décisions prises en autonomie : `DECISIONS.md`.
 Actions restant à un humain : `BLOCAGE.md`.
 
-## Invariants du moteur (testés)
+## Invariants (testés — 12 tests, dont 1050 prompts de négation)
 
-- La concaténation des `plans[].narration` redonne le `script` à l'identique.
-- `a_verifier` n'est jamais vide.
-- Aucun emoji dans le texte parlé ; jamais de chiffre sec quand les sources
-  divergent (fourchette) ; on raconte, on n'accuse pas.
-- Un JSON emballé/incomplet ne plante jamais : normalisé ou relancé une fois.
-- Débit **après** vérification de disponibilité du service, remboursement
-  bruyant et idempotent en cas d'échec.
+- Aucune négation dans un prompt compilé (30 presets × 5 heures × 7 régions),
+  en anglais comme en français — un modèle de diffusion ne soustrait pas.
+- L'ancrage africain précède toujours le sujet ; chaque région remplace
+  matériaux et végétation ; « monde » l'omet explicitement.
+- Les 7 presets [zone de texte] réservent leur plage vide dans le prompt.
+- La consigne libre du mode avancé arrive toujours en DERNIER bloc.
+- Débit après vérification de disponibilité, remboursement bruyant et
+  idempotent, réussite partielle livrée et annoncée.

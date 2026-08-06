@@ -34,3 +34,8 @@
   retiré. Vérif 360 px au vrai navigateur : 3 écrans + variantes + éditeur canvas,
   0 débordement, export 37 Ko. Rebaptisé Scarabée Studio. Déploiement READY sur le
   dernier commit ; prod échoue fermé sans session (401, 0 transaction créée).
+- 22h20 — Brief MeeraDraw : 30 presets en 6 familles (donnée pure), ancrage africain
+  injecté avant le sujet + 6 régions + « monde », mode avancé replié (consigne libre
+  en dernier bloc, modèle, région, graine), format 4:5. Test négations : 1050 prompts.
+  Vérifié à 360 px (30 cartes, 7 badges zone de texte, mode avancé). Prod READY,
+  « Scarabée » absent du HTML servi. fal toujours à sec (BLOCAGE B1 inchangé).
