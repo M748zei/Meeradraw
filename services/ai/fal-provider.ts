@@ -1104,12 +1104,23 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
         settingElements: input.settingElements,
       })
     : "";
+  // Édition multi-référence : chaque portrait est une source d'identité SÉPARÉE.
+  //
+  // Preuve (prod gen 6c940ac6, couverture) : avec @image1 = Aicha (humaine) et
+  // @image2 = Kofi (renard), le modèle a fusionné les deux — la petite fille est
+  // ressortie avec une queue de renard touffue. Dire « préserve cette identité »
+  // ne dit pas « et ne la mélange pas avec l'autre ». On l'écrit maintenant, et
+  // en positif : chaque corps reste entier et entièrement de son espèce.
   const referenceMap = (input.referenceImageUrls || [])
     .map((_, index) => {
       const character = input.expectedCast?.[index];
       return `@image${index + 1} is the immutable identity source for ${character?.name || `character ${index + 1}`} (${character?.kind || "character"}). Preserve that exact identity once.`;
     })
     .join(" ");
+  const referenceSeparation =
+    (input.referenceImageUrls || []).length > 1
+      ? "Each reference stays STRICTLY inside its own character: every body is whole and entirely of its own species from head to foot. A human body is human all over — human skin, human ears, human hands, and nothing behind the back. An animal body is that animal all over, on its own four legs. The references are separate people, drawn side by side, never blended into one another."
+      : "";
   if (input.isCharacterSheet) {
     return buildCharacterSheetPrompt({
       characters: input.characterBible || "",
@@ -1130,6 +1141,7 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
     if (useReference) {
       return [
         referenceMap,
+        referenceSeparation,
         buildReferenceGuidedScenePrompt({
           scene: `Coloring book COVER poster: ${input.refScene || input.action || input.prompt}. Keep the top third visually calm (simple sky) as a title band. ABSOLUTELY NO TEXT anywhere in the image.`,
           characters: input.characterBible || "",
@@ -1155,6 +1167,7 @@ function buildPrompt(input: ImageGenerationInput, useReference: boolean): string
   if (useReference) {
     return [
       referenceMap,
+      referenceSeparation,
       composition,
       buildReferenceGuidedScenePrompt({
         // Compact scene for reference editing: identity maps stay explicit while

@@ -340,20 +340,50 @@ export async function checkCast(
         `${c.name} (${c.kind}); locked appearance: ${(c.visualLock || "distinct stable identity").slice(0, 500)}`
     )
     .join("\n");
-  const result = await askVision<{ count: number; matches: boolean; issue?: string }>(
+  // HYBRIDE — la question qu'aucun juge ne posait.
+  //
+  // Preuve (prod gen 6c940ac6, couverture acceptée en production) : Aicha, une
+  // petite fille, a été dessinée avec une QUEUE DE RENARD touffue dans le dos,
+  // et Kofi le renard se tenait debout sur deux pattes, bras levés. Les deux
+  // contrôles vision ont validé l'image, et le garde-fou de soft-accept n'a
+  // rien vu passer d'anormal — parce qu'aucune question ne portait sur la
+  // contamination d'un personnage par un autre.
+  //
+  // « KIND » demandait « est-ce bien une humaine ? » — oui, une humaine à
+  // queue reste une humaine. « ANATOMY » demandait « des membres manquants,
+  // fusionnés ou déformés ? » — une queue n'est ni l'un ni l'autre. La faille
+  // n'était donc ni dans le prompt de génération ni dans le garde-fou : il
+  // manquait purement et simplement la question.
+  //
+  // C'est le défaut nº1 rapporté par l'utilisateur, mot pour mot : « tu as un
+  // enfant qui a une queue de renard ».
+  const result = await askVision<{
+    count: number;
+    matches: boolean;
+    hybrid?: boolean;
+    issue?: string;
+  }>(
     imageUrl,
     `This image should contain EXACTLY ${expected.length} character(s): ${castDesc} — and NOBODY else (no extra people, no extra animals).
-For each expected character, verify BOTH:
+For each expected character, verify ALL of:
 - KIND: a turtle is a real turtle, a lion cub is a real young lion, never a human.
 - LOCKED IDENTITY: apparent age, gender, head/face shape, hairstyle or fur markings, body proportions, outfit and signature accessory match the written lock. A generic character of the right kind is NOT enough.
+- SPECIES PURITY (look carefully, this is the most commonly missed defect): no character may carry another character's body parts. A HUMAN character has NO tail, NO muzzle or snout, NO fur, NO whiskers, NO paws and NO animal ears — look specifically behind and below each human for a tail. An ANIMAL character has NO human face, NO human hands, NO human hair and wears no clothing unless its lock says so. Any blend of a human and an animal is a FAILURE even when it looks deliberate or cute.
 Any ANIMAL character must keep the exact species and age stage in a natural stance — a quadruped stands/walks on ALL FOUR legs, is NOT upright on two legs like a person, and wears NO human clothes unless the locked appearance explicitly requires one simple accessory.
-JSON schema: {"count": <number of distinct characters you see>, "matches": <true only if count is exactly ${expected.length} AND every kind and locked identity trait matches>, "issue": "<short list of exact identity/species mismatches when false>"}`
+JSON schema: {"count": <number of distinct characters you see>, "hybrid": <true if ANY character mixes human and animal body parts, or an animal stands upright like a person>, "matches": <true only if count is exactly ${expected.length} AND hybrid is false AND every kind and locked identity trait matches>, "issue": "<short list of exact identity/species/hybrid mismatches when false>"}`
   );
   if (!result || typeof result.matches !== "boolean") return null;
+  const hybride = result.hybrid === true;
   return {
     count: Number(result.count) || 0,
-    matches: result.matches,
-    issue: result.issue ? String(result.issue).slice(0, 200) : undefined,
+    // Un hybride ne passe jamais, même si le juge a coché `matches` par
+    // inadvertance : les deux champs se contredisent, on tranche vers le refus.
+    matches: result.matches && !hybride,
+    issue: hybride
+      ? `personnage hybride humain/animal — ${String(result.issue || "queue, museau, fourrure ou posture bipède sur un personnage qui ne doit pas en avoir").slice(0, 150)}`
+      : result.issue
+        ? String(result.issue).slice(0, 200)
+        : undefined,
   };
 }
 
