@@ -20,3 +20,13 @@
   (BCEAO puis Sankara). Sortie réelle ouverte → 3 corrections de prompt fondées sur
   l'observé (few-shot BCEAO, 5 temps, plancher de mots 60 %). 13 tests verts.
 - 20h20 — Étape 6 : purge des configs Firebase/docs MeeraDraw, README Griot, BLOCAGE.md B2.
+- 20h40 — Nouveau brief : Scarabée Studio (studio d'images). §0 déjà fait (9d42163).
+- 20h55 — Compilateur de prompt : 6 presets (recette nuit-archive du brief), pack
+  d'époque, caméra non réglable, zéro négation testée FR+EN. 10/10.
+- 21h05 — Tarifs studio posés en base (migration idempotente). Route /api/images :
+  débit avant, une variante = un appel, remboursement même ref si tout échoue.
+- 21h15 — Trois écrans + éditeur texte canvas + proxy image. Griot remplacé.
+- 21h20 — §8 comparaison : LES 15 APPELS REFUSÉS — compte fal à sec (BLOCAGE B1).
+  Trames de référence extraites des vidéos Kaocen/Lumumba pour juger après recharge.
+- 21h30 — Ménage §6 : fal-provider taillé au cœur protégé (callFal + allègement 422
+  verbatim), bagage livre supprimé. grep character-bible|vision-qc|raster-gate → vide.

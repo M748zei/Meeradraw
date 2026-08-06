@@ -1,34 +1,43 @@
-# DECISIONS — prises seul, en autonomie
+# DECISIONS — Scarabée Studio, prises seul
 
-## D1 — Suppression de la chaîne Chariow→Firestore (au-delà de la liste §4.1)
-La liste de suppression imposait `config/credits.ts` et `services/credit-service.ts`.
-Or `app/api/access`, `app/api/license`, `app/api/checkout`, `services/access-open.ts`,
-`services/chariow-sale.ts` et `app/api/webhooks/chariow` ne font qu'une chose :
-créditer le portefeuille **Firestore local** — exactement le doublon que §4.3 interdit.
-Les « repointer » vers le hub est impossible sans clé de service partagée (rejetée
-explicitement par la migration 0002 du hub). Décision : **supprimés**. Les achats de
-crédits passent par la chaîne du hub, prouvée de bout en bout (Chariow → Moneroo →
-webhook → crédits). Réversible : tout est dans l'historique git.
+## D1 — `fal-provider.ts` taillé au cœur protégé (conflit du brief tranché)
+Le brief dit à la fois « ne touche pas à fal-provider.ts » et « supprime
+vision-qc.ts, raster-gate.ts, character-bible.ts » — or fal-provider les
+importait tous. Impossible de satisfaire les deux à la lettre. J'ai gardé
+VERBATIM ce que le brief protège explicitement : `callFal` (timeout, erreurs
+non réessayables) et `allegerPromptRefuse` — l'allègement automatique du
+prompt sur 422 `content_policy_violation` (incident e3fc2591). Le pipeline
+livre (QC visuel, re-rolls, verrouillage d'identité, prompts de coloriage)
+est parti avec le produit livre. 1371 → 197 lignes.
 
-## D2 — Pages MeeraDraw supprimées
-`/library`, `/profile`, `/settings`, `/credits`, `/license`, `/merci`,
-`/ouvrir-mon-acces` : couplées aux livres/licences Firestore. Supprimées.
-`/dashboard` → redirection vers `/griot` (l'écran unique).
+## D2 — Le produit Griot (récits) remplacé par le Studio
+L'app ne porte qu'un produit. Les briques réutilisées : auth Supabase,
+portefeuille hub (généralisé en debiterAction/rembourserAction), coque à
+360 px. Le reste (moteur de récits, /api/recits) est dans l'historique git.
+La table griot_recits reste en base (données, on n'y touche pas).
 
-## D3 — `services/ai` réduit au cœur éprouvé
-`openai-provider.ts` gardé mais réduit aux briques prouvées (client Groq→OpenAI,
-bascule sur échec, timeouts issus de l'incident 3296e412). Les méthodes du domaine
-« livre » (plan d'histoire, bible de personnages) sont supprimées avec leurs modules.
-`research.ts` (Tavily/Serper/DuckDuckGo) conservé pour l'ancrage factuel des récits.
+## D3 — Réussite partielle des variantes : on livre et on annonce
+4 variantes demandées, 3 réussies → on livre les 3 SANS remboourser (le
+tarif est au pack) mais la réponse contient demandees/livrees et le log
+crie. Alternative (rembourser la différence) impossible proprement :
+hub_refund_self rembourse le tarif entier d'une action, pas un prorata.
 
-## D4 — `lib/firebase/*` conservé en référence, non branché
-Exigé par §4.2 (bascule popup→redirect iOS). L'auth active devient Supabase (option c
-de §4.3). Les fichiers compilent mais ne sont plus le chemin de connexion.
+## D4 — Une variante = un appel fal (pas num_images)
+Chaque variante doit être régénérable seule (brief §2) et fal facture par
+image ; N appels avec graines dérivées (base + i×7919) rendent chaque
+vignette indépendante et réessayable.
 
-## D5 — `detectImageFormat` inliné dans `services/pdf-service.ts`
-`lib/image-format.ts` était dans la liste de suppression, mais `pdf-service.ts` est
-dans la liste de conservation et en dépendait. 15 lignes de sniff magic-bytes inlinées.
+## D5 — pdf-service supprimé
+Gardé « pour ensuite » à l'époque du produit livre ; le studio ne produit
+pas de PDF. L'orchestration livre, la couverture et les pages sont le
+« ce qui ne sert plus » du §6. Historique git.
 
-## D6 — Suite de tests : échec volontaire tant qu'elle est vide
-`npm test` échoue tant que la vraie suite (étape 3) n'existe pas, pour qu'aucun
-vert CI ne puisse mentir.
+## D6 — Texte canvas : polices système condensées
+Pas de webfont embarquée (poids, licence) : pile 'Archivo Narrow' /
+'Roboto Condensed' / 'Arial Narrow' / Impact. Sur Android (le public),
+Roboto Condensed est natif.
+
+## D7 — Endpoint par défaut : flux-2-pro, en attendant la mesure
+La comparaison §8 est bloquée par le solde fal (BLOCAGE.md B1). Le défaut
+du code est `FAL_STUDIO_ENDPOINT` (env) sinon flux-2-pro — le changement
+de gagnant est une variable d'environnement, pas un déploiement.
