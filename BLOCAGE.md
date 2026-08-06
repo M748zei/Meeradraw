@@ -1,21 +1,10 @@
 # BLOCAGE — actions qui exigent un humain
 
-## B1 — LE compte fal.ai est à sec : tout le studio attend ça
-Constaté le 2026-08-06 en lançant la comparaison des modèles (§8 du brief) :
-les 15 appels (5 scènes × flux-2-pro / flux-general / ideogram-v3) répondent
-`User is locked. Reason: Exhausted balance.`
-
-→ **Recharge le solde sur fal.ai/dashboard/billing** (c'est un paiement, je ne
-peux pas le faire). Ensuite, pour finir le travail mesuré :
-1. relance `node --import tsx /tmp/comparaison-modeles.mjs` (le script est prêt,
-   il génère les 15 images dans le scratchpad et un resultats.json) ;
-2. compare aux vraies images de la page (j'ai extrait des trames de référence
-   des vidéos Kaocen/Lumumba du Bureau) ;
-3. pose `FAL_STUDIO_ENDPOINT` sur le gagnant dans Vercel (défaut actuel du
-   code : flux-2-pro).
-
-Tant que le solde est vide, la génération en production échouera proprement :
-débit remboursé automatiquement, message français, rien de perdu.
+## B1 — RÉSOLU (2026-08-06 soir) : solde fal rechargé, modèle choisi sur mesure
+16 générations réelles faites : 5 scènes × 3 modèles + 1 essai flux-2-pro/edit
+avec références de style. **Gagnant : flux-2-pro (texte→image), 5/5 scènes** —
+pictural, packs d'époque respectés (1916/1943/1953/1960/2003), cadre tenu.
+`FAL_STUDIO_ENDPOINT` posé sur flux-2-pro en production/preview/development.
 
 ## B2 — Activer Google dans Supabase Auth
 Toujours valable (voir historique) : provider Google à activer dans le

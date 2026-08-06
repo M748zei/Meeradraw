@@ -37,7 +37,16 @@ Pas de webfont embarquée (poids, licence) : pile 'Archivo Narrow' /
 'Roboto Condensed' / 'Arial Narrow' / Impact. Sur Android (le public),
 Roboto Condensed est natif.
 
-## D7 — Endpoint par défaut : flux-2-pro, en attendant la mesure
-La comparaison §8 est bloquée par le solde fal (BLOCAGE.md B1). Le défaut
-du code est `FAL_STUDIO_ENDPOINT` (env) sinon flux-2-pro — le changement
-de gagnant est une variable d'environnement, pas un déploiement.
+## D7 — Endpoint : flux-2-pro, choisi SUR MESURE (plus une supposition)
+5 mêmes scènes sur flux-2-pro / flux-general / ideogram-v3, jugées à l'image
+contre les trames réelles de la page (vidéos Kaocen/Lumumba) :
+- flux-2-pro : 5/5 — huile cinématographique, sujet au tiers, packs d'époque
+  exacts (auto à manivelle + vapeur en 1916, camions ronds en 1943, tirage
+  argentique en 1960, berline et lampe tempête en 1953, taxis-brousse 2003).
+- flux-general : beau mais photographique, pas pictural ; cadre dérive.
+- ideogram-v3 : pictural mais affiche/naïf ; ignore le plan large (portraits
+  géants) et la lumière demandée ; texte charabia.
+- flux-2-pro/edit + 2 références de style : bon, mais deux sources de lumière,
+  enseignes charabia, et des références à embarquer à chaque appel — l'avantage
+  ne justifie pas le coût. Écarté.
+`FAL_STUDIO_ENDPOINT=https://fal.run/fal-ai/flux-2-pro` posé partout.

@@ -39,3 +39,8 @@
   en dernier bloc, modèle, région, graine), format 4:5. Test négations : 1050 prompts.
   Vérifié à 360 px (30 cartes, 7 badges zone de texte, mode avancé). Prod READY,
   « Scarabée » absent du HTML servi. fal toujours à sec (BLOCAGE B1 inchangé).
+- 23h10 — Solde fal rechargé par le propriétaire. Comparaison §8 EXÉCUTÉE : 15 images
+  (5 scènes × 3 modèles) + 1 essai flux-2-pro/edit avec références Kaocen recadrées.
+  Jugement à l'image : flux-2-pro gagne 5/5 (pictural + époque + cadre). Endpoint figé
+  par env sur les trois environnements. Le test de ressemblance est passé au passage :
+  la scène du reel Kaocen retapée en une phrase redonne une image du même monde.
