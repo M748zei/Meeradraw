@@ -7,10 +7,12 @@ import { compilerPrompt } from "@/services/studio/compiler";
 import {
   actionPourVariantes,
   genererImageStudio,
+  MODELE_IDS,
   studioDisponible,
+  studioEndpoint,
 } from "@/services/studio/generation";
 import { debiterAction, rembourserAction } from "@/services/hub-wallet";
-import { FORMATS, HEURES, PRESET_IDS } from "@/services/studio/types";
+import { FORMATS, HEURES, PRESET_IDS, REGIONS } from "@/services/studio/types";
 
 export const maxDuration = 300;
 
@@ -22,6 +24,11 @@ const schema = z.object({
   heure: z.enum(HEURES).optional(),
   format: z.enum(FORMATS),
   variantes: z.union([z.literal(1), z.literal(2), z.literal(4)]),
+  // Mode avancé (§2) — replié pour l'utilisateur ordinaire.
+  region: z.enum(REGIONS).optional(),
+  promptLibre: z.string().max(500).optional(),
+  modele: z.enum(MODELE_IDS).optional(),
+  graine: z.coerce.number().int().min(1).max(2_000_000_000).optional(),
 });
 
 export async function POST(request: Request) {
@@ -65,11 +72,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // Une variante = un appel (chacune reste régénérable seule).
-    const graine = randomInt(1, 2_000_000_000);
+    // Une variante = un appel (chacune reste régénérable seule). La graine du
+    // mode avancé rend une image reproductible ; sinon elle est tirée au sort.
+    const graine = input.graine ?? randomInt(1, 2_000_000_000);
+    const endpoint = studioEndpoint(input.modele);
     const resultats = await Promise.allSettled(
       Array.from({ length: input.variantes }, (_, i) =>
-        genererImageStudio({ prompt, format: input.format, seed: graine + i * 7919 })
+        genererImageStudio({ prompt, format: input.format, seed: graine + i * 7919, endpoint })
       )
     );
     const urls = resultats
@@ -110,6 +119,7 @@ export async function POST(request: Request) {
       demandees: input.variantes,
       livrees: urls.length,
       ref,
+      graine,
       solde: debit.solde,
     });
   } catch (e) {

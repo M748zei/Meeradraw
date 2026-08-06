@@ -2,7 +2,7 @@ import { detectImageFormat, toPngBuffer } from "@/lib/image-format";
 
 /**
  * Le cœur fal du studio — TOUT ce qui reste du provider MeeraDraw, gardé
- * verbatim (brief Scarabée Studio §6) : timeout, erreurs non réessayables,
+ * verbatim (brief studio §6) : timeout, erreurs non réessayables,
  * et l'allègement automatique du prompt quand fal renvoie un 422
  * `content_policy_violation` (incident prod e3fc2591 : c'est ce qui évite
  * qu'une génération meure au lieu de réessayer).

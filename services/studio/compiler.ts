@@ -1,18 +1,29 @@
-import { PRESETS, CAMERA_COMMUNE } from "@/services/studio/presets";
+import { PRESETS } from "@/services/studio/presets";
 import { packEpoque } from "@/services/studio/epoque";
-import type { CompilerInput } from "@/services/studio/types";
+import { ancrageAfricain } from "@/services/studio/ancrage";
+import type { CompilerInput, Heure } from "@/services/studio/types";
 
 /**
- * Le compilateur de prompt — un module pur, sans réseau (§4 du brief).
+ * Le compilateur de prompt — un module pur, sans réseau.
  *
- * Assemble : rendu + lumière + scène + pack d'époque + caméra + atmosphère +
- * étalonnage. L'utilisateur ne voit jamais cette chaîne : il décrit une scène
- * en français, le style vient du preset.
+ * Assemble : rendu + lumière (+ heure) + ANCRAGE AFRICAIN + scène + époque +
+ * cadre (+ prompt libre du mode avancé, toujours en DERNIER). L'utilisateur
+ * ordinaire ne voit jamais cette chaîne : il décrit une scène en français,
+ * le style vient du preset, l'ancrage vient de la région.
  *
- * Règle non négociable no 1 : AUCUNE formulation négative. Un modèle de
+ * Règle non négociable (§0.2) : AUCUNE formulation négative. Un modèle de
  * diffusion ne soustrait pas — nommer une chose pour l'interdire, c'est
  * l'injecter. La suite de tests échoue si une négation apparaît ici.
  */
+
+/** « Changer l'heure du jour » — ambiance temporelle ajoutée à la lumière du preset. */
+const BLOCS_HEURE: Record<Heure, string> = {
+  nuit: "The scene takes place at night, deep darkness settling beyond the described light.",
+  aube: "The scene takes place at dawn, cool first light seeping into the air.",
+  jour: "The scene takes place in full daylight.",
+  crepuscule: "The scene takes place at dusk, the last warm light fading fast.",
+};
+
 export function compilerPrompt(input: CompilerInput): string {
   const preset = PRESETS[input.preset];
   if (!preset) {
@@ -22,26 +33,30 @@ export function compilerPrompt(input: CompilerInput): string {
   if (!scene) {
     throw new Error("La scène est obligatoire.");
   }
-  const heure = input.heure ?? preset.heureNative;
-  const lumiere = preset.lumiere[heure];
 
-  return [
+  const blocs = [
     preset.rendu,
-    lumiere,
+    preset.lumiere,
+    input.heure ? BLOCS_HEURE[input.heure] : "",
+    // L'ancrage africain, AVANT le sujet (§0.1).
+    ancrageAfricain(input.region),
     `The scene: ${scene}.`,
     packEpoque(input.annee, input.lieu),
-    CAMERA_COMMUNE,
-    preset.sol,
-    preset.atmosphere,
-    preset.etalonnage,
-  ]
-    .map((bloc) => bloc.trim().replace(/\.?$/, "."))
+    preset.cadre,
+    // Mode avancé : le prompt libre s'ajoute APRÈS l'ancrage et le preset.
+    input.promptLibre?.trim() ?? "",
+  ];
+
+  return blocs
+    .map((b) => b.trim())
+    .filter(Boolean)
+    .map((b) => b.replace(/\.?$/, "."))
     .join(" ");
 }
 
 /**
- * Négations interdites dans un prompt compilé — vérifiées par la suite de
- * tests sur les six presets (anglais ET français, on écrit dans les deux).
+ * Négations interdites dans un prompt compilé (§0.2) — vérifiées par la suite
+ * de tests sur les 30 presets × toutes les heures × toutes les régions.
  */
 export const NEGATIONS_INTERDITES = [
   /\bno\s/i,

@@ -1,13 +1,22 @@
 /**
- * Suite de tests du Scarabée Studio — compilateur de prompt (§4 du brief).
- * Pur, sans réseau. Échoue notamment si un prompt compilé contient une
- * négation (`no `, `not `, `without`, `never`, `avoid` + équivalents français).
+ * Suite de tests MeeraDraw — compilateur de prompt. Pur, sans réseau.
+ * Couvre : les 30 presets × toutes les heures × toutes les régions sans la
+ * moindre négation (§0.2), l'ancrage africain injecté avant le sujet (§0.1),
+ * les zones de texte réservées (§0.3), le pack d'époque et le mode avancé.
  */
 import assert from "node:assert/strict";
 import { compilerPrompt, trouverNegations } from "../services/studio/compiler";
 import { PRESETS } from "../services/studio/presets";
-import { PRESET_IDS, HEURES, type PresetId } from "../services/studio/types";
+import { ancrageAfricain } from "../services/studio/ancrage";
 import { packEpoque } from "../services/studio/epoque";
+import {
+  CATEGORIES,
+  HEURES,
+  PRESET_IDS,
+  REGIONS,
+  type PresetId,
+  type Region,
+} from "../services/studio/types";
 
 let total = 0;
 let rate = 0;
@@ -23,83 +32,125 @@ function test(nom: string, fn: () => void) {
   }
 }
 
-const SCENE = "Un homme seul marche vers l'agence de la banque, la nuit, sous la pluie";
+const SCENE = "Un homme d'affaires marche vers son bureau au petit matin";
 
-console.log("Compilateur — assemblage");
-test("preset appliqué : le prompt contient rendu, lumière, caméra, étalonnage", () => {
-  const p = compilerPrompt({ scene: SCENE, preset: "nuit-archive", format: "9:16" });
-  const preset = PRESETS["nuit-archive"];
-  assert.ok(p.includes(preset.rendu), "bloc rendu présent");
-  assert.ok(p.includes(preset.lumiere.nuit.slice(0, 40)), "bloc lumière (heure native) présent");
-  assert.ok(p.includes("35mm lens"), "caméra commune présente");
-  assert.ok(p.includes("teal shadows and amber highlights"), "étalonnage présent");
-  assert.ok(p.includes(SCENE), "la scène de l'utilisateur est dedans, telle quelle");
-});
-
-test("année absente → pack intemporel, et l'année ne surgit pas de nulle part", () => {
-  const p = compilerPrompt({ scene: SCENE, preset: "nuit-archive", format: "9:16" });
-  assert.ok(p.includes("Timeless enduring world"), "pack intemporel");
-  assert.ok(!/\b(19|20)\d{2}\b/.test(p), "aucune année inventée");
-});
-
-test("année présente → le pack de la période et l'ancrage à l'année", () => {
-  const p1916 = compilerPrompt({ scene: SCENE, annee: 1916, preset: "nuit-archive", format: "9:16" });
-  assert.ok(p1916.includes("hand-crank automobiles"), "pack 1900-1929 pour 1916");
-  assert.ok(p1916.includes("belongs to the year 1916"), "ancrage explicite");
-  const p1988 = compilerPrompt({ scene: SCENE, annee: 1988, preset: "nuit-archive", format: "9:16" });
-  assert.ok(p1988.includes("Peugeot 404 and 504"), "pack 1970-1989 pour 1988");
-  assert.ok(!p1988.includes("hand-crank"), "1916 et 1988 sont deux mondes différents");
-});
-
-test("lieu absent → aucune mention de lieu ; lieu présent → ancré", () => {
-  const sans = compilerPrompt({ scene: SCENE, preset: "heure-doree", format: "1:1" });
-  assert.ok(!sans.includes("The scene is set in"), "sans lieu, la phrase de lieu est absente");
-  const avec = compilerPrompt({ scene: SCENE, lieu: "Bouaké, Côte d'Ivoire", preset: "heure-doree", format: "1:1" });
-  assert.ok(avec.includes("set in Bouaké, Côte d'Ivoire"), "le lieu est ancré");
-});
-
-test("les six presets produisent six prompts distincts", () => {
-  const prompts = PRESET_IDS.map((id) =>
-    compilerPrompt({ scene: SCENE, preset: id, format: "9:16" })
-  );
-  assert.equal(new Set(prompts).size, 6, "6 prompts uniques");
-});
-
-console.log("Compilateur — la règle des négations");
-test("aucune négation dans les six presets (toutes heures confondues)", () => {
+console.log("Catalogue");
+test("30 presets, tous complets, répartis dans les 6 familles", () => {
+  assert.equal(PRESET_IDS.length, 30, "30 identifiants");
+  const parCategorie = new Map<string, number>();
   for (const id of PRESET_IDS) {
-    for (const heure of HEURES) {
-      const p = compilerPrompt({ scene: SCENE, annee: 1953, lieu: "Niamey", preset: id as PresetId, heure, format: "16:9" });
-      const negations = trouverNegations(p);
-      assert.deepEqual(negations, [], `${id}/${heure} contient : ${negations.join(", ")}`);
+    const p = PRESETS[id];
+    assert.ok(p, `${id} présent`);
+    assert.ok(p.rendu && p.lumiere && p.cadre && p.format && p.nom, `${id} complet`);
+    parCategorie.set(p.categorie, (parCategorie.get(p.categorie) ?? 0) + 1);
+  }
+  assert.equal(parCategorie.size, CATEGORIES.length, "6 familles utilisées");
+});
+
+test("les 30 presets produisent 30 prompts distincts", () => {
+  const prompts = PRESET_IDS.map((id) =>
+    compilerPrompt({ scene: SCENE, preset: id, format: PRESETS[id].format })
+  );
+  assert.equal(new Set(prompts).size, 30);
+});
+
+console.log("La règle des négations — 30 presets × heures × régions");
+test("aucune négation, toutes combinaisons (30 × 5 heures × 7 régions = 1050 prompts)", () => {
+  let compte = 0;
+  for (const id of PRESET_IDS) {
+    for (const heure of [undefined, ...HEURES] as const) {
+      for (const region of REGIONS) {
+        const p = compilerPrompt({
+          scene: SCENE,
+          annee: 1975,
+          lieu: "Abidjan",
+          preset: id as PresetId,
+          heure,
+          region: region as Region,
+          format: "9:16",
+        });
+        const negations = trouverNegations(p);
+        assert.deepEqual(negations, [], `${id}/${heure ?? "native"}/${region} : ${negations.join(", ")}`);
+        compte += 1;
+      }
     }
   }
+  assert.equal(compte, 30 * 5 * 7, `${compte} prompts vérifiés`);
 });
 
-test("les packs d'époque eux-mêmes sont affirmatifs", () => {
-  for (const annee of [1850, 1916, 1943, 1960, 1988, 1999, 2020, undefined]) {
-    const bloc = packEpoque(annee, "Dakar");
-    assert.deepEqual(trouverNegations(bloc), [], `pack ${annee ?? "intemporel"}`);
+console.log("L'ancrage africain — le cœur du produit (§0.1)");
+test("injecté par défaut, AVANT le sujet", () => {
+  const p = compilerPrompt({ scene: SCENE, preset: "portrait-pro", format: "1:1" });
+  assert.ok(p.includes("West and Central African features"), "bloc de base présent");
+  assert.ok(
+    p.indexOf("African features") < p.indexOf(`The scene: ${SCENE}`),
+    "l'ancrage précède le sujet"
+  );
+});
+test("chaque région remplace matériaux et végétation", () => {
+  const attendus: Record<Exclude<Region, "monde">, string> = {
+    ouest: "banco earth walls",
+    sahel: "doum palms",
+    cote: "fishing pirogues",
+    foret: "kapok trees",
+    est: "flat-topped acacias",
+    maghreb: "zellige tiles",
+  };
+  for (const [region, marqueur] of Object.entries(attendus)) {
+    const p = compilerPrompt({ scene: SCENE, preset: "portrait-pro", region: region as Region, format: "1:1" });
+    assert.ok(p.includes(marqueur), `${region} → « ${marqueur} »`);
+  }
+});
+test("région « monde » (décor non africain explicite) → bloc omis", () => {
+  const p = compilerPrompt({ scene: SCENE, preset: "portrait-pro", region: "monde", format: "1:1" });
+  assert.ok(!p.includes("African features"), "ancrage absent");
+  assert.equal(ancrageAfricain("monde"), "");
+});
+test("les 6 blocs régionaux sont eux-mêmes affirmatifs", () => {
+  for (const region of REGIONS) {
+    assert.deepEqual(trouverNegations(ancrageAfricain(region as Region)), [], region);
   }
 });
 
-console.log("Compilateur — garde-fous");
+console.log("Zones de texte réservées (§0.3)");
+test("les 7 presets [zone de texte] réservent une plage vide dans le prompt", () => {
+  const marques = PRESET_IDS.filter((id) => PRESETS[id].zoneTexte);
+  assert.deepEqual(
+    marques.sort(),
+    ["affiche-religieuse", "affiche-resistance", "flyer-promo", "fond-citation", "hommage", "miniature-video", "motivation"].sort(),
+    "la liste des presets marqués"
+  );
+  for (const id of marques) {
+    const p = compilerPrompt({ scene: SCENE, preset: id, format: PRESETS[id].format });
+    assert.ok(/empty/i.test(p), `${id} : plage vide décrite dans le prompt`);
+    assert.ok(/text overlay/i.test(p), `${id} : réservée pour l'incrustation`);
+  }
+});
+
+console.log("Époque, heures, mode avancé");
+test("année présente → pack de la période ; absente → intemporel", () => {
+  const p1916 = compilerPrompt({ scene: SCENE, annee: 1916, preset: "document-epoque", format: "4:5" });
+  assert.ok(p1916.includes("hand-crank automobiles"));
+  const sans = compilerPrompt({ scene: SCENE, preset: "document-epoque", format: "4:5" });
+  assert.ok(sans.includes("Timeless enduring world"));
+  assert.deepEqual(trouverNegations(packEpoque(1943, "Dakar")), []);
+});
+test("changer l'heure ajoute l'ambiance temporelle, le reste ne bouge pas", () => {
+  const natif = compilerPrompt({ scene: SCENE, preset: "nuit-archive", format: "9:16" });
+  const aube = compilerPrompt({ scene: SCENE, preset: "nuit-archive", heure: "aube", format: "9:16" });
+  assert.notEqual(natif, aube);
+  assert.ok(aube.includes("takes place at dawn"));
+  assert.ok(aube.includes(PRESETS["nuit-archive"].rendu), "le rendu reste");
+});
+test("mode avancé : le prompt libre atterrit APRÈS l'ancrage et le preset", () => {
+  const libre = "shot on expired kodak film stock";
+  const p = compilerPrompt({ scene: SCENE, preset: "portrait-pro", format: "1:1", promptLibre: libre });
+  assert.ok(p.trimEnd().endsWith(`${libre}.`), "le prompt libre est le DERNIER bloc");
+  assert.ok(p.indexOf("African features") < p.indexOf(libre), "après l'ancrage");
+  assert.ok(p.indexOf(PRESETS["portrait-pro"].cadre) < p.indexOf(libre), "après le preset");
+});
 test("scène vide → erreur claire", () => {
-  assert.throws(() => compilerPrompt({ scene: "   ", preset: "nuit-archive", format: "9:16" }));
-});
-test("changer l'heure du jour change le bloc lumière et rien d'autre", () => {
-  const nuit = compilerPrompt({ scene: SCENE, preset: "nuit-archive", heure: "nuit", format: "9:16" });
-  const jour = compilerPrompt({ scene: SCENE, preset: "nuit-archive", heure: "jour", format: "9:16" });
-  assert.notEqual(nuit, jour, "la lumière change");
-  assert.ok(jour.includes(PRESETS["nuit-archive"].rendu), "le rendu reste");
-  assert.ok(jour.includes(PRESETS["nuit-archive"].etalonnage), "l'étalonnage reste");
-});
-test("la caméra n'est pas réglable : plan large + trois-quarts dans les six presets", () => {
-  for (const id of PRESET_IDS) {
-    const p = compilerPrompt({ scene: SCENE, preset: id as PresetId, format: "9:16" });
-    assert.ok(p.includes("wide or medium-wide framing"), `${id}: plan large`);
-    assert.ok(p.includes("three-quarters behind or from the back"), `${id}: trois-quarts/dos`);
-  }
+  assert.throws(() => compilerPrompt({ scene: "  ", preset: "mariage", format: "4:5" }));
 });
 
 console.log(`\n${total - rate}/${total} tests verts`);

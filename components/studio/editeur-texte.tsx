@@ -66,13 +66,22 @@ function dessiner(
   ctx.shadowColor = "transparent";
 }
 
-export function EditeurTexte({ url, onFermer }: { url: string; onFermer: () => void }) {
+export function EditeurTexte({
+  url,
+  yInitial = 75,
+  onFermer,
+}: {
+  url: string;
+  /** Position verticale par défaut — pilotée par la zone de texte du preset. */
+  yInitial?: number;
+  onFermer: () => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [texte, setTexte] = useState("");
   const [date, setDate] = useState("");
   const [taille, setTaille] = useState(50);
-  const [y, setY] = useState(75); // tiers inférieur par défaut
+  const [y, setY] = useState(yInitial);
   const [pret, setPret] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
   const glisse = useRef(false);
@@ -129,7 +138,7 @@ export function EditeurTexte({ url, onFermer }: { url: string; onFermer: () => v
         }
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = `scarabee-${Date.now()}.jpg`;
+        a.download = `meeradraw-${Date.now()}.jpg`;
         a.click();
         URL.revokeObjectURL(a.href);
       },

@@ -8,19 +8,25 @@ import { Textarea } from "@/components/ui/textarea";
 import { EditeurTexte } from "@/components/studio/editeur-texte";
 import { PRESETS } from "@/services/studio/presets";
 import {
+  CATEGORIES,
   FORMATS,
   HEURES,
   PRESET_IDS,
+  REGIONS,
   type Format,
   type Heure,
   type PresetId,
+  type Region,
   type Variantes,
+  type ZoneTexte,
 } from "@/services/studio/types";
 
 /**
- * Les trois écrans du studio (§2 du brief) — une colonne, cibles de doigt,
- * pensé pour 360 px. Pas de champ de prompt libre : une phrase, un preset,
- * un cadre. Le style vient du preset.
+ * Les trois écrans de MeeraDraw — une colonne, cibles de doigt, pensé pour
+ * 360 px. Pas de champ de prompt libre visible : une phrase, un preset, un
+ * cadre. Le style vient du preset, l'ancrage africain vient de la région.
+ * Le « Mode avancé » (replié) porte le 5 % : prompt libre, modèle, région,
+ * graine — c'est l'étage qui rend la formation vendable.
  */
 
 const COUTS: Record<Variantes, number> = { 1: 2, 2: 3, 4: 6 };
@@ -30,19 +36,48 @@ const HEURE_LIBELLES: Record<Heure, string> = {
   jour: "Jour",
   crepuscule: "Crépuscule",
 };
+const REGION_LIBELLES: Record<Region, string> = {
+  ouest: "Afrique de l'Ouest (défaut)",
+  sahel: "Sahel",
+  cote: "Côte",
+  foret: "Forêt",
+  est: "Afrique de l'Est",
+  maghreb: "Maghreb",
+  monde: "Hors Afrique",
+};
+const MODELES_UI = [
+  { id: "", nom: "Modèle par défaut" },
+  { id: "flux-2-pro", nom: "FLUX 2 Pro" },
+  { id: "flux-general", nom: "FLUX General" },
+  { id: "ideogram-v3", nom: "Ideogram V3" },
+];
+const FORMAT_LIBELLES: Record<Format, string> = {
+  "9:16": "Reel / TikTok",
+  "4:5": "Post",
+  "1:1": "Carré",
+  "16:9": "Paysage",
+};
+/** Position verticale par défaut du texte selon la zone réservée du preset. */
+const ZONE_Y: Record<ZoneTexte, number> = {
+  haut: 16,
+  bas: 85,
+  centre: 50,
+  droite: 50,
+  bandeaux: 90,
+};
 const EXEMPLES = [
+  "Un homme d'affaires marche vers son bureau au petit matin",
+  "Une commerçante fière devant sa boutique de tissus",
+  "Un mariage sous les manguiers en fin d'après-midi",
   "Un homme seul marche vers l'agence de la banque, la nuit, sous la pluie",
-  "Une foule silencieuse se rassemble devant le palais présidentiel",
-  "Des cavalières amazones passent la porte de la cité en armes",
-  "Un camion colonial roule sur une piste de latérite au crépuscule",
 ];
 
 type EtatGen =
   | { phase: "saisie" }
-  | { phase: "generation"; enCoursDepuis: number }
+  | { phase: "generation" }
   | { phase: "erreur"; message: string };
 
-interface Variante {
+interface VarianteImage {
   url: string;
   occupee?: boolean;
 }
@@ -53,15 +88,22 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
   const [scene, setScene] = useState("");
   const [annee, setAnnee] = useState("");
   const [lieu, setLieu] = useState("");
-  const [preset, setPreset] = useState<PresetId>("nuit-archive");
-  const [format, setFormat] = useState<Format>("9:16");
+  const [preset, setPreset] = useState<PresetId>("portrait-pro");
+  const [format, setFormat] = useState<Format>("1:1");
   const [variantes, setVariantes] = useState<Variantes>(2);
   const [etat, setEtat] = useState<EtatGen>({ phase: "saisie" });
-  const [resultats, setResultats] = useState<Variante[]>([]);
+  const [resultats, setResultats] = useState<VarianteImage[]>([]);
   const [solde, setSolde] = useState<number | null>(soldeInitial);
   const [edition, setEdition] = useState<string | null>(null);
-  const [heurePar, setHeurePar] = useState<Record<number, Heure>>({});
+  const [heurePar, setHeurePar] = useState<Record<number, Heure | undefined>>({});
   const [secondes, setSecondes] = useState(0);
+  // Mode avancé — fermé par défaut, l'utilisateur ordinaire ne le voit jamais.
+  const [avance, setAvance] = useState(false);
+  const [promptLibre, setPromptLibre] = useState("");
+  const [region, setRegion] = useState<Region>("ouest");
+  const [modele, setModele] = useState("");
+  const [graine, setGraine] = useState("");
+  const [derniereGraine, setDerniereGraine] = useState<number | null>(null);
 
   const sceneValide = scene.trim().length >= 8;
 
@@ -87,9 +129,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
         setSolde(json.data.solde);
         router.refresh();
       }
-      if (json.data.livrees < json.data.demandees) {
-        console.warn(`[studio] ${json.data.livrees}/${json.data.demandees} variantes livrées`);
-      }
+      if (typeof json.data.graine === "number") setDerniereGraine(json.data.graine);
       return json.data.urls as string[];
     } catch {
       setEtat({
@@ -110,12 +150,16 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
       lieu: lieu.trim() || undefined,
       preset,
       format,
+      ...(region !== "ouest" ? { region } : {}),
+      ...(promptLibre.trim() ? { promptLibre: promptLibre.trim() } : {}),
+      ...(modele ? { modele } : {}),
+      ...(graine.trim() ? { graine: Number(graine.trim()) } : {}),
     };
   }
 
   async function generer() {
     setSecondes(0);
-    setEtat({ phase: "generation", enCoursDepuis: Date.now() });
+    setEtat({ phase: "generation" });
     const urls = await appeler({ ...corpsCommun(), variantes });
     if (urls) {
       setResultats(urls.map((url) => ({ url })));
@@ -131,18 +175,18 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
     const urls = await appeler({
       ...corpsCommun(),
       ...(heureFinale ? { heure: heureFinale } : {}),
+      graine: undefined,
       variantes: 1,
     });
     setResultats((r) =>
-      r.map((v, i) =>
-        i === index ? { url: urls?.[0] ?? v.url, occupee: false } : v
-      )
+      r.map((v, i) => (i === index ? { url: urls?.[0] ?? v.url, occupee: false } : v))
     );
   }
 
   function prochaineHeure(index: number) {
-    const actuelle = heurePar[index] ?? PRESETS[preset].heureNative;
-    const suivante = HEURES[(HEURES.indexOf(actuelle) + 1) % HEURES.length];
+    const cycle: (Heure | undefined)[] = [undefined, ...HEURES];
+    const actuelle = cycle.indexOf(heurePar[index]);
+    const suivante = cycle[(actuelle + 1) % cycle.length];
     setHeurePar((h) => ({ ...h, [index]: suivante }));
     void regenerer(index, suivante);
   }
@@ -162,7 +206,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
               id="scene"
               rows={3}
               maxLength={300}
-              placeholder="Exemple : Un homme seul marche vers l'agence de la banque, la nuit, sous la pluie"
+              placeholder="Exemple : Une commerçante fière devant sa boutique de tissus"
               value={scene}
               onChange={(e) => setScene(e.target.value)}
             />
@@ -188,7 +232,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
                 id="annee"
                 inputMode="numeric"
                 maxLength={4}
-                placeholder="1953"
+                placeholder="1975"
                 value={annee}
                 onChange={(e) => setAnnee(e.target.value.replace(/\D/g, ""))}
               />
@@ -200,7 +244,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
               <Input
                 id="lieu"
                 maxLength={80}
-                placeholder="Bouaké"
+                placeholder="Abidjan"
                 value={lieu}
                 onChange={(e) => setLieu(e.target.value)}
               />
@@ -212,37 +256,52 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
         </section>
       ) : null}
 
-      {/* ── Écran 2 — le style ─────────────────────────────────────────── */}
+      {/* ── Écran 2 — le style : 30 presets, 6 familles ────────────────── */}
       {ecran === 2 ? (
-        <section className="space-y-4">
-          <div className="grid grid-cols-2 gap-2">
-            {PRESET_IDS.map((id) => {
-              const p = PRESETS[id];
-              const actif = preset === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setPreset(id)}
-                  className={`rounded-2xl border-2 p-0.5 text-left transition active:scale-[0.98] ${
-                    actif ? "border-amber-500" : "border-transparent"
-                  }`}
-                >
-                  <div
-                    className="flex h-20 items-end rounded-xl p-2"
-                    style={{
-                      background: `linear-gradient(140deg, ${p.vignette.de}, ${p.vignette.vers})`,
-                    }}
-                  >
-                    <span className="text-sm font-bold text-white drop-shadow">{p.nom}</span>
-                  </div>
-                  <p className="px-1.5 py-1.5 text-[11px] leading-snug text-ink-muted">
-                    {p.description}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
+        <section className="space-y-5">
+          {CATEGORIES.map((cat) => (
+            <div key={cat.id}>
+              <h2 className="mb-2 text-sm font-bold text-ink">{cat.nom}</h2>
+              <div className="grid grid-cols-2 gap-2">
+                {PRESET_IDS.filter((id) => PRESETS[id].categorie === cat.id).map((id) => {
+                  const p = PRESETS[id];
+                  const actif = preset === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => {
+                        setPreset(id);
+                        setFormat(p.format);
+                      }}
+                      className={`rounded-2xl border-2 p-0.5 text-left transition active:scale-[0.98] ${
+                        actif ? "border-amber-500" : "border-transparent"
+                      }`}
+                    >
+                      <div
+                        className="relative flex h-16 items-end rounded-xl p-2"
+                        style={{
+                          background: `linear-gradient(140deg, ${p.vignette.de}, ${p.vignette.vers})`,
+                        }}
+                      >
+                        {p.zoneTexte ? (
+                          <span className="absolute right-1.5 top-1.5 rounded bg-black/40 px-1.5 py-0.5 text-[9px] font-semibold text-white">
+                            zone de texte
+                          </span>
+                        ) : null}
+                        <span className="text-[13px] font-bold leading-tight text-white drop-shadow">
+                          {p.nom}
+                        </span>
+                      </div>
+                      <p className="px-1.5 py-1 text-[10px] leading-snug text-ink-muted">
+                        {p.description.replace(" [zone de texte]", "")}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => setEcran(1)}>
               Retour
@@ -254,12 +313,12 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
         </section>
       ) : null}
 
-      {/* ── Écran 3 — le cadre ─────────────────────────────────────────── */}
+      {/* ── Écran 3 — le cadre + mode avancé replié ────────────────────── */}
       {ecran === 3 ? (
         <section className="space-y-4">
           <div>
             <p className="mb-1.5 text-sm font-bold text-ink">Format</p>
-            <div className="grid grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-4 gap-1.5">
               {FORMATS.map((f) => (
                 <button
                   key={f}
@@ -272,8 +331,8 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
                   }`}
                 >
                   {f}
-                  <span className="block text-[10px] font-normal opacity-80">
-                    {f === "9:16" ? "Reel / TikTok" : f === "1:1" ? "Carré" : "Paysage"}
+                  <span className="block text-[9px] font-normal opacity-80">
+                    {FORMAT_LIBELLES[f]}
                   </span>
                 </button>
               ))}
@@ -299,6 +358,84 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
               ))}
             </div>
           </div>
+
+          {/* Mode avancé — fermé par défaut. Le 5 % qui le cherche le trouve. */}
+          <div className="rounded-2xl border border-cream-200 bg-white">
+            <button
+              type="button"
+              onClick={() => setAvance(!avance)}
+              className="flex w-full items-center justify-between px-4 py-3 text-sm font-semibold text-ink-muted"
+            >
+              Mode avancé
+              <span className="text-xs">{avance ? "▲" : "▼"}</span>
+            </button>
+            {avance ? (
+              <div className="space-y-3 border-t border-cream-200 p-4">
+                <div>
+                  <label htmlFor="promptLibre" className="mb-1 block text-xs font-bold text-ink">
+                    Consigne libre <span className="font-normal text-ink-muted">(ajoutée après le style)</span>
+                  </label>
+                  <Textarea
+                    id="promptLibre"
+                    rows={2}
+                    maxLength={500}
+                    placeholder="Exemple : pellicule argentique, grain marqué"
+                    value={promptLibre}
+                    onChange={(e) => setPromptLibre(e.target.value)}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label htmlFor="region" className="mb-1 block text-xs font-bold text-ink">
+                      Région
+                    </label>
+                    <select
+                      id="region"
+                      value={region}
+                      onChange={(e) => setRegion(e.target.value as Region)}
+                      className="h-11 w-full rounded-xl border border-cream-200 bg-white px-2 text-sm text-ink"
+                    >
+                      {REGIONS.map((r) => (
+                        <option key={r} value={r}>
+                          {REGION_LIBELLES[r]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="modele" className="mb-1 block text-xs font-bold text-ink">
+                      Modèle
+                    </label>
+                    <select
+                      id="modele"
+                      value={modele}
+                      onChange={(e) => setModele(e.target.value)}
+                      className="h-11 w-full rounded-xl border border-cream-200 bg-white px-2 text-sm text-ink"
+                    >
+                      {MODELES_UI.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.nom}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label htmlFor="graine" className="mb-1 block text-xs font-bold text-ink">
+                    Graine <span className="font-normal text-ink-muted">(pour reproduire une image)</span>
+                  </label>
+                  <Input
+                    id="graine"
+                    inputMode="numeric"
+                    placeholder={derniereGraine ? `Dernière : ${derniereGraine}` : "Vide = au hasard"}
+                    value={graine}
+                    onChange={(e) => setGraine(e.target.value.replace(/\D/g, ""))}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
+
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => setEcran(2)}>
               Retour
@@ -310,7 +447,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
               disabled={generationEnCours || !sceneValide}
             >
               {etat.phase === "generation"
-                ? `Peinture en cours… ${secondes}s`
+                ? `Création en cours… ${secondes}s`
                 : `Générer — ${COUTS[variantes]} crédits`}
             </Button>
           </div>
@@ -342,6 +479,9 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
       {resultats.length ? (
         <section className="space-y-3">
           <h2 className="text-sm font-bold text-ink">Tes images</h2>
+          {derniereGraine ? (
+            <p className="text-[11px] text-ink-muted">Graine : {derniereGraine}</p>
+          ) : null}
           <div className={`grid gap-3 ${resultats.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
             {resultats.map((v, i) => (
               <figure key={`${v.url}-${i}`} className="space-y-1.5">
@@ -366,7 +506,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
                     onClick={() => prochaineHeure(i)}
                     className="rounded-lg bg-cream-100 px-2 py-2 text-[11px] font-semibold text-ink active:scale-95 disabled:opacity-50"
                   >
-                    {HEURE_LIBELLES[heurePar[i] ?? PRESETS[preset].heureNative]} → · 2 cr
+                    {heurePar[i] ? HEURE_LIBELLES[heurePar[i]!] : "Heure"} → · 2 cr
                   </button>
                   <button
                     type="button"
@@ -377,7 +517,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
                   </button>
                   <a
                     href={`/api/images/proxy?url=${encodeURIComponent(v.url)}`}
-                    download={`scarabee-${i + 1}.jpg`}
+                    download={`meeradraw-${i + 1}.jpg`}
                     className="rounded-lg bg-cream-100 px-2 py-2 text-center text-[11px] font-semibold text-ink active:scale-95"
                   >
                     Télécharger
@@ -389,7 +529,13 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
         </section>
       ) : null}
 
-      {edition ? <EditeurTexte url={edition} onFermer={() => setEdition(null)} /> : null}
+      {edition ? (
+        <EditeurTexte
+          url={edition}
+          yInitial={PRESETS[preset].zoneTexte ? ZONE_Y[PRESETS[preset].zoneTexte!] : 75}
+          onFermer={() => setEdition(null)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -3,9 +3,9 @@ import { MetaPixel } from "@/components/analytics/meta-pixel";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Scarabée Studio — Les visuels de tes histoires vraies",
+  title: "MeeraDraw — le Midjourney africain",
   description:
-    "Décris une scène en une phrase : le studio la peint dans le style du Scarabée Noir, prête pour Facebook et TikTok.",
+    "Décris ta scène en une phrase, en français : MeeraDraw crée des images qui te ressemblent — peaux, tissus, décors et lumières d'Afrique.",
 };
 
 export default function RootLayout({

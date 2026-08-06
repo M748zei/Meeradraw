@@ -10,13 +10,23 @@ import type { Format } from "@/services/studio/types";
  * Une variante = un appel (chaque variante est régénérable seule).
  */
 
-/** Endpoint par défaut — tranché par la comparaison mesurée du §8 du brief. */
-export function studioEndpoint(): string {
+/** Modèles proposés au mode avancé — identifiants courts, jamais d'URL cliente. */
+export const MODELES: Record<string, string> = {
+  "flux-2-pro": "https://fal.run/fal-ai/flux-2-pro",
+  "flux-general": "https://fal.run/fal-ai/flux-general",
+  "ideogram-v3": "https://fal.run/fal-ai/ideogram/v3",
+};
+export const MODELE_IDS = Object.keys(MODELES) as [string, ...string[]];
+
+/** Endpoint par défaut — remplacé par la comparaison mesurée quand fal sera rechargé. */
+export function studioEndpoint(modele?: string): string {
+  if (modele && MODELES[modele]) return MODELES[modele];
   return process.env.FAL_STUDIO_ENDPOINT?.trim() || "https://fal.run/fal-ai/flux-2-pro";
 }
 
 const TAILLES: Record<Format, string> = {
   "9:16": "portrait_16_9",
+  "4:5": "portrait_4_3",
   "1:1": "square_hd",
   "16:9": "landscape_16_9",
 };

@@ -16,7 +16,7 @@ const etapes = [
   {
     icon: Clock,
     titre: "Choisis le style",
-    texte: "Six presets relevés sur les vrais visuels de la page — nuit d'archive, heure dorée, affiche…",
+    texte: "30 styles prêts : portrait pro, boutique, mariage, affiche, récit d'archive… Zéro prompt à écrire.",
   },
   {
     icon: Copy,
@@ -38,16 +38,17 @@ export default function LandingPage() {
       <section className="mx-auto max-w-2xl px-4 pb-10 pt-8 text-center">
         <Reveal>
           <h1 className="font-display text-3xl leading-tight text-ink md:text-4xl">
-            Les visuels du Scarabée Noir —
-            <span className="text-amber-600"> peints pour tes reels</span>
+            Le Midjourney
+            <span className="text-amber-600"> africain</span>
           </h1>
           <p className="mx-auto mt-3 max-w-md text-ink-muted">
-            Décris ta scène en une phrase. Le studio la peint dans le style de la
-            page : clair-obscur, huile cinématographique, époque respectée.
+            Ailleurs, « un homme d\'affaires » donne un blanc à New York. Ici, il
+            donne un homme noir à Abidjan. Décris ta scène en français, choisis un
+            style — MeeraDraw fait le reste.
           </p>
           <div className="mt-6 flex flex-col items-center gap-3">
             <Link href="/login" prefetch={false}>
-              <Button size="lg">Peindre ma première scène</Button>
+              <Button size="lg">Créer ma première image</Button>
           </Link>
             <p className="text-xs text-ink-muted">
               Dès 2 crédits par image — tes crédits DigiAfrik marchent ici aussi.
@@ -77,9 +78,9 @@ export default function LandingPage() {
           <Card className="mt-6 flex items-start gap-3 border-amber-200 bg-amber-50">
             <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
             <p className="text-sm text-amber-900">
-              Le style n&apos;est pas un réglage : la recette des visuels qui marchent
-              (lumière unique, plan large, étalonnage sarcelle et ambre) est
-              encodée dans les presets. Tu ne verras jamais un prompt.
+              L&apos;ancrage africain est le cœur du produit : peaux noires et brunes,
+              wax, bazin, boubou, banco, latérite, manguiers — injecté dans chaque
+              image. C&apos;est la différence avec les outils mondiaux.
             </p>
           </Card>
         </Reveal>

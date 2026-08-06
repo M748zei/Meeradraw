@@ -13,10 +13,10 @@ export default async function StudioPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="font-display text-2xl text-ink">Ton prochain visuel</h1>
+        <h1 className="font-display text-2xl text-ink">Ta prochaine image</h1>
         <p className="mt-1 text-sm text-ink-muted">
-          Décris la scène en une phrase, choisis le style, le cadre — le studio
-          peint le reste.
+          Décris la scène en une phrase, choisis le style, le cadre — MeeraDraw
+          fait le reste.
         </p>
       </div>
       <GenerateurStudio soldeInitial={solde} />
