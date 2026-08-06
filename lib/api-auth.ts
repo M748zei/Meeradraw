@@ -1,60 +1,25 @@
 import { AppError } from "@/lib/errors";
-import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebase/admin";
-import { getSessionUser } from "@/lib/firebase/session";
-import type { Profile } from "@/types/database";
+import { getSupabaseServer, isSupabaseServerConfigured } from "@/lib/supabase/server";
 
-// Griot n'a plus d'essais gratuits locaux : le portefeuille vit dans le hub.
-const FREE_TRIALS_MAX = 0;
-
-export function buildNewProfile(session: {
-  uid: string;
-  name?: unknown;
-  email?: unknown;
-  picture?: unknown;
-}): Profile {
-  const now = new Date().toISOString();
-  return {
-    id: session.uid,
-    fullname: (session.name as string) || null,
-    // Always lowercase: the Chariow sale webhook matches buyers by exact
-    // email equality, so mixed-case profiles would miss instant crediting.
-    email: ((session.email as string) || "").toLowerCase(),
-    avatar_url: (session.picture as string) || null,
-    subscription_plan: "free",
-    // No welcome credits: new accounts get FREE_TRIALS_MAX free trial books
-    // instead (paid credits only ever come from Chariow purchases).
-    credits: 0,
-    free_trials_used: 0,
-    free_trials_in_progress: 0,
-    free_trials_max: FREE_TRIALS_MAX,
-    preferred_language: "fr",
-    created_at: now,
-    updated_at: now,
-  };
-}
-
+/**
+ * Auth des routes API — session Supabase (cookies), identité unique du hub.
+ * getUser() revalide le JWT auprès de Supabase : jamais de confiance aveugle
+ * dans le cookie.
+ */
 export async function requireUser() {
-  const session = await getSessionUser();
-  if (!session?.uid) {
+  if (!isSupabaseServerConfigured()) {
+    throw new AppError("INTERNAL_ERROR", "Service non configuré.", 503);
+  }
+  const supabase = await getSupabaseServer();
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
+  if (error || !user) {
     throw new AppError("UNAUTHORIZED", "Connexion requise", 401);
   }
-
-  const db = getAdminDb();
-  const ref = db.collection("users").doc(session.uid);
-  const snap = await ref.get();
-
-  let profile = snap.exists ? ({ id: snap.id, ...snap.data() } as Profile) : null;
-
-  if (!profile) {
-    profile = buildNewProfile(session);
-    if (isFirebaseAdminConfigured()) {
-      await ref.set(profile);
-    }
-  }
-
   return {
-    user: { id: session.uid, email: session.email as string | undefined },
-    profile,
-    db,
+    user: { id: user.id, email: user.email ?? undefined },
+    supabase,
   };
 }
