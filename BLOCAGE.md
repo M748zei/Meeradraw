@@ -1,34 +1,34 @@
 # BLOCAGE — actions qui exigent un humain
 
-## B1 — Activer Google dans Supabase Auth (option c de §4.3)
-Constat vérifié : `auth.identities` du projet `arijliuqbprqgqztuseh` ne contient que
-le provider `email`. Le code est prêt (`signInWithOAuth({provider:"google"})` +
-`/auth/callback` qui échange le code) mais il faut, à la main :
-1. Google Cloud Console → créer un client OAuth 2.0 (type Web).
-   - Origine autorisée : `https://arijliuqbprqgqztuseh.supabase.co`
-   - URI de redirection : `https://arijliuqbprqgqztuseh.supabase.co/auth/v1/callback`
-2. Supabase Dashboard → Authentication → Providers → Google → coller client ID
-   + secret, activer.
-3. Supabase Dashboard → Authentication → URL Configuration → ajouter
-   `https://meeradraw.vercel.app/auth/callback` (et le domaine final de Griot)
-   aux Redirect URLs.
-En attendant, la connexion par code email (6 chiffres) fonctionne ; le bouton
-Google affiche un message propre s'il échoue.
+## B1 — LE compte fal.ai est à sec : tout le studio attend ça
+Constaté le 2026-08-06 en lançant la comparaison des modèles (§8 du brief) :
+les 15 appels (5 scènes × flux-2-pro / flux-general / ideogram-v3) répondent
+`User is locked. Reason: Exhausted balance.`
 
-## B2 — La génération réelle EN PRODUCTION exige une connexion humaine
-Le point 7 du cahier demande une génération lancée en production. La route
-`/api/recits` est en ligne et échoue fermé sans session (vérifié : 401, rien
-débité). Mais s'y connecter exige de saisir le code de connexion reçu par
-email — exactement ce que les interdits du §2 proscrivent (« saisir… un code
-2FA ») ; la tentative automatisée a d'ailleurs été refusée par la plateforme.
+→ **Recharge le solde sur fal.ai/dashboard/billing** (c'est un paiement, je ne
+peux pas le faire). Ensuite, pour finir le travail mesuré :
+1. relance `node --import tsx /tmp/comparaison-modeles.mjs` (le script est prêt,
+   il génère les 15 images dans le scratchpad et un resultats.json) ;
+2. compare aux vraies images de la page (j'ai extrait des trames de référence
+   des vidéos Kaocen/Lumumba du Bureau) ;
+3. pose `FAL_STUDIO_ENDPOINT` sur le gagnant dans Vercel (défaut actuel du
+   code : flux-2-pro).
 
-Ce qui a été prouvé à la place, avec le moteur EXACT du dépôt et les clés que
-la production utilise : deux générations réelles (BCEAO 45 s, Sankara 45 s),
-bascule Groq→relance observée, invariants tenus (voir rapport).
+Tant que le solde est vide, la génération en production échouera proprement :
+débit remboursé automatiquement, message français, rien de perdu.
 
-**À faire par toi (2 minutes, sur ton téléphone)** :
-1. Ouvre https://meeradraw.vercel.app/login — entre ton adresse, tape le code
-   à 6 chiffres reçu par email.
-2. Sur /griot : touche un sujet d'exemple, touche « Écrire mon récit — 8 crédits ».
-3. Vérifie : le récit s'affiche bloc par bloc, ton solde passe de 170 à 162,
-   et la ligne de débit `griot:…` apparaît sur digiafrik.shop/compte.
+## B2 — Activer Google dans Supabase Auth
+Toujours valable (voir historique) : provider Google à activer dans le
+dashboard Supabase (`arijliuqbprqgqztuseh`) + URL de redirection
+`https://meeradraw.vercel.app/auth/callback`. En attendant, le code par email
+fonctionne.
+
+## B3 — La preuve « débit + remboursement » en production exige ta connexion
+Se connecter exige de saisir le code reçu par email — c'est exclu pour moi.
+Une fois le solde fal rechargé, le test de 2 minutes sur ton téléphone :
+1. https://meeradraw.vercel.app/login → code email → /studio
+2. Décris une scène, choisis un preset, 2 variantes (3 crédits) → Générer
+3. Vérifie : les images s'affichent, ton solde baisse de 3, la ligne
+   `studio:…` apparaît dans hub_transactions (digiafrik.shop/compte).
+   Pour voir le remboursement : relance quand le solde fal est vide → le
+   débit est rendu (ligne `studio:…:refund`).
