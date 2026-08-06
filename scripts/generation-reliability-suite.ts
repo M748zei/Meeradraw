@@ -2372,6 +2372,42 @@ async function runFamilyCastRepairTests() {
     assert.match(childPrompt, /NO adults/);
   });
 
+  await test("REPRO e3fc2591: un refus du filtre de contenu fal donne un prompt allégé, pas un livre perdu", async () => {
+    const { allegerPromptRefuse } = await import("../services/ai/fal-provider");
+
+    const refuse =
+      "@image1 is the immutable identity source for Aicha (human). Preserve that exact identity once. " +
+      "Each reference keeps its own separate design: the characters are drawn side by side as two distinct individuals. " +
+      "COMPOSITION BLUEPRINT: one uninterrupted portrait page with no internal borders. " +
+      "Keep all heads and limbs inside the safe area. " +
+      "Show the complete body and action with breathing room around hands and feet; hero uses no more than 45% of page height. " +
+      "REAL CHILD proportions (large head, short limbs). " +
+      "ACTION mid-motion: Aicha climbing a mango tree. " +
+      "SCENE with a rich colorable environment: baobab tree, market stalls, mud-brick houses.";
+
+    const allege = allegerPromptRefuse(refuse);
+
+    // Les clauses anatomiques disparaissent — ce sont elles qui déclenchent le
+    // filtre quand elles côtoient le mot « child ».
+    assert.equal(/limbs inside the safe area/i.test(allege), false);
+    assert.equal(/hands and feet/i.test(allege), false);
+    assert.equal(/REAL CHILD proportions/i.test(allege), false);
+    assert.equal(/COMPOSITION BLUEPRINT/i.test(allege), false);
+
+    // La scène et l'identité survivent : c'est tout l'intérêt de l'allègement.
+    assert.match(allege, /immutable identity source for Aicha/);
+    assert.match(allege, /climbing a mango tree/);
+
+    assert.ok(allege.length < refuse.length, "le prompt doit raccourcir");
+    assert.ok(allege.length <= 900, "le prompt allégé est plafonné à 900 caractères");
+
+    // Idempotent : un deuxième passage ne détruit pas le prompt.
+    assert.equal(allegerPromptRefuse(allege), allege);
+
+    // Un prompt vide ne provoque pas de boucle.
+    assert.equal(allegerPromptRefuse(""), "");
+  });
+
   await test("REPRO 6c940ac6: enforceParentChildHero est idempotente — 4 appels = 1 appel", async () => {
     const { enforceParentChildHero } = await import("../services/ai/character-bible");
     const plan = {
