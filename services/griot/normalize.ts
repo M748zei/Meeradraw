@@ -116,9 +116,13 @@ export function normaliserRecit(brut: Record<string, unknown>, input: RecitInput
     notes.push("Le champ script manquait — reconstruit depuis les plans.");
   }
 
-  if (compterMots(script) < 30) {
+  // Plancher relatif à la durée demandée : la génération réelle du 2026-08-06
+  // a rendu 59 mots pour une cible de 110 — trop maigre pour tenir 45 s à
+  // l'écran. Sous 60 % de la cible, on relance plutôt que de livrer creux.
+  const plancher = Math.max(30, Math.round(cible.mots * 0.6));
+  if (compterMots(script) < plancher) {
     throw new RecitInutilisable(
-      `script trop court (${compterMots(script)} mots) pour un reel de ${cible.secondes} s`
+      `script trop court (${compterMots(script)} mots, minimum ${plancher}) pour un reel de ${cible.secondes} s`
     );
   }
 

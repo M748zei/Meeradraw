@@ -125,6 +125,11 @@ test("script trop court → RecitInutilisable", () => {
 test("objet JSON valide mais vide → RecitInutilisable", () => {
   assert.throws(() => normaliserRecit({}, INPUT), RecitInutilisable);
 });
+test("script sous 60 % de la cible de durée → RecitInutilisable (relance)", () => {
+  // 40 mots pour une cible 45 s (~110 mots, plancher 66) : creux, on relance.
+  const court = Array.from({ length: 40 }, (_, i) => `mot${i}`).join(" ") + ".";
+  assert.throws(() => normaliserRecit({ script: court }, INPUT), RecitInutilisable);
+});
 
 console.log("Cas 5 — réponse illisible");
 test("prose sans JSON → ReponseIllisible", () => {
