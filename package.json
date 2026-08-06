@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit --pretty false",
-    "test": "node --import tsx scripts/griot-suite.ts"
+    "test": "node --import tsx scripts/studio-suite.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
