@@ -1,6 +1,22 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
-import { detectImageFormat } from "@/lib/image-format";
 import { fetchSafeImageBytes } from "@/lib/safe-image-url";
+
+/** PNG/JPEG magic-bytes sniff (extrait de l'ancien lib/image-format, supprimé avec le moteur d'images). */
+function detectImageFormat(bytes: Uint8Array): "png" | "jpeg" | "unknown" {
+  if (
+    bytes.length > 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return "png";
+  }
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "jpeg";
+  }
+  return "unknown";
+}
 
 /** A4 portrait (pts). Print-safe kids coloring book layout. */
 const PAGE_W = 595.28;

@@ -1,5 +1,5 @@
 {
-  "name": "meeradraw",
+  "name": "griot",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -8,12 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit --pretty false",
-    "test:functional": "node --import tsx scripts/functional-suite.ts",
-    "test:functional:logic": "node --import tsx scripts/functional-suite.ts --logic-only",
-    "test:functional:http": "node --import tsx scripts/functional-suite.ts --http-only",
-    "test:generation-reliability": "node --import tsx scripts/generation-reliability-suite.ts",
-    "test:generation-reliability:emulator": "bash scripts/run-generation-reliability-emulator.sh",
-    "test:bench-kai": "node --import tsx scripts/bench-kai-fidelity.ts"
+    "test": "node --import tsx scripts/griot-suite.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

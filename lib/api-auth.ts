@@ -2,7 +2,9 @@ import { AppError } from "@/lib/errors";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebase/admin";
 import { getSessionUser } from "@/lib/firebase/session";
 import type { Profile } from "@/types/database";
-import { FREE_TRIALS_MAX } from "@/config/credits";
+
+// Griot n'a plus d'essais gratuits locaux : le portefeuille vit dans le hub.
+const FREE_TRIALS_MAX = 0;
 
 export function buildNewProfile(session: {
   uid: string;

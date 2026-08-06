@@ -2,7 +2,6 @@ import Link from "next/link";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { HeroDrawingLazy } from "@/components/landing/hero-drawing-lazy";
 import { PageGallery } from "@/components/landing/gallery";
 import { Reveal } from "@/components/landing/reveal";
 import { PARENT_PROMISE } from "@/config/parent-create";
@@ -152,7 +151,6 @@ export default function LandingPage() {
               </span>
             </div>
           </div>
-          <HeroDrawingLazy />
         </div>
       </section>
 
