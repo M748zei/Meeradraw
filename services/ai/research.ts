@@ -125,11 +125,11 @@ async function searchDuckDuckGo(query: string): Promise<string[]> {
 }
 
 /**
- * Requête factuelle pour ancrer un récit d'histoire vraie (dates, faits, noms).
+ * Build a child-oriented search query from a free-form idea.
  */
 export function buildSearchQuery(idea: string): string {
   const cleaned = idea.replace(/\s+/g, " ").trim().slice(0, 200);
-  return `${cleaned} histoire vraie faits dates chronologie`;
+  return `${cleaned} biography facts for kids OR children's story OR histoire enfants`;
 }
 
 /**
