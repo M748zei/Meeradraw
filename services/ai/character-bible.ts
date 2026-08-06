@@ -48,6 +48,54 @@ function stripConflictingGender(lock: string, gender?: string | null): string {
 }
 
 /**
+ * Retire l'échafaudage que `enforceParentChildHero` a déjà pu ajouter.
+ *
+ * ─── Pourquoi ──────────────────────────────────────────────────────────────
+ * `enforceParentChildHero` enveloppe le verrou existant dans un nouveau verrou.
+ * Elle est appelée QUATRE fois sur un même plan : deux fois dans le provider
+ * OpenAI, une fois dans l'orchestrateur, une fois dans
+ * `repairParentPlanForViability`. Le verrou s'emboîte donc quatre fois.
+ *
+ * Pire : `stripAdultWording` et `stripConflictingGender` s'appliquent ensuite à
+ * l'échafaudage lui-même et le défigurent. Preuve en production (gen 6c940ac6,
+ * livre 94858b04), verrou réellement écrit en base :
+ *
+ *   « young girl about 7 years old, NOT a boy, NOT a male child, REAL CHILD
+ *     proportions … NEVER an adult woman or man, … young girl about 7 years
+ *     old, NOT a young girl, NOT a male child, … NEVER an child child or
+ *     child, … » (et une troisième fois encore)
+ *
+ * « NOT a young girl » pour une fille. « NEVER an child child or child ».
+ * C'est ce texte-là qu'on envoyait au modèle d'image. Le problème était masqué
+ * tant que le verrou du héros était écrasé par le renvoi à la photo ; en
+ * cessant d'écraser, on l'a rendu visible.
+ *
+ * On nettoie donc avant de reconstruire : la fonction devient idempotente,
+ * quatre appels donnent le même résultat qu'un seul.
+ */
+export function retirerEchafaudageHeros(lock: string): string {
+  const morceaux: RegExp[] = [
+    // « young girl about 7 years old » / « young boy about 4 years old » …
+    /\b(young (girl|boy|child)|petit(e)? (fille|gar[çc]on)|enfant)\s+about\s+\d+\s+years?\s+old\b/gi,
+    // « NOT a boy, NOT a male child » et ses variantes défigurées
+    /\bNOT an? [a-zéèçà ]{0,20}(boy|girl|child|adult)\b/gi,
+    // « REAL CHILD proportions (…) — NEVER an adult woman or man » et variantes
+    /\bREAL CHILD proportions\s*\([^)]*\)\s*(—|-)?\s*NEVER an [a-z ]*\b/gi,
+    /\bNEVER an? (adult woman or man|child child or child|[a-z]+ [a-z]+ or [a-z]+)\b/gi,
+    /\bfriendly eyes WITH clear dark pupils and catchlights, soft rounded cheeks, gentle smile\b/gi,
+    /\b(young (girl|boy|child)|petit(e)? (fille|gar[çc]on)|enfant), identical face hair outfit every page\b/gi,
+  ];
+  let net = String(lock || "");
+  for (const m of morceaux) net = net.replace(m, "");
+  return net
+    .replace(/\s*,\s*(,\s*)+/g, ", ")
+    .replace(/^[\s,;—-]+/, "")
+    .replace(/[\s,;—-]+$/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
  * Force the named child as sole hero with an explicit CHILD visual lock.
  * Prevents "adult market woman" drift on parent books.
  */
@@ -106,7 +154,9 @@ export function enforceParentChildHero(
   const prev = characters[heroIdx];
   const baseLock = stripConflictingGender(
     stripAdultWording(
-      prev.visualLock || prev.appearance || "friendly child, consistent outfit"
+      retirerEchafaudageHeros(
+        prev.visualLock || prev.appearance || "friendly child, consistent outfit"
+      )
     ),
     opts.childGender
   );

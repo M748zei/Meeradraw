@@ -2372,6 +2372,46 @@ async function runFamilyCastRepairTests() {
     assert.match(childPrompt, /NO adults/);
   });
 
+  await test("REPRO 6c940ac6: enforceParentChildHero est idempotente — 4 appels = 1 appel", async () => {
+    const { enforceParentChildHero } = await import("../services/ai/character-bible");
+    const plan = {
+      title: "t",
+      characters: [
+        {
+          id: "char_1",
+          name: "Aicha",
+          description: "",
+          appearance: "",
+          visualLock:
+            "young girl child, about 6 years old, deep brown skin, tightly coiled hair, friendly eyes with visible pupils, wearing a colorful dress with patterns, carrying a small basket",
+          personality: "",
+          kind: "human",
+        },
+      ],
+      pages: [],
+    } as unknown as Parameters<typeof enforceParentChildHero>[0];
+    const opts = { childName: "Aicha", childGender: "girl", audience: "6-8 ans" };
+
+    const uneFois = enforceParentChildHero(plan, opts).characters[0].visualLock || "";
+    let empile = plan;
+    for (let i = 0; i < 4; i++) empile = enforceParentChildHero(empile, opts);
+    const quatreFois = empile.characters[0].visualLock || "";
+
+    assert.equal(quatreFois, uneFois, "le verrou doit être stable après 4 passages");
+
+    // Le bloc d'âge ne doit apparaître qu'une seule fois.
+    assert.equal((quatreFois.match(/about 7 years old/g) || []).length, 1);
+
+    // Texte défiguré observé en prod : la négation retournée contre elle-même.
+    assert.equal(/NOT a young girl/i.test(quatreFois), false);
+    assert.equal(/child child/i.test(quatreFois), false);
+
+    // La description réelle du personnage survit : c'est elle qui rend le
+    // portrait dessinable.
+    assert.match(quatreFois, /tightly coiled hair/);
+    assert.match(quatreFois, /colorful dress/);
+  });
+
   await test("REPRO 3a1cfd36: sans photo, le verrou du héros décrit l'enfant au lieu de renvoyer à une photo absente", async () => {
     const { verrouillerHerosParent, portraitSubjectLine } = await import(
       "../services/ai/character-bible"
