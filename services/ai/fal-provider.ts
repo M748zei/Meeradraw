@@ -1248,7 +1248,7 @@ export function allegerPromptRefuse(prompt: string): string {
   return net;
 }
 
-async function callFal(
+export async function callFal(
   endpoint: string,
   key: string,
   body: Record<string, unknown>,

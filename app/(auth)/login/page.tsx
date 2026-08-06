@@ -16,7 +16,7 @@ import { getSupabaseBrowser, isSupabaseConfigured } from "@/lib/supabase/client"
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = params.get("next") || "/griot";
+  const next = params.get("next") || "/studio";
 
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");

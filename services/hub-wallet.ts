@@ -8,10 +8,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * passé ici doit porter la session de l'utilisateur (jamais de clé de service).
  */
 
-export const ACTION_RECIT = "griot.recit";
-/** Affiché avant le clic ; la vérité reste hub_tarifs (griot.recit = 8). */
-export const COUT_RECIT = 8;
-
 export type DebitResult =
   | { ok: true; debite: number; solde: number }
   | { ok: false; raison: "NON_CONNECTE" | "ACTION_INCONNUE" | "SOLDE_INSUFFISANT" | "ERREUR"; cout?: number };
@@ -20,17 +16,18 @@ export type RefundResult =
   | { ok: true; credite: number; solde: number }
   | { ok: false; raison: "NON_CONNECTE" | "REF_REQUISE" | "ACTION_INCONNUE" | "DEBIT_INTROUVABLE" };
 
-/** Débite 8 crédits pour un récit. `ref` est la clé d'idempotence des deux côtés. */
-export async function debiterRecit(
+/** Débite le tarif de `action` (vérité : hub_tarifs). `ref` = clé d'idempotence des deux côtés. */
+export async function debiterAction(
   supabase: SupabaseClient,
+  action: string,
   ref: string
 ): Promise<DebitResult> {
   const { data, error } = await supabase.rpc("hub_debit_self", {
-    p_action: ACTION_RECIT,
+    p_action: action,
     p_ref: ref,
   });
   if (error) {
-    console.error("[hub-wallet] hub_debit_self a échoué", { ref, error: error.message });
+    console.error("[hub-wallet] hub_debit_self a échoué", { action, ref, error: error.message });
     return { ok: false, raison: "ERREUR" };
   }
   return data as DebitResult;
@@ -41,24 +38,25 @@ export async function debiterRecit(
  * débit existe et pose `ref:refund` — un double appel ne recrédite pas deux fois.
  * Un échec de remboursement se journalise BRUYAMMENT : c'est de l'argent client.
  */
-export async function rembourserRecit(
+export async function rembourserAction(
   supabase: SupabaseClient,
+  action: string,
   ref: string
 ): Promise<RefundResult> {
   const { data, error } = await supabase.rpc("hub_refund_self", {
-    p_action: ACTION_RECIT,
+    p_action: action,
     p_ref: ref,
   });
   if (error) {
     console.error(
-      `[hub-wallet] ÉCHEC DE REMBOURSEMENT — intervention requise. ref=${ref} err=${error.message}`
+      `[hub-wallet] ÉCHEC DE REMBOURSEMENT — intervention requise. action=${action} ref=${ref} err=${error.message}`
     );
     return { ok: false, raison: "DEBIT_INTROUVABLE" };
   }
   const result = data as RefundResult;
   if (!result.ok) {
     console.error(
-      `[hub-wallet] ÉCHEC DE REMBOURSEMENT — intervention requise. ref=${ref} raison=${result.raison}`
+      `[hub-wallet] ÉCHEC DE REMBOURSEMENT — intervention requise. action=${action} ref=${ref} raison=${result.raison}`
     );
   }
   return result;

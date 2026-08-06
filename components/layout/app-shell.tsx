@@ -4,7 +4,7 @@ import { LogoutButton } from "@/components/layout/logout-button";
 const HUB_STORE_URL = process.env.NEXT_PUBLIC_HUB_STORE_URL;
 
 /**
- * Coque Griot — une seule colonne, un seul écran (/griot).
+ * Coque du studio — une seule colonne, un seul écran (/studio).
  * Le solde du hub est affiché en permanence (§8) ; « Recharger » mène à la
  * boutique du hub (l'unique endroit où l'on achète des crédits).
  */
@@ -19,7 +19,7 @@ export function AppShell({
     <div className="min-h-screen">
       <header className="sticky top-0 z-40 border-b border-cream-200/70 bg-cream-50/90 backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-2xl items-center justify-between gap-2 px-4">
-          <Logo href="/griot" />
+          <Logo href="/studio" />
           <div className="flex items-center gap-2">
             <span
               className="rounded-full bg-white px-3 py-1.5 text-sm font-semibold text-sky-700 shadow-soft"

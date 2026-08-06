@@ -7,7 +7,7 @@ import { safeInternalPath } from "@/lib/safe-redirect";
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  const next = safeInternalPath(searchParams.get("next"), "/griot");
+  const next = safeInternalPath(searchParams.get("next"), "/studio");
 
   if (code) {
     const cookieStore = await cookies();

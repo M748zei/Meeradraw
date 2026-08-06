@@ -10,18 +10,18 @@ const HUB_STORE_URL = process.env.NEXT_PUBLIC_HUB_STORE_URL;
 const etapes = [
   {
     icon: Sparkles,
-    titre: "Donne ton sujet",
-    texte: "« Le braquage de la BCEAO à Bouaké », « Thomas Sankara »… un champ, c'est tout.",
+    titre: "Décris ta scène",
+    texte: "« Un homme marche vers la banque, la nuit, sous la pluie ». Une phrase, une année, un lieu.",
   },
   {
     icon: Clock,
-    titre: "Griot écrit ton reel",
-    texte: "Accroches, script à lire mot pour mot, plans avec images à chercher, description, hashtags.",
+    titre: "Choisis le style",
+    texte: "Six presets relevés sur les vrais visuels de la page — nuit d'archive, heure dorée, affiche…",
   },
   {
     icon: Copy,
-    titre: "Copie et publie",
-    texte: "Chaque bloc a son bouton Copier. Tu colles dans Facebook ou TikTok, tu publies.",
+    titre: "Ajoute le texte, publie",
+    texte: "Titre incrusté proprement (jamais généré), téléchargement direct, prêt pour Facebook et TikTok.",
   },
 ];
 
@@ -38,19 +38,19 @@ export default function LandingPage() {
       <section className="mx-auto max-w-2xl px-4 pb-10 pt-8 text-center">
         <Reveal>
           <h1 className="font-display text-3xl leading-tight text-ink md:text-4xl">
-            Les histoires vraies que l&apos;Afrique n&apos;a jamais oubliées —
-            <span className="text-amber-600"> écrites pour tes reels</span>
+            Les visuels du Scarabée Noir —
+            <span className="text-amber-600"> peints pour tes reels</span>
           </h1>
           <p className="mx-auto mt-3 max-w-md text-ink-muted">
-            Crimes, mystères et destins africains. Tu donnes le sujet, Griot écrit
-            le récit complet, prêt à coller dans Facebook et TikTok.
+            Décris ta scène en une phrase. Le studio la peint dans le style de la
+            page : clair-obscur, huile cinématographique, époque respectée.
           </p>
           <div className="mt-6 flex flex-col items-center gap-3">
             <Link href="/login" prefetch={false}>
-              <Button size="lg">Écrire mon premier récit</Button>
+              <Button size="lg">Peindre ma première scène</Button>
           </Link>
             <p className="text-xs text-ink-muted">
-              8 crédits par récit — tes crédits DigiAfrik marchent ici aussi.
+              Dès 2 crédits par image — tes crédits DigiAfrik marchent ici aussi.
             </p>
           </div>
         </Reveal>
@@ -77,9 +77,9 @@ export default function LandingPage() {
           <Card className="mt-6 flex items-start gap-3 border-amber-200 bg-amber-50">
             <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
             <p className="text-sm text-amber-900">
-              Une page d&apos;histoires vraies vit de sa crédibilité : chaque récit
-              sort avec sa liste « à vérifier avant de publier » — dates, noms,
-              montants à recouper. Griot n&apos;invente rien à ta place.
+              Le style n&apos;est pas un réglage : la recette des visuels qui marchent
+              (lumière unique, plan large, étalonnage sarcelle et ambre) est
+              encodée dans les presets. Tu ne verras jamais un prompt.
             </p>
           </Card>
         </Reveal>

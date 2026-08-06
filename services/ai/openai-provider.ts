@@ -651,7 +651,7 @@ export class OpenAITextProvider implements TextAIProvider {
   }
 }
 
-// ── Exports du cœur texte (utilisés par services/griot/engine.ts) ────────────
+// ── Exports du cœur texte (bascule Groq→OpenAI réutilisable) ────────────────
 export function hasTextProviderKey(): boolean {
   return Boolean(process.env.GROQ_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim());
 }

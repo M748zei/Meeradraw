@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 /**
- * Proxy (middleware) — rafraîchit la session Supabase et protège /griot.
+ * Proxy (middleware) — rafraîchit la session Supabase et protège /studio.
  * Motif officiel @supabase/ssr : le client écrit ses cookies rafraîchis
  * dans la requête ET la réponse, sinon la session expire silencieusement.
  */
@@ -35,7 +35,7 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isProtected = path.startsWith("/griot") || path.startsWith("/dashboard");
+  const isProtected = path.startsWith("/studio") || path.startsWith("/dashboard");
 
   if (!user && isProtected) {
     const redirectUrl = request.nextUrl.clone();
@@ -46,7 +46,7 @@ export async function proxy(request: NextRequest) {
 
   if (user && (path.startsWith("/login") || path.startsWith("/signup"))) {
     const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/griot";
+    redirectUrl.pathname = "/studio";
     redirectUrl.search = "";
     return NextResponse.redirect(redirectUrl);
   }

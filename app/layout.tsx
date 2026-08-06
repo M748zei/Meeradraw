@@ -3,9 +3,9 @@ import { MetaPixel } from "@/components/analytics/meta-pixel";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Griot — Des histoires vraies africaines, prêtes à publier",
+  title: "Scarabée Studio — Les visuels de tes histoires vraies",
   description:
-    "Donne un sujet. Griot écrit ton reel : accroches, script, plans, description, hashtags — prêt à coller dans Facebook et TikTok.",
+    "Décris une scène en une phrase : le studio la peint dans le style du Scarabée Noir, prête pour Facebook et TikTok.",
 };
 
 export default function RootLayout({
