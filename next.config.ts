@@ -71,12 +71,9 @@ const nextConfig: NextConfig = {
     );
   },
   async redirects() {
-    // Friendly aliases people type or old links share.
-    return [
-      { source: "/studio", destination: "/dashboard", permanent: false },
-      { source: "/profil", destination: "/profile", permanent: false },
-      { source: "/acces", destination: "/license", permanent: false },
-    ];
+    // Les alias MeeraDraw (/studio→/dashboard, /profil, /acces) sont morts :
+    // /studio est désormais l'écran du produit, les autres cibles n'existent plus.
+    return [];
   },
   // Avoid Turbopack FS cache corruption (disk pressure) that can resolve
   // next/navigation to the react-server stub without useRouter/useParams.
