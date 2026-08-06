@@ -3,9 +3,9 @@ import { MetaPixel } from "@/components/analytics/meta-pixel";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Meeradraw — Créez des livres magiques",
+  title: "Griot — Des histoires vraies africaines, prêtes à publier",
   description:
-    "Racontez votre idée. Meeradraw crée votre livre de coloriage professionnel en quelques minutes.",
+    "Donne un sujet. Griot écrit ton reel : accroches, script, plans, description, hashtags — prêt à coller dans Facebook et TikTok.",
 };
 
 export default function RootLayout({

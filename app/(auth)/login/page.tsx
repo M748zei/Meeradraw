@@ -124,7 +124,7 @@ function LoginForm() {
       ) : (
         <div className="space-y-3">
           <p className="text-sm text-ink-muted">
-            Un code à 6 chiffres vient d'être envoyé à <strong>{email.trim()}</strong>.
+            Un code à 6 chiffres vient d&apos;être envoyé à <strong>{email.trim()}</strong>.
           </p>
           <Input
             inputMode="numeric"
@@ -145,7 +145,7 @@ function LoginForm() {
               setCode("");
             }}
           >
-            Changer d'adresse ou renvoyer un code
+            Changer d&apos;adresse ou renvoyer un code
           </button>
         </div>
       )}
