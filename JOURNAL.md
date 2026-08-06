@@ -30,3 +30,7 @@
   Trames de référence extraites des vidéos Kaocen/Lumumba pour juger après recharge.
 - 21h30 — Ménage §6 : fal-provider taillé au cœur protégé (callFal + allègement 422
   verbatim), bagage livre supprimé. grep character-bible|vision-qc|raster-gate → vide.
+- 21h45 — Alias mort /studio→/dashboard découvert par la sortie observée (307 en dev),
+  retiré. Vérif 360 px au vrai navigateur : 3 écrans + variantes + éditeur canvas,
+  0 débordement, export 37 Ko. Rebaptisé Scarabée Studio. Déploiement READY sur le
+  dernier commit ; prod échoue fermé sans session (401, 0 transaction créée).
