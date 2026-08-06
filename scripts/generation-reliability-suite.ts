@@ -2372,6 +2372,96 @@ async function runFamilyCastRepairTests() {
     assert.match(childPrompt, /NO adults/);
   });
 
+  await test("REPRO 40a6dca6: le prompt SOLO assemblé ne nomme qu'une seule personne (preuve visuelle : homme + garçon + fille)", async () => {
+    const { enforceParentChildHero, portraitSubjectLine, soloPortraitCharacter, formatCharacterLock } =
+      await import("../services/ai/character-bible");
+    const { buildCharacterSheetPrompt } = await import("../services/ai/prompts");
+
+    // Le plan tel que le planificateur le produit réellement pour Aicha.
+    const plan = {
+      title: "t",
+      characters: [
+        {
+          id: "char_1",
+          name: "Aicha",
+          description: "",
+          appearance: "",
+          visualLock:
+            "young girl child, about 6 years old, deep brown skin, tightly coiled hair, wearing a colorful dress with patterns",
+          personality: "",
+          kind: "human",
+        },
+      ],
+      pages: [],
+    } as unknown as Parameters<typeof enforceParentChildHero>[0];
+
+    const heros = enforceParentChildHero(plan, {
+      childName: "Aicha",
+      childGender: "girl",
+      audience: "6-8 ans",
+    }).characters[0];
+    const solo = soloPortraitCharacter(heros);
+
+    const prompt = buildCharacterSheetPrompt({
+      characters: formatCharacterLock([solo]),
+      style: "cute",
+      castCount: 1,
+      subject: `single premium cartoon character portrait — ${portraitSubjectLine(solo)}`,
+    });
+
+    // Le sujet est UNE fille. Aucun AUTRE nom de personne ne doit apparaître —
+    // pas même dans une interdiction. Preuve : gen 40a6dca6, fichiers
+    // char_1_wf1_i1_a1.png et char_1_wf3_i2_a2.png — le modèle a dessiné un
+    // homme adulte, un petit garçon et une fille, soit une figure par nom cité.
+    const interdits = [
+      /\bboys?\b/i,
+      /\bmen\b|\bman\b/i,
+      /\bwomen\b|\bwoman\b/i,
+      /\badults?\b/i,
+      /\bchildren\b|\bkids\b/i,
+      /\bpeople\b|\bpersons?\b/i,
+      /\bcrowd\b/i,
+      /\bsiblings?\b/i,
+      /\bparents?\b|\bmother\b|\bfather\b/i,
+      /\banimals?\b/i,
+    ];
+    for (const re of interdits) {
+      const m = prompt.match(re);
+      assert.equal(
+        m,
+        null,
+        `nom de personne/espèce en trop dans le prompt solo : « ${m?.[0]} »\n---\n${prompt}\n---`
+      );
+    }
+
+    // …et le prompt reste dessinable : le sujet et sa description survivent.
+    assert.match(prompt, /A single child, alone/);
+    assert.match(prompt, /tightly coiled hair/);
+    assert.match(prompt, /colorful dress/);
+    assert.match(prompt, /EXACTLY 1 figure/);
+
+    // Le portrait d'un ANIMAL reste correct de son côté : on nomme son espèce,
+    // et on ne parle plus d'humain dans son prompt.
+    const renard = {
+      id: "char_2",
+      name: "Kofi",
+      description: "",
+      appearance: "",
+      visualLock: "cute friendly young fox, real fox anatomy, russet fur, bushy tail",
+      personality: "",
+      kind: "fox",
+    };
+    const promptRenard = buildCharacterSheetPrompt({
+      characters: formatCharacterLock([renard]),
+      style: "cute",
+      castCount: 1,
+      subject: `single premium cartoon character portrait — ${portraitSubjectLine(renard)}`,
+    });
+    assert.match(promptRenard, /A single fox, alone/);
+    assert.match(promptRenard, /ALL FOUR LEGS/);
+    assert.equal(/\bhumans?\b|\bchildren\b|\bboys?\b|\bgirls?\b/i.test(promptRenard), false);
+  });
+
   await test("REPRO e3fc2591: un refus du filtre de contenu fal donne un prompt allégé, pas un livre perdu", async () => {
     const { allegerPromptRefuse } = await import("../services/ai/fal-provider");
 

@@ -82,7 +82,9 @@ export function retirerEchafaudageHeros(lock: string): string {
     // « REAL CHILD proportions (…) — NEVER an adult woman or man » et variantes
     /\bREAL CHILD proportions\s*\([^)]*\)\s*(—|-)?\s*NEVER an [a-z ]*\b/gi,
     /\bNEVER an? (adult woman or man|child child or child|[a-z]+ [a-z]+ or [a-z]+)\b/gi,
-    /\bfriendly eyes WITH clear dark pupils and catchlights, soft rounded cheeks, gentle smile\b/gi,
+    // Ancienne et nouvelle formulation des proportions / du visage.
+    /\bchild body proportions:\s*large head, short limbs, small rounded body\b/gi,
+    /\bfriendly eyes (WITH|with) clear dark pupils and catchlights, soft rounded cheeks, gentle smile\b/gi,
     /\b(young (girl|boy|child)|petit(e)? (fille|gar[çc]on)|enfant), identical face hair outfit every page\b/gi,
   ];
   let net = String(lock || "");
@@ -160,17 +162,33 @@ export function enforceParentChildHero(
     ),
     opts.childGender
   );
-  const genderNeg =
-    opts.childGender === "girl"
-      ? "NOT a boy, NOT a male child"
-      : opts.childGender === "boy"
-        ? "NOT a girl, NOT a female child"
-        : "NOT an adult";
+  // ─────────────────────────────────────────────────────────────────────────
+  // AUCUN NOM DE PERSONNE EN TROP, MÊME POUR L'INTERDIRE.
+  //
+  // Preuve visuelle (prod gen 40a6dca6, char_1_wf1_i1_a1.png et
+  // char_1_wf3_i2_a2.png, capturées par le forensic QC) : pour un prompt qui
+  // demandait « UN seul enfant, seul, occupant tout le cadre », le modèle a
+  // dessiné UN HOMME ADULTE, UN PETIT GARÇON ET UNE FILLE, alignés sur fond
+  // blanc. Vingt-quatre fois de suite.
+  //
+  // Le verrou envoyé contenait :
+  //     « NOT a boy, NOT a male child, REAL CHILD proportions
+  //       (large head, short limbs) — NEVER an adult woman or man »
+  //
+  // Un homme. Un garçon. Une fille. Le modèle a dessiné une figure par nom de
+  // personne présent dans le texte. Un modèle de diffusion ne soustrait pas :
+  // « NEVER an adult man » place le mot « man » dans le prompt, et le mot
+  // suffit. La correspondance entre les noms cités et les figures dessinées
+  // est exacte.
+  //
+  // Le verrou ne décrit donc plus que ce qu'il faut dessiner. Les
+  // interdictions vivent dans CHARACTER_SHEET_NEGATIVE_PROMPT, qui est un
+  // VRAI champ negative_prompt — c'est sa place, et Ideogram sait le lire.
+  // ─────────────────────────────────────────────────────────────────────────
   const childLock = [
     `${genderEn} ${ageYears}`,
-    genderNeg,
-    "REAL CHILD proportions (large head, short limbs) — NEVER an adult woman or man",
-    "friendly eyes WITH clear dark pupils and catchlights, soft rounded cheeks, gentle smile",
+    "child body proportions: large head, short limbs, small rounded body",
+    "friendly eyes with clear dark pupils and catchlights, soft rounded cheeks, gentle smile",
     baseLock,
     `${genderEn}, identical face hair outfit every page`,
   ].join(", ");

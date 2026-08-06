@@ -444,6 +444,18 @@ export const CHILD_SAFE_FACE_POSITIVE =
   "Friendly warm cartoon child faces: each eye MUST show a clear dark pupil AND iris inside a neat eye outline (closed shapes to color), soft rounded cheeks, gentle smile, natural round child head proportions — NEVER blank white eyes, NEVER hollow staring eyes, NEVER elongated or deformed skull, NEVER creepy.";
 
 /**
+ * Variante SINGULIER, pour un portrait qui ne doit contenir QU'UN personnage.
+ *
+ * La version plurielle ci-dessus dit « child faces » et « each eye ». Dans un
+ * prompt qui demande UNE fillette seule, ces pluriels décrivent plusieurs
+ * enfants — et le modèle les dessine. Preuve à l'appui : `char_1_wf1_i1_a1.png`
+ * de la génération 298f8624 montre UN GARÇON ET UNE FILLE côte à côte, alors
+ * que le prompt commençait par « EXACTLY ONE child alone in frame ».
+ */
+export const CHILD_SAFE_FACE_POSITIVE_SOLO =
+  "The child's face is friendly and warm: the eyes each show a clear dark pupil AND iris inside a neat eye outline (closed shapes to color), soft rounded cheeks, a gentle smile, natural round child head proportions — NEVER blank white eyes, NEVER hollow staring eyes, NEVER an elongated or deformed skull, NEVER creepy.";
+
+/**
  * Age-neutral variant for casts that include ADULTS: same safety rules, but
  * proportions follow each character's stated age instead of forcing child
  * heads onto everyone (prod gen 08e32ab0: the mother rendered as a girl).
@@ -661,11 +673,28 @@ export function buildCharacterSheetPrompt(params: {
   // captures showed the "adult woman" portrait rendered as a braided GIRL —
   // "accurate child anatomy" and "child faces / child head proportions"
   // outvoted the adult subject in the same prompt.
+  // « or natural animal anatomy » traînait dans TOUS les prompts, y compris
+  // celui d'un portrait d'enfant seul — un nom d'espèce de plus à côté du mot
+  // « child », dans un prompt qui doit n'en contenir qu'un. Sur un portrait
+  // solo on ne nomme donc que l'anatomie du personnage réellement demandé.
+  const soloEstAnimal = /\b(fox|dog|cat|lion|elephant|turtle|bird|goat|cow|horse|monkey|animal)\b/i.test(
+    params.characters || ""
+  );
+  // Trois cas, jamais mélangés : bête, grande personne, enfant. Mélanger
+  // « child anatomy » avec un sujet adulte est exactement ce qui a fait rendre
+  // la maman en fillette à nattes (gen 08e32ab0).
+  const anatomieSolo = soloEstAnimal
+    ? "natural anatomy of its own species"
+    : params.castIncludesAdult
+      ? "accurate grown-up anatomy at full adult height"
+      : "accurate child anatomy";
   const referenceCraft = `PREMIUM COLORED CHARACTER DESIGN REFERENCE: soft flat colors, crisp organic outlines, clean readable silhouette, ${
-    params.castIncludesAdult
-      ? "accurate anatomy for each character's stated age (an ADULT keeps full adult anatomy and height)"
-      : "accurate child anatomy"
-  } or natural animal anatomy, plain white background. This is NOT a coloring page: no B&W-only rule, no scenery, no text.`;
+    params.subject
+      ? anatomieSolo
+      : params.castIncludesAdult
+        ? "accurate anatomy for each character's stated age (an ADULT keeps full adult anatomy and height) or natural animal anatomy"
+        : "accurate child anatomy or natural animal anatomy"
+  }, plain white background. This is NOT a coloring page: no B&W-only rule, no scenery, no text.`;
   const facePositive = params.castIncludesAdult
     ? CAST_SAFE_FACE_POSITIVE
     : CHILD_SAFE_FACE_POSITIVE;
@@ -686,8 +715,60 @@ export function buildCharacterSheetPrompt(params: {
       .filter(Boolean)
       .join(" ");
   }
+  // `subject` is only set for the per-character portraits (one figure). The old
+  // template said "the story's main cast side by side … clearly separated" even
+  // in that case, so a prompt asking for ONE child also asked for a lineup. In
+  // prod gen ba887e0d the QC rejected Aicha's portrait four times in a row for
+  // "More than one character present" — 12 images and 5 minutes burned on one
+  // little girl, which is what exhausted the 40-image budget before any page was
+  // drawn. A solo portrait must never contain the words "cast side by side".
+  const solo = Boolean(params.subject);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PORTRAIT SOLO — un seul personnage dans le cadre.
+  //
+  // Preuve directe (génération 298f8624, fichier char_1_wf1_i1_a1.png) : le
+  // prompt commençait par « EXACTLY ONE child alone in frame » et le modèle a
+  // rendu UN GARÇON ET UNE FILLE côte à côte. Rejeté 24 fois d'affilée pour ce
+  // seul personnage — 24 images sur un budget de 40, avant la première page.
+  //
+  // La raison est dans le texte : le prompt contenait SIX noms de personnes au
+  // pluriel — « Children's », « child faces », « each eye », « Each character »,
+  // « extra children », « adults », « crowd ». Les cinq derniers venaient de
+  // clauses censées INTERDIRE les personnages en trop. Un modèle d'image ne
+  // soustrait pas : nommer « extra children » revient à demander des enfants.
+  //
+  // Ici : aucun nom de personne au pluriel, aucune interdiction. Les négations
+  // restent dans CHARACTER_SHEET_NEGATIVE_PROMPT, qui est un VRAI champ negative
+  // prompt — c'est sa place, et Ideogram sait le lire.
+  // ─────────────────────────────────────────────────────────────────────────
+  if (solo) {
+    // Une seule pose est décrite : celle du personnage demandé. L'ancienne
+    // clause « If this character is an animal … If this character is a human … »
+    // couvrait les deux cas et plaçait donc, dans le portrait solo d'une petite
+    // fille, les mots « animal » et « human » — deux espèces de plus dans un
+    // prompt qui n'en veut qu'une.
+    const pose = soloEstAnimal
+      ? "Draw a REAL creature of this exact species, standing on ALL FOUR LEGS in natural side profile, with bare fur and a natural stance."
+      : params.castIncludesAdult
+        ? "This one grown-up stands facing the viewer at full height, both feet on the ground, arms relaxed."
+        : "This one child stands facing the viewer, both feet on the ground, arms relaxed.";
+    return [
+      `${params.subject}.`,
+      "Single-character design reference for a picture book: the whole frame contains this one character and nothing else, centered, FULL BODY head-to-toe, large and clearly visible on an empty plain white background.",
+      `THE ONE CHARACTER TO DRAW: ${params.characters}.`,
+      countClause,
+      params.castIncludesAdult ? CAST_SAFE_FACE_POSITIVE : CHILD_SAFE_FACE_POSITIVE_SOLO,
+      referenceCraft,
+      "Keep this character's exact species, gender, age, skin tone, hairstyle and outfit as described.",
+      pose,
+      "Soft flat COLORS with clean bold cartoon outlines, friendly and warm, simple shapes, empty white background.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
   return [
-    params.subject ? `${params.subject}.` : "",
     "Children's picture-book character reference portrait: the story's main cast side by side on a plain white background, FULL BODY head-to-toe, large, clearly visible, clearly separated. HUMAN characters face the viewer standing; ANIMAL characters are shown in SIDE PROFILE standing naturally on ALL FOUR LEGS.",
     `DRAW EXACTLY THIS CAST — one figure per listed character, nobody else: ${params.characters}.`,
     params.castIncludesAdult
@@ -771,7 +852,14 @@ export function buildReferenceGuidedScenePrompt(params: {
     // Audit fix T2: decouple IDENTITY (keep) from COMPOSITION (discard). The reference
     // is a front-facing lineup and used to dictate every page's composition.
     "From the reference image keep ONLY the characters' IDENTITY: same faces, hair, outfits, proportions and animal species (a fox stays the SAME real four-legged fox walking on four paws, not a dog, not a person, not bipedal).",
-    "DISCARD the reference's COMPOSITION COMPLETELY: this is a NEW scene with NEW poses and a NEW camera angle. Do NOT reproduce the reference's standing row, front-facing lineup, poses, spacing or plain background in any way.",
+    // Composition is stated POSITIVELY on purpose. The previous version listed
+    // everything to avoid ("standing row, front-facing lineup, poses, spacing")
+    // and the Flux/Kontext family has no negation: naming the lineup five times
+    // is naming it five times. Prod gen ba887e0d had pages 1 and 3 rejected by
+    // the vision QC with verdict "lineup:…" while the prompt forbade lineups in
+    // two separate clauses. Describe the staging we want instead — a layout this
+    // specific has no room left for a row of figures.
+    "STAGING: the characters are at DIFFERENT DEPTHS and DIFFERENT DISTANCES from the camera — one closer in the foreground, another further back — never aligned on the same line. Each body is turned at its own angle (three-quarter or profile), each one busy with a different part of the action, at least one partly overlapping a prop or another character.",
     params.action
       ? `THE CHARACTERS ARE ACTIVELY DOING THIS, mid-motion: ${params.action}.`
       : "",
@@ -782,7 +870,10 @@ export function buildReferenceGuidedScenePrompt(params: {
     isWestAfricanStyle(params.style)
       ? "HARD West African lock: deep/medium-deep brown skin, natural African hair, dignified West African clothing and scenery — never European-default cast."
       : styleImageCraftLine(params.style),
-    "FORBIDDEN: characters standing in a row; front-facing lineup; static group photo; characters posing side by side; everyone facing the camera; characters standing still doing nothing; model-sheet layout.",
+    // (The lineup ban lives in ANTI_LINEUP_NEGATIVE, sent as a REAL negative to
+    // the models that support one. Repeating it here only fed the concept back
+    // into the positive conditioning of the models that do not.)
+    "Every character is caught MID-MOTION with weight shifted, limbs bent and gaze directed at what they are doing — not at the viewer.",
     "Full bodies inside the frame with margins, characters separated; at most the reference characters in the foreground — NO extra people with detailed faces, NO extra animals, NO duplicate heroes.",
     "Simplified mitten-style kid hands or hands holding objects; no extra or fused fingers.",
     `style: ${params.style},`,
