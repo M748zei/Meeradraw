@@ -113,6 +113,31 @@ export default function CreateForChildPage() {
     return theme.ideaTemplate(name);
   }, [theme, childName, parentStory, gender]);
 
+  /**
+   * Ce que le parent LIT dans le récapitulatif.
+   *
+   * `composedIdea` est une consigne écrite pour le modèle : elle contient des
+   * balises internes (« HISTOIRE DU PARENT (intrigue obligatoire, ne pas
+   * remplacer) »). Les afficher telles quelles donne l'impression d'un bug —
+   * le parent voit la tuyauterie au lieu de son histoire. On garde donc deux
+   * textes : celui qu'on envoie au modèle, et celui qu'on montre.
+   */
+  const resumeAffiche = useMemo(() => {
+    const name = childName.trim();
+    const story = parentStory.trim();
+    if (story.length >= 20) {
+      const qui = name
+        ? gender === "girl"
+          ? `${name}, petite fille`
+          : gender === "boy"
+            ? `${name}, petit garçon`
+            : name
+        : "Votre enfant";
+      return `${qui} · ${story}`;
+    }
+    return theme.ideaTemplate(name || "Léo");
+  }, [theme, childName, parentStory, gender]);
+
   async function onPhotoChange(file: File | null) {
     setPhotoPreview(null);
     setPhotoBase64(null);
@@ -553,7 +578,7 @@ export default function CreateForChildPage() {
             <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
             <p>
               <span className="font-semibold">Ce que nous allons raconter : </span>
-              {composedIdea}
+              {resumeAffiche}
             </p>
           </div>
           <ul className="mt-2 space-y-1 text-xs text-ink-muted">

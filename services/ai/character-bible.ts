@@ -266,6 +266,96 @@ export function repairParentPlanForViability(
 }
 
 /**
+ * Verrou visuel du héros d'un livre parent.
+ *
+ * ─── Pourquoi cette fonction existe ────────────────────────────────────────
+ * La photo de l'enfant est OPTIONNELLE — l'interface le dit noir sur blanc
+ * (« Photo de l'enfant (recommandée) … Optionnel »). Le code, lui, écrivait
+ * toujours le même verrou, photo ou pas :
+ *
+ *   « young girl child named Aicha; exact same face, skin tone, hairstyle,
+ *     age, child proportions and outfit as THE PROVIDED CHILD REFERENCE PHOTO
+ *     on every page »
+ *
+ * Preuve en production (gen 3a1cfd36, livre 5a3c5e85) : `child_photo_url` était
+ * `null`, et c'est pourtant ce texte qui est parti dans le prompt du portrait.
+ * Le modèle recevait, comme seule description d'Aicha, un renvoi vers une image
+ * qui n'existe pas : pas une couleur de peau, pas une coiffure, pas un vêtement.
+ * N'ayant rien à dessiner, il a improvisé — deux enfants côte à côte — et le
+ * contrôle qualité a rejeté 24 fois de suite, brûlant tout le budget d'images
+ * avant la première page. Le renard, dont la description était réelle, passait
+ * du premier coup. Ce n'était donc pas le prompt : c'était la donnée.
+ *
+ * Règle : on n'écrit « comme sur la photo » que s'il y a une photo. Sinon on
+ * garde la description du planificateur, et si elle est vide ou creuse (« same
+ * as … »), on pose un signalement concret. Un livre a besoin d'un héros stable,
+ * pas d'un héros ressemblant : n'importe quelle description tenable suffit,
+ * du moment qu'elle ne change plus d'une page à l'autre.
+ */
+const ATTRIBUTS_VISUELS =
+  /\b(skin|hair|braid|braids|curl|curls|afro|eyes?|dress|shirt|tunic|shorts|trousers|pants|skirt|robe|sandals|shoes|barefoot|hat|scarf|glasses|freckles|smile|cheeks|tall|short|slim|sturdy|pagne|boubou)\b/i;
+
+export function verrouillerHerosParent(
+  hero: StoryCharacter,
+  params: { childName: string; childGender?: string; photoUrl?: string }
+): StoryCharacter {
+  const { childName, childGender } = params;
+  const genderLock =
+    childGender === "girl"
+      ? "young girl child"
+      : childGender === "boy"
+        ? "young boy child"
+        : "young child";
+
+  const photoJointe = String(params.photoUrl || "").trim().length > 0;
+  if (photoJointe) {
+    return {
+      ...hero,
+      name: childName,
+      description: `${childName}, the parent-provided hero child`,
+      appearance:
+        "same child as the provided reference photo; preserve face, skin tone, hair, age, gender and clothing",
+      visualLock: `${genderLock} named ${childName}; exact same face, skin tone, hairstyle, age, child proportions and outfit as the provided child reference photo on every page`,
+      outfit: "exact outfit from the provided child reference photo",
+    };
+  }
+
+  // Sans photo : on récupère ce que le planificateur a décrit, débarrassé de
+  // tout renvoi à une image absente.
+  const brut = String(hero.visualLock || hero.appearance || "")
+    .replace(/\bthe provided (child )?reference photo\b/gi, "")
+    .replace(/\breference photo\b/gi, "")
+    .replace(/\bas (the )?(provided )?photo\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[;,]\s*(on every page)?\s*$/i, "")
+    .trim();
+
+  // Une phrase du genre « exact same face, skin tone and outfit as … » nomme
+  // des attributs sans jamais en donner la valeur : elle est longue, elle a
+  // l'air riche, et elle ne dit rien à dessiner. On l'écarte.
+  const creuse = /\b(exact\s+)?same\b[^.]*\bas\b/i.test(brut) || /^same\b/i.test(brut);
+  const utilisable = !creuse && brut.length >= 30 && ATTRIBUTS_VISUELS.test(brut);
+
+  const secours =
+    childGender === "girl"
+      ? "warm brown skin, dark hair in two neat braids with small beads, big bright eyes, round cheeks, a simple sleeveless dress with a colourful print, simple sandals"
+      : childGender === "boy"
+        ? "warm brown skin, short dark curly hair, big bright eyes, round cheeks, a simple short-sleeved shirt and shorts, simple sandals"
+        : "warm brown skin, short dark hair, big bright eyes, round cheeks, a simple shirt and shorts, simple sandals";
+
+  const signalement = utilisable ? brut : secours;
+
+  return {
+    ...hero,
+    name: childName,
+    description: `${childName}, the hero child of the parent's story`,
+    appearance: signalement,
+    visualLock: `${genderLock} named ${childName}: ${signalement}`,
+    outfit: hero.outfit && !/photo/i.test(hero.outfit) ? hero.outfit : undefined,
+  };
+}
+
+/**
  * Solo-portrait view of a character: strip RELATIONAL clauses from the locks.
  * "DISTINCT from hero khadija, never a twin or clone" is essential in group
  * scenes but poison in a solo portrait — image models handle negation poorly,
@@ -297,19 +387,27 @@ export function soloPortraitCharacter(c: StoryCharacter): StoryCharacter {
  * state species / adulthood / solo-framing in the prompt itself.
  */
 export function portraitSubjectLine(c: StoryCharacter): string {
+  // Cette ligne est placée EN PREMIER dans le prompt du portrait solo, donc
+  // c'est celle qui pèse le plus. Elle ne doit contenir aucun nom de personne
+  // au pluriel, même pour l'interdire : « no children in the image » met le mot
+  // « children » dans un prompt d'image, et un modèle de diffusion ne soustrait
+  // pas — il dessine ce qu'on nomme. Les interdictions vivent dans
+  // CHARACTER_SHEET_NEGATIVE_PROMPT, qui est un vrai champ negative prompt.
   const kind = (c.kind || "human").trim().toLowerCase();
   if (kind && kind !== "human") {
-    return `EXACTLY ONE ${kind} alone in frame — REAL ${kind} anatomy of its species, never humanoid, no humans, no children in the image`;
+    return `A single ${kind}, alone, filling the whole frame — a REAL ${kind} of its own species with true ${kind} anatomy and fur, standing on all four legs in natural side profile`;
   }
   const text = `${c.visualLock || ""} ${c.ageBand || ""} ${c.description || ""} ${c.name || ""}`.toLowerCase();
-  const isAdult = /adult|mother|father|maman|papa|m[eè]re|p[eè]re|grown[- ]?up/.test(text);
+  const isAdult = /adult|mother|father|maman|papa|m[eè]re|p[eè]re|grand[- ]?m[eè]re|grand[- ]?p[eè]re|grandmother|grandfather|grown[- ]?up/.test(
+    text
+  );
   if (isAdult) {
-    const female = /woman|mother|maman|m[eè]re|female|lady/.test(text);
-    const male = /\bman\b|father|papa|p[eè]re|\bmale\b/.test(text);
+    const female = /woman|mother|maman|m[eè]re|grand[- ]?m[eè]re|grandmother|female|lady/.test(text);
+    const male = /\bman\b|father|papa|p[eè]re|grand[- ]?p[eè]re|grandfather|\bmale\b/.test(text);
     const noun = female && !male ? "adult woman" : male && !female ? "adult man" : "adult person";
-    return `EXACTLY ONE ${noun} alone in frame — full ADULT height, adult face and adult body proportions, NOT a child, no children anywhere in the image`;
+    return `A single grown ${noun}, alone, filling the whole frame — full adult height, adult face, adult body proportions`;
   }
-  return `EXACTLY ONE child alone in frame — no other characters in the image`;
+  return `A single child, alone, filling the whole frame — this one child occupies the entire picture`;
 }
 
 /**

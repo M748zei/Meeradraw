@@ -14,6 +14,7 @@ import {
   repairParentPlanForViability,
   settingElementsForScene,
   soloPortraitCharacter,
+  verrouillerHerosParent,
 } from "@/services/ai/character-bible";
 import { buildWorldNegative } from "@/services/ai/prompts";
 import { firestoreSafe } from "@/lib/firestore-sanitize";
@@ -393,23 +394,12 @@ export class GenerationOrchestrator {
         illustrationDescription:
           replaceHeroName(page.illustrationDescription) || page.illustrationDescription,
       }));
-      const hero = plan.characters[0];
-      const genderLock =
-        childGender === "girl"
-          ? "young girl child"
-          : childGender === "boy"
-            ? "young boy child"
-            : "young child";
-      plan.characters[0] = {
-        ...hero,
-        name: childName,
-        description: `${childName}, the parent-provided hero child`,
-        appearance:
-          "same child as the provided reference photo; preserve face, skin tone, hair, age, gender and clothing",
-        visualLock:
-          `${genderLock} named ${childName}; exact same face, skin tone, hairstyle, age, child proportions and outfit as the provided child reference photo on every page`,
-        outfit: "exact outfit from the provided child reference photo",
-      };
+      plan.characters[0] = verrouillerHerosParent(plan.characters[0], {
+        childName,
+        childGender,
+        photoUrl:
+          typeof book.child_photo_url === "string" ? book.child_photo_url : undefined,
+      });
     }
 
     // firestoreSafe: LLM output may contain nested arrays / undefined that

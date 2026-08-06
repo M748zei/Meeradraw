@@ -2289,8 +2289,8 @@ async function runFamilyCastRepairTests() {
         ageBand: "adult",
       })
     );
-    assert.match(mom, /EXACTLY ONE adult woman/);
-    assert.match(mom, /NOT a child/);
+    assert.match(mom, /A single grown adult woman, alone/);
+    assert.match(mom, /adult height, adult face, adult body proportions/);
     const dad = portraitSubjectLine(
       mk({
         name: "Papa de Khadija",
@@ -2298,12 +2298,12 @@ async function runFamilyCastRepairTests() {
         kind: "human",
       })
     );
-    assert.match(dad, /EXACTLY ONE adult man/);
+    assert.match(dad, /A single grown adult man, alone/);
     const dog = portraitSubjectLine(
       mk({ name: "Compagnon", visualLock: "cute friendly young dog", kind: "dog" })
     );
-    assert.match(dog, /EXACTLY ONE dog/);
-    assert.match(dog, /never humanoid/);
+    assert.match(dog, /A single dog, alone/);
+    assert.match(dog, /true dog anatomy/);
     const kid = portraitSubjectLine(
       mk({
         name: "Khadija",
@@ -2311,7 +2311,30 @@ async function runFamilyCastRepairTests() {
         kind: "human",
       })
     );
-    assert.match(kid, /EXACTLY ONE child/);
+    assert.match(kid, /A single child, alone/);
+
+    // La grand-mère est une ADULTE. Sans ce cas, elle tombait dans la branche
+    // « enfant » et le portrait sortait une fillette.
+    const mamie = portraitSubjectLine(
+      mk({
+        name: "Mariama",
+        visualLock: "la grand-mère de Aicha, sourire chaleureux, pagne coloré",
+        kind: "human",
+      })
+    );
+    assert.match(mamie, /A single grown adult woman, alone/);
+
+    // Preuve 298f8624 : un modèle de diffusion ne soustrait pas. Aucun nom de
+    // personne au pluriel ne doit apparaître dans la ligne de sujet, même
+    // dans une interdiction — c'est ce qui a fait dessiner deux enfants pour
+    // un prompt qui en demandait un seul.
+    for (const ligne of [mom, dad, dog, kid, mamie]) {
+      assert.equal(
+        /\bchildren\b|\bkids\b|\bhumans\b|\bpeople\b|\badults\b|\bcrowd\b/i.test(ligne),
+        false,
+        `nom de personne au pluriel dans la ligne de sujet : ${ligne}`
+      );
+    }
   });
 
   await test("REPRO 575e1358: le prompt sheet d'un cast adulte n'interdit plus les adultes et porte le sujet", async () => {
@@ -2322,24 +2345,99 @@ async function runFamilyCastRepairTests() {
       style: "cute",
       castCount: 1,
       subject:
-        "single premium cartoon character portrait — EXACTLY ONE adult woman alone in frame — NOT a child",
+        "single premium cartoon character portrait — A single grown adult woman, alone, filling the whole frame",
       castIncludesAdult: true,
     });
     assert.equal(/NO adults/.test(adultPrompt), false);
     assert.match(adultPrompt, /^single premium cartoon character portrait/);
-    assert.match(adultPrompt, /ADULT character stays a full-grown ADULT/);
     // REPRO 08e32ab0 (preuve visuelle : maman rendue en fillette à nattes) —
     // aucune directive anatomie/visage ENFANT ne doit rester dans un prompt adulte.
     assert.equal(/child anatomy/i.test(adultPrompt), false);
     assert.equal(/child faces/i.test(adultPrompt), false);
     assert.equal(/child head proportions/i.test(adultPrompt), false);
     assert.match(adultPrompt, /stated age/);
+    // REPRO 298f8624 : le prompt SOLO ne nomme jamais un groupe de personnes,
+    // même pour l'interdire.
+    assert.equal(
+      /\bchildren\b|\bkids\b|\bcrowd\b|\bsiblings\b|extra (children|adults|people)/i.test(
+        adultPrompt
+      ),
+      false
+    );
     const childPrompt = buildCharacterSheetPrompt({
       characters: "Khadija (human); locked appearance: young girl child",
       style: "cute",
       castCount: 1,
     });
     assert.match(childPrompt, /NO adults/);
+  });
+
+  await test("REPRO 3a1cfd36: sans photo, le verrou du héros décrit l'enfant au lieu de renvoyer à une photo absente", async () => {
+    const { verrouillerHerosParent, portraitSubjectLine } = await import(
+      "../services/ai/character-bible"
+    );
+    const heroBrut = {
+      id: "char_1",
+      name: "Léo",
+      description: "le héros",
+      appearance: "",
+      visualLock: "",
+      personality: "curieuse",
+      kind: "human",
+    };
+
+    // 1. Aucune photo : le verrou ne doit JAMAIS parler de photo, et doit
+    //    contenir de quoi dessiner (peau, cheveux, tenue).
+    const sansPhoto = verrouillerHerosParent(heroBrut, {
+      childName: "Aicha",
+      childGender: "girl",
+    });
+    assert.equal(/photo/i.test(sansPhoto.visualLock || ""), false);
+    assert.equal(/photo/i.test(sansPhoto.appearance || ""), false);
+    assert.match(sansPhoto.visualLock || "", /young girl child named Aicha/);
+    assert.match(sansPhoto.visualLock || "", /skin/i);
+    assert.match(sansPhoto.visualLock || "", /hair|braid/i);
+
+    // 2. Une description creuse (« same … as … ») est écartée : elle nomme des
+    //    attributs sans jamais en donner la valeur. C'est exactement le texte
+    //    qui a fait rejeter 24 portraits d'affilée.
+    const creux = verrouillerHerosParent(
+      {
+        ...heroBrut,
+        visualLock:
+          "young girl child named Aicha; exact same face, skin tone, hairstyle, age, child proportions and outfit as the provided child reference photo on every page",
+      },
+      { childName: "Aicha", childGender: "girl" }
+    );
+    assert.equal(/photo/i.test(creux.visualLock || ""), false);
+    assert.equal(/same .* as /i.test(creux.visualLock || ""), false);
+    assert.match(creux.visualLock || "", /skin/i);
+
+    // 3. Une vraie description du planificateur est CONSERVÉE, pas écrasée.
+    const decrit = verrouillerHerosParent(
+      {
+        ...heroBrut,
+        visualLock:
+          "deep brown skin, short afro puffs tied with red ribbons, big round eyes, yellow tunic with green trim, bare feet",
+      },
+      { childName: "Aicha", childGender: "girl" }
+    );
+    assert.match(decrit.visualLock || "", /afro puffs tied with red ribbons/);
+    assert.match(decrit.visualLock || "", /yellow tunic/);
+
+    // 4. Avec photo, l'ancien comportement reste intact.
+    const avecPhoto = verrouillerHerosParent(heroBrut, {
+      childName: "Aicha",
+      childGender: "girl",
+      photoUrl: "https://exemple.test/photo.jpg",
+    });
+    assert.match(avecPhoto.visualLock || "", /provided child reference photo/);
+
+    // 5. Bout en bout : le sujet du portrait + le verrou forment une consigne
+    //    dessinable, sans aucun nom de personne au pluriel.
+    const consigne = `${portraitSubjectLine(sansPhoto)} ${sansPhoto.visualLock}`;
+    assert.equal(/\bchildren\b|\bkids\b|\bpeople\b|\bcrowd\b/i.test(consigne), false);
+    assert.match(consigne, /A single child, alone/);
   });
 
   await test("REPRO 0e48ff79: le portrait solo perd les clauses relationnelles qui invoquent un 2e personnage", async () => {
