@@ -44,3 +44,11 @@
   Jugement à l'image : flux-2-pro gagne 5/5 (pictural + époque + cadre). Endpoint figé
   par env sur les trois environnements. Le test de ressemblance est passé au passage :
   la scène du reel Kaocen retapée en une phrase redonne une image du même monde.
+- 00h50 — v2 : parcours inversé (style → détails → cadre), 30 presets déclarent
+  leurs champs, règle du §4 testée à la sentinelle (×30), négations saisies
+  retirées. Réglages §6 de nuit-archive posés (noirs fermés, 1-2 figures,
+  lumière près du sujet).
+- 01h15 — 30 vignettes générées par leurs propres presets (1 passe, graine fixe,
+  ~1,4 Mo webp). Test de ressemblance rejoué : mêmes graines avant/après —
+  noirs fermés ✔, lumière près du sujet ✔ (lanterne en main), figures mieux
+  hiérarchisées (partiel). Écrans v2 vérifiés à 360 px. Rien poussé.

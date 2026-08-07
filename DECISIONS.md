@@ -50,3 +50,20 @@ contre les trames réelles de la page (vidéos Kaocen/Lumumba) :
   enseignes charabia, et des références à embarquer à chaque appel — l'avantage
   ne justifie pas le coût. Écarté.
 `FAL_STUDIO_ENDPOINT=https://fal.run/fal-ai/flux-2-pro` posé partout.
+
+## D8 — v2 : champs des presets hors table §3, choisis seul
+Le parcours v2 ne listait pas les champs de 10 presets (hommage,
+affiche-religieuse, scène-priere, document-epoque, carte-ancienne,
+ville-nuit, nature-afrique, avatar-illustre, portrait-couple,
+equipe-bureau) : déclarés par analogie avec leur famille (détail dans
+services/studio/presets.ts). La clause négative saisie est retirée avec
+son objet court (déterminant + nom + complément), pas jusqu'à la
+ponctuation — « un homme sans chapeau marche » rend « un homme marche ».
+Les clauses de lumière saisies (« en plein jour ») sont retirées de
+toutes les saisies : la lumière vient du preset, et de lui seul.
+
+## D9 — Vignettes honnêtes : une passe, graine fixe 314159
+Générées par le preset lui-même (sujets de démonstration = les exemples
+déclarés du preset), une seule passe, aucune sélection. produit-fond-uni
+montre du monde derrière le produit là où le preset demande un fond uni —
+c'est ce que l'utilisateur obtiendra, la vignette reste.
