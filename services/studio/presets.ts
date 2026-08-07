@@ -178,7 +178,7 @@ const LISTE: Preset[] = [
     cadre: "45-degree view of an African dish, wooden table, close appetizing framing.",
     format: "1:1",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Le plat fumant posé sur la table en bois du maquis"] }, { type: "texte", cle: "plat", label: "Le plat", exemples: ["thiéboudienne", "attiéké poisson braisé"] }, { type: "lieu" }],
-    ancrage: [],
+    ancrage: ["personnes"],
     reference: "produit",
     vignette: { de: "#6e2b12", vers: "#e8973a" },
   }),
@@ -277,7 +277,7 @@ const LISTE: Preset[] = [
     format: "1:1",
     zoneTexte: "centre",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Un dégradé profond bleu nuit, motif discret en bordure"] }, { type: "personnages", max: 1 }],
-    ancrage: [],
+    ancrage: ["personnes"],
     vignette: { de: "#1c1a2e", vers: "#5b4a8a" },
   }),
   P({
@@ -372,7 +372,7 @@ const LISTE: Preset[] = [
     cadre: "Top-down map view, inked routes and annotations, a compass rose, worn folds in the paper.",
     format: "4:5",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Les routes des caravanes entre Agadez et Tombouctou", "Le fleuve et ses comptoirs"] }, { type: "annee" }, { type: "lieu" }],
-    ancrage: [],
+    ancrage: ["personnes"],
     vignette: { de: "#5c4a2e", vers: "#d9c9a3" },
   }),
 
@@ -428,7 +428,7 @@ const LISTE: Preset[] = [
     cadre: "Ultra-wide view across savanna, river, desert or forest, layered depth to the horizon.",
     format: "16:9",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Le fleuve au couchant, les pirogues rentrent"] }, { type: "lieu" }],
-    ancrage: ["decor"],
+    ancrage: ["personnes", "decor"],
     vignette: { de: "#2e4a2b", vers: "#e8b45c" },
   }),
 ];

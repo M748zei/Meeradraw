@@ -234,13 +234,11 @@ test("les tenues sont subordonnées au rôle dans le bloc ancrage (affirmatif)",
   const annee1973 = compilerPrompt({ preset: "nuit-archive", saisie: { ...saisieDemo("nuit-archive"), annee: 1973 }, format: "9:16" });
   assert.ok(annee1973.includes("olive-green fatigues and berets"), "l'uniforme vient du pack d'époque");
 });
-test("chaque preset déclare son ancrage ; plat, carte et fond n'en prennent aucun", () => {
+test("« personnes » est dans TOUS les presets, sans exception — c'est le cœur du produit", () => {
   for (const id of PRESET_IDS) {
-    assert.ok(Array.isArray(PRESETS[id].ancrage), `${id} : ancrage déclaré`);
-  }
-  for (const id of ["plat-restaurant", "carte-ancienne", "fond-citation"] as const) {
+    assert.ok(PRESETS[id].ancrage.includes("personnes"), `${id} : personnes déclaré`);
     const p = compilerPrompt({ preset: id, saisie: saisieDemo(id), format: PRESETS[id].format });
-    assert.ok(!p.includes("African features") && !p.includes("Civilians wear"), `${id} : sans ancrage`);
+    assert.ok(/African features|coily hair/.test(p), `${id} : bloc personnes présent`);
   }
 });
 
