@@ -58,3 +58,8 @@
   packs d'époque. 5 tests neufs (17/17). 18 vignettes régénérées, Conakry
   rejouée : uniformes complets, wax aux seuls civils, fond studio uni. Commit
   local, pas poussé.
+- 04h30 — Chantiers 4-5 : référence produit (détourage BiRefNet → décor preset →
+  composite sharp, étiquette pixel pour pixel) + selfie (flux-2-pro/edit gagnant,
+  bloc « personnes » retiré quand selfie — testé). Tarifs 3/5/9 en base. Test dur
+  passé → presets photo ouverts. 4 défauts vus à l'image et corrigés. 20/20.
+  Commit local, pas poussé.

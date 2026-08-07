@@ -135,6 +135,25 @@ export function construireSujet(saisie: Saisie, preset: Preset): string {
   return morceaux.join(" ");
 }
 
+/**
+ * Bloc sujet du mode composite (chantier 4) : le décor SEUL, avec une zone
+ * libre pour reposer le produit détouré. Le champ texte « produit » est ignoré
+ * (le vrai produit arrive en pixels) ; couleur et support s'appliquent.
+ */
+export function construireDecorProduit(saisie: Saisie, preset: Preset): string {
+  const morceaux: string[] = [
+    "The foreground holds a clean, well-lit, EMPTY display area reserved for a product that will be placed there later.",
+  ];
+  const phrase = nettoyerSaisie(saisie.phrase);
+  if (phrase) morceaux.push(`The scene around it: ${phrase}.`);
+  for (const champ of preset.champs) {
+    if (champ.type !== "texte" || champ.cle === "produit") continue;
+    const valeur = nettoyerSaisie(saisie.textes?.[champ.cle]);
+    if (valeur) morceaux.push(`${champ.label} : ${valeur}.`);
+  }
+  return morceaux.join(" ");
+}
+
 export function compilerPrompt(input: CompilerInput): string {
   const preset = PRESETS[input.preset];
   if (!preset) {
@@ -147,12 +166,22 @@ export function compilerPrompt(input: CompilerInput): string {
     throw new Error("La phrase est obligatoire pour ce style — décris ta scène.");
   }
 
-  const sujet = construireSujet(input.saisie, preset);
+  const sujet = input.decorProduit
+    ? construireDecorProduit(input.saisie, preset)
+    : construireSujet(input.saisie, preset);
+
+  // Chantier 5 §2 — un selfie fourni : la partie « personnes » de l'ancrage se
+  // retire, sinon elle écrase le visage réel. Même retrait en décor-produit :
+  // vu à l'image le 07/08, elle imposait des figurants derrière un packshot.
+  const partiesAncrage =
+    input.avecSelfie || input.decorProduit
+      ? preset.ancrage.filter((a) => a !== "personnes")
+      : preset.ancrage;
 
   const blocs = [
     // L'ancrage africain d'abord (§5) — uniquement les parties que le preset
     // déclare (un portrait studio ne prend que « personnes »).
-    ancrageAfricain(input.region, preset.ancrage),
+    ancrageAfricain(input.region, partiesAncrage),
     preset.rendu,
     preset.lumiere,
     input.heure ? BLOCS_HEURE[input.heure] : "",

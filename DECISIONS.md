@@ -78,3 +78,23 @@ assiette, une carte et un fond abstrait n'ont ni visage ni village).
 Détail dans presets.ts. Rôles militaires détectés (soldat, gendarme,
 policier, officier, garde) → uniforme automatique SI aucune tenue saisie ;
 la tenue saisie gagne toujours.
+
+## D11 — Chantiers 4-5 : références, décisions prises seul
+- Presets « produit » : produit-fond-uni, produit-en-main, vitrine-boutique,
+  flyer-promo, plat-restaurant (equipe-bureau n'a pas de produit à montrer).
+  Le type 'logo' existe dans le modèle mais aucun preset ne le prend encore.
+- Tarifs référence : 1→3, 2→5, 4→9 crédits (≈ ×1,5, entiers), migration
+  studio_tarifs_reference appliquée et vérifiée.
+- Stockage : la photo envoyée n'est JAMAIS écrite chez nous — data-URL en
+  mémoire vers fal ; détouré et décors sur fal.media (CDN fal, quelques
+  jours) ; composite renvoyé au navigateur en data-URL. Rien ne persiste.
+- Chemin d'identité : flux-2-pro/edit gagne — flux-pulid a rendu une AUTRE
+  personne sur le même selfie (jugé à l'image, 07/08).
+- Le test dur est passé (selfie reconnaissable en photo nette, cicatrice
+  comprise) → portrait-pro et portrait-studio OUVERTS au selfie.
+- Vus à l'image et corrigés : marges transparentes du détouré rognées
+  (produit flottant), ombre adoucie α×0,4 collée à la base, échelle par
+  preset (flacon géant au marché), « personnes » retiré du décor-produit
+  (figurants imposés derrière un packshot).
+- Preuves fabriquées avec une étiquette au texte contrôlé et un selfie de
+  personne fictive (cadre d'usage : jamais une personnalité publique).

@@ -244,6 +244,42 @@ test("chaque preset déclare son ancrage ; plat, carte et fond n'en prennent auc
   }
 });
 
+console.log("Images de référence (chantiers 4-5)");
+test("un selfie fourni RETIRE le bloc « personnes » de l'ancrage, et lui seul", () => {
+  for (const id of ["portrait-archive", "avatar-illustre", "affiche-resistance"] as const) {
+    const sans = compilerPrompt({ preset: id, saisie: saisieDemo(id), format: PRESETS[id].format });
+    const avec = compilerPrompt({ preset: id, saisie: saisieDemo(id), format: PRESETS[id].format, avecSelfie: true });
+    assert.ok(sans.includes("Black and brown skin"), `${id} : personnes présent sans selfie`);
+    assert.ok(!avec.includes("Black and brown skin") && !avec.includes("African features"),
+      `${id} : personnes RETIRÉ avec selfie`);
+    if (PRESETS[id].ancrage.includes("tenues")) {
+      assert.ok(avec.includes("Civilians wear"), `${id} : les tenues restent`);
+    }
+  }
+});
+test("mode décor-produit : zone libre décrite, champ « produit » ignoré, préréglages intacts", () => {
+  const prompt = compilerPrompt({
+    preset: "produit-fond-uni",
+    saisie: { textes: { produit: "un flacon fantôme", couleur: "vert d'eau", support: "socle en bois" } },
+    format: "1:1",
+    decorProduit: true,
+  });
+  assert.ok(prompt.includes("EMPTY display area reserved for a product"), "zone libre réservée");
+  assert.ok(!prompt.includes("flacon fantôme"), "le produit n'est jamais décrit — il arrive en pixels");
+  assert.ok(prompt.includes("vert d'eau") && prompt.includes("socle en bois"), "couleur et support s'appliquent");
+  assert.ok(prompt.includes(PRESETS["produit-fond-uni"].rendu), "le rendu du preset est intact");
+});
+test("les presets déclarent leur référence : commerce → produit, peinture → selfie", () => {
+  for (const id of ["produit-fond-uni", "produit-en-main", "vitrine-boutique", "flyer-promo", "plat-restaurant"] as const) {
+    assert.equal(PRESETS[id].reference, "produit", id);
+  }
+  // portrait-pro et portrait-studio : OUVERTS le 07/08 — le test dur est passé
+  // (selfie reconnaissable en photo nette, cicatrice comprise ; voir DECISIONS).
+  for (const id of ["portrait-archive", "avatar-illustre", "affiche-resistance", "portrait-pro", "portrait-studio"] as const) {
+    assert.equal(PRESETS[id].reference, "selfie", id);
+  }
+});
+
 console.log("Zones de texte, époque, mode avancé");
 test("les 7 presets [zone de texte] réservent leur plage vide", () => {
   const marques = PRESET_IDS.filter((id) => PRESETS[id].zoneTexte);

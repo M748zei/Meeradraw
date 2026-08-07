@@ -11,6 +11,12 @@ import {
   studioDisponible,
   studioEndpoint,
 } from "@/services/studio/generation";
+import {
+  composerProduit,
+  detourerProduit,
+  genererAvecReference,
+} from "@/services/studio/reference";
+import { PRESETS } from "@/services/studio/presets";
 import { debiterAction, rembourserAction } from "@/services/hub-wallet";
 import { FORMATS, HEURES, PRESET_IDS, REGIONS } from "@/services/studio/types";
 
@@ -45,6 +51,19 @@ const schema = z.object({
   promptLibre: z.string().max(500).optional(),
   modele: z.enum(MODELE_IDS).optional(),
   graine: z.coerce.number().int().min(1).max(2_000_000_000).optional(),
+  // Image de référence (chantiers 4-5). La photo transite en data-URL, elle
+  // n'est jamais écrite sur nos serveurs (voir services/studio/reference.ts).
+  reference: z
+    .object({
+      type: z.enum(["produit", "selfie"]),
+      dataUrl: z
+        .string()
+        .regex(/^data:image\/(jpeg|png|webp);base64,/, "Format d'image invalide.")
+        .max(9_000_000, "Photo trop lourde — 6 Mo maximum."),
+    })
+    .optional(),
+  // « Intégration poussée » : le modèle repeint le produit — étiquette altérable.
+  integrationPoussee: z.boolean().optional(),
 });
 
 export async function POST(request: Request) {
@@ -76,8 +95,33 @@ export async function POST(request: Request) {
       );
     }
 
+    // La référence n'est acceptée que si le preset la déclare.
+    if (input.reference && PRESETS[input.preset].reference !== input.reference.type) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Ce style n'accepte pas ce type d'image de référence.",
+        400
+      );
+    }
+
+    // Le détourage se fait AVANT le débit : s'il échoue, zéro crédit touché.
+    let produitPng: Buffer | null = null;
+    if (input.reference?.type === "produit" && !input.integrationPoussee) {
+      produitPng = await detourerProduit(input.reference.dataUrl).catch(() => null);
+      if (!produitPng) {
+        throw new AppError(
+          "GENERATION_FAILED",
+          "Le détourage de ta photo a échoué — rien n'a été débité. Réessaie avec une photo où le produit se détache mieux du fond.",
+          502
+        );
+      }
+    }
+
     // Débit d'abord — la même ref sert au remboursement (idempotence des deux côtés).
-    const action = actionPourVariantes(input.variantes);
+    // Avec référence : 3 crédits l'image au lieu de 2 (packs 5 et 9).
+    const action = input.reference
+      ? `studio.imageref${input.variantes}`
+      : actionPourVariantes(input.variantes);
     const ref = `studio:${randomUUID()}`;
     const debit = await debiterAction(supabase, action, ref);
     if (!debit.ok) {
@@ -102,14 +146,48 @@ export async function POST(request: Request) {
     // mode avancé rend une image reproductible ; sinon elle est tirée au sort.
     const graine = input.graine ?? randomInt(1, 2_000_000_000);
     const endpoint = studioEndpoint(input.modele);
+
+    let genererUne: (seed: number) => Promise<string>;
+    if (produitPng) {
+      // Détourage-composite (défaut) : le produit n'est JAMAIS redessiné.
+      const promptDecor = compilerPrompt({ ...input, decorProduit: true });
+      genererUne = async (seed) => {
+        const { url } = await genererImageStudio({ prompt: promptDecor, format: input.format, seed, endpoint });
+        const decor = Buffer.from(await (await fetch(url)).arrayBuffer());
+        const composite = await composerProduit(decor, produitPng, input.preset);
+        return `data:image/jpeg;base64,${composite.toString("base64")}`;
+      };
+    } else if (input.reference) {
+      // Selfie (identité) ou « intégration poussée » produit : le modèle peint
+      // à partir de la référence. Pour un selfie, le compilateur a déjà retiré
+      // le bloc « personnes » de l'ancrage (avecSelfie).
+      const promptRef =
+        input.reference.type === "selfie"
+          ? `${compilerPrompt({ ...input, avecSelfie: true })} The person in the reference image is the subject: preserve their exact face, features and hair faithfully.`
+          : `${prompt} The product in the reference image appears in the scene, its shape, colors and label preserved faithfully.`;
+      const dataUrl = input.reference.dataUrl;
+      genererUne = async (seed) => {
+        const { url } = await genererAvecReference({
+          prompt: promptRef,
+          referenceDataUrl: dataUrl,
+          format: input.format,
+          seed,
+        });
+        return url;
+      };
+    } else {
+      genererUne = async (seed) => {
+        const { url } = await genererImageStudio({ prompt, format: input.format, seed, endpoint });
+        return url;
+      };
+    }
+
     const resultats = await Promise.allSettled(
-      Array.from({ length: input.variantes }, (_, i) =>
-        genererImageStudio({ prompt, format: input.format, seed: graine + i * 7919, endpoint })
-      )
+      Array.from({ length: input.variantes }, (_, i) => genererUne(graine + i * 7919))
     );
     const urls = resultats
-      .filter((r): r is PromiseFulfilledResult<{ url: string }> => r.status === "fulfilled")
-      .map((r) => r.value.url);
+      .filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled")
+      .map((r) => r.value);
     const echecs = resultats.filter((r) => r.status === "rejected");
     for (const e of echecs) {
       console.error("[images] variante échouée", {

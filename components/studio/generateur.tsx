@@ -31,6 +31,8 @@ import {
  */
 
 const COUTS: Record<Variantes, number> = { 1: 2, 2: 3, 4: 6 };
+/** Avec image de référence : 3 crédits l'image au lieu de 2. */
+const COUTS_REF: Record<Variantes, number> = { 1: 3, 2: 5, 4: 9 };
 const HEURE_LIBELLES: Record<Heure, string> = {
   nuit: "Nuit",
   aube: "Aube",
@@ -98,8 +100,31 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
   const [modele, setModele] = useState("");
   const [graine, setGraine] = useState("");
   const [derniereGraine, setDerniereGraine] = useState<number | null>(null);
+  // Image de référence (photo produit ou selfie) — data-URL, jamais stockée chez nous.
+  const [referenceDataUrl, setReferenceDataUrl] = useState<string | null>(null);
+  const [integrationPoussee, setIntegrationPoussee] = useState(false);
 
   const lePreset = PRESETS[preset];
+  const typeReference = lePreset.reference;
+  const couts = referenceDataUrl ? COUTS_REF : COUTS;
+
+  /** Lit et réduit la photo côté navigateur (≤1536 px, JPEG) avant l'envoi. */
+  function chargerReference(fichier: File) {
+    const lecteur = new FileReader();
+    lecteur.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const echelle = Math.min(1, 1536 / Math.max(img.width, img.height));
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * echelle);
+        c.height = Math.round(img.height * echelle);
+        c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+        setReferenceDataUrl(c.toDataURL("image/jpeg", 0.9));
+      };
+      img.src = String(lecteur.result);
+    };
+    lecteur.readAsDataURL(fichier);
+  }
   const declarePhrase = lePreset.champs.some((c) => c.type === "phrase");
   const phraseValide = !declarePhrase || (saisie.phrase ?? "").trim().length >= 8;
 
@@ -159,6 +184,10 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
       ...(promptLibre.trim() ? { promptLibre: promptLibre.trim() } : {}),
       ...(modele ? { modele } : {}),
       ...(graine.trim() ? { graine: Number(graine.trim()) } : {}),
+      ...(referenceDataUrl && typeReference
+        ? { reference: { type: typeReference, dataUrl: referenceDataUrl } }
+        : {}),
+      ...(integrationPoussee ? { integrationPoussee: true } : {}),
     };
   }
 
@@ -216,6 +245,8 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
                         setPreset(id);
                         setFormat(p.format);
                         setSaisie(SAISIE_VIDE);
+                        setReferenceDataUrl(null);
+                        setIntegrationPoussee(false);
                         setEcran(2);
                       }}
                       className={`rounded-2xl border-2 p-0.5 text-left transition active:scale-[0.98] ${
@@ -440,6 +471,63 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
             );
           })}
 
+          {typeReference ? (
+            <div className="rounded-2xl border border-cream-200 bg-white p-3">
+              <p className="text-sm font-bold text-ink">
+                {typeReference === "produit" ? "Ta photo du produit" : "Ton selfie"}{" "}
+                <span className="font-normal text-ink-muted">(facultatif — 3 crédits l'image)</span>
+              </p>
+              <p className="mt-0.5 text-xs text-ink-muted">
+                {typeReference === "produit"
+                  ? "Ton produit est détouré et reposé dans le décor : il n'est jamais redessiné, son étiquette reste intacte."
+                  : "Ta photo ne sert qu'à cette génération — c'est fait pour ta propre photo, pas celle de quelqu'un d'autre."}
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                {referenceDataUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={referenceDataUrl} alt="" className="h-16 w-16 rounded-xl object-cover" />
+                ) : null}
+                <label className="flex-1">
+                  <span className="block cursor-pointer rounded-xl bg-cream-100 px-3 py-2.5 text-center text-xs font-semibold text-ink active:scale-95">
+                    {referenceDataUrl ? "Changer la photo" : "Choisir une photo"}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) chargerReference(f);
+                    }}
+                  />
+                </label>
+                {referenceDataUrl ? (
+                  <button
+                    type="button"
+                    className="rounded-xl bg-cream-100 px-3 py-2.5 text-xs font-semibold text-ink active:scale-95"
+                    onClick={() => setReferenceDataUrl(null)}
+                  >
+                    Retirer
+                  </button>
+                ) : null}
+              </div>
+              {typeReference === "produit" && referenceDataUrl ? (
+                <label className="mt-2 flex items-start gap-2 text-xs text-ink-muted">
+                  <input
+                    type="checkbox"
+                    checked={integrationPoussee}
+                    onChange={(e) => setIntegrationPoussee(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    Intégration poussée : le modèle repeint le produit dans la scène —
+                    <strong> le texte de l'étiquette peut être altéré.</strong>
+                  </span>
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => setEcran(1)}>
               Retour
@@ -491,7 +579,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
                   }`}
                 >
                   {v}
-                  <span className="block text-[10px] font-normal opacity-80">{COUTS[v]} crédits</span>
+                  <span className="block text-[10px] font-normal opacity-80">{couts[v]} crédits</span>
                 </button>
               ))}
             </div>
@@ -585,12 +673,12 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
             >
               {etat.phase === "generation"
                 ? `Création en cours… ${secondes}s`
-                : `Générer — ${COUTS[variantes]} crédits`}
+                : `Générer — ${couts[variantes]} crédits`}
             </Button>
           </div>
-          {solde !== null && solde < COUTS[variantes] ? (
+          {solde !== null && solde < couts[variantes] ? (
             <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              Ton solde ({solde}) ne couvre pas les {COUTS[variantes]} crédits — recharge avec le
+              Ton solde ({solde}) ne couvre pas les {couts[variantes]} crédits — recharge avec le
               bouton en haut.
             </p>
           ) : null}
@@ -653,7 +741,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
                     Ajouter le texte
                   </button>
                   <a
-                    href={`/api/images/proxy?url=${encodeURIComponent(v.url)}`}
+                    href={v.url.startsWith("data:") ? v.url : `/api/images/proxy?url=${encodeURIComponent(v.url)}`}
                     download={`meeradraw-${i + 1}.jpg`}
                     className="rounded-lg bg-cream-100 px-2 py-2 text-center text-[11px] font-semibold text-ink active:scale-95"
                   >

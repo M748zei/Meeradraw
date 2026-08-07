@@ -25,6 +25,7 @@ const LISTE: Preset[] = [
     format: "1:1",
     champs: [{ type: "personnages", max: 1 }, { type: "texte", cle: "fond", label: "Le fond", exemples: ["gris-bleu", "vert sombre"] }, { type: "texte", cle: "expression", label: "L'expression", exemples: ["sourire confiant", "regard sérieux"] }],
     ancrage: ["personnes"],
+    reference: "selfie",
     vignette: { de: "#2c3e50", vers: "#7f9db9" },
   }),
   P({
@@ -38,6 +39,7 @@ const LISTE: Preset[] = [
     format: "1:1",
     champs: [{ type: "personnages", max: 1 }, { type: "texte", cle: "fond", label: "La couleur du fond", exemples: ["jaune franc", "bleu roi"] }, { type: "texte", cle: "expression", label: "L'expression", exemples: ["rire franc", "regard direct"] }],
     ancrage: ["personnes"],
+    reference: "selfie",
     vignette: { de: "#7b2d8b", vers: "#f2a03d" },
   }),
   P({
@@ -64,6 +66,7 @@ const LISTE: Preset[] = [
     format: "9:16",
     champs: [{ type: "personnages", max: 1 }, { type: "texte", cle: "tenue", label: "La tenue", exemples: ["uniforme d'officier", "boubou blanc"] }, { type: "annee" }],
     ancrage: ["personnes", "tenues"],
+    reference: "selfie",
     vignette: { de: "#1e2a2e", vers: "#8c6b4a" },
   }),
   P({
@@ -77,6 +80,7 @@ const LISTE: Preset[] = [
     format: "1:1",
     champs: [{ type: "personnages", max: 1 }, { type: "texte", cle: "fond", label: "Le motif du fond", exemples: ["motif wax orange", "rayures kente"] }],
     ancrage: ["personnes"],
+    reference: "selfie",
     vignette: { de: "#0e7a5f", vers: "#f0c53c" },
   }),
   P({
@@ -105,6 +109,7 @@ const LISTE: Preset[] = [
     format: "1:1",
     champs: [{ type: "texte", cle: "produit", label: "Le produit", exemples: ["un flacon d'huile de karité", "une paire de sandales en cuir"] }, { type: "texte", cle: "couleur", label: "La couleur du fond", exemples: ["beige sable", "vert d'eau"] }, { type: "texte", cle: "support", label: "Le support", exemples: ["socle en bois", "pierre plate"] }],
     ancrage: ["personnes"],
+    reference: "produit",
     vignette: { de: "#1f3a4d", vers: "#68c3c9" },
   }),
   P({
@@ -118,6 +123,7 @@ const LISTE: Preset[] = [
     format: "1:1",
     champs: [{ type: "texte", cle: "produit", label: "Le produit", exemples: ["un pot de beurre de karité", "un sac en raphia"] }, { type: "texte", cle: "couleur", label: "Sa couleur", exemples: ["ambre", "indigo"] }, { type: "texte", cle: "support", label: "Où on le voit", exemples: ["tenu en main", "posé sur l'étal"] }],
     ancrage: ["personnes", "decor", "tenues"],
+    reference: "produit",
     vignette: { de: "#5c3a12", vers: "#d9a441" },
   }),
   P({
@@ -131,6 +137,7 @@ const LISTE: Preset[] = [
     format: "4:5",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Une devanture fraîchement repeinte, la gérante sur le pas de la porte"] }, { type: "texte", cle: "enseigne", label: "Le commerce", exemples: ["boutique de tissus", "salon de coiffure"] }, { type: "lieu" }],
     ancrage: ["personnes", "decor", "tenues"],
+    reference: "produit",
     vignette: { de: "#0d6e8a", vers: "#f2c14e" },
   }),
   P({
@@ -145,6 +152,7 @@ const LISTE: Preset[] = [
     zoneTexte: "haut",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Une promo sur les perruques, mannequin souriante en bas de l'affiche"] }, { type: "personnages", max: 1 }, { type: "objets", max: 2 }],
     ancrage: ["personnes", "tenues"],
+    reference: "produit",
     vignette: { de: "#b3352c", vers: "#f7d154" },
   }),
   P({
@@ -171,6 +179,7 @@ const LISTE: Preset[] = [
     format: "1:1",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Le plat fumant posé sur la table en bois du maquis"] }, { type: "texte", cle: "plat", label: "Le plat", exemples: ["thiéboudienne", "attiéké poisson braisé"] }, { type: "lieu" }],
     ancrage: [],
+    reference: "produit",
     vignette: { de: "#6e2b12", vers: "#e8973a" },
   }),
 
@@ -324,6 +333,7 @@ const LISTE: Preset[] = [
     zoneTexte: "bandeaux",
     champs: [{ type: "personnages", max: 3 }, { type: "annee" }, { type: "lieu" }],
     ancrage: ["personnes", "tenues"],
+    reference: "selfie",
     vignette: { de: "#31261c", vers: "#b03a24" },
   }),
   P({

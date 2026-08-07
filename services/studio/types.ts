@@ -67,6 +67,9 @@ export type Heure = (typeof HEURES)[number];
 export const REGIONS = ["ouest", "sahel", "cote", "foret", "est", "maghreb", "monde"] as const;
 export type Region = (typeof REGIONS)[number];
 
+/** Ce qu'un preset accepte en image de référence (chantiers 4-5). */
+export type ReferenceType = "produit" | "selfie" | "logo";
+
 /** Les trois parties de l'ancrage africain — chaque preset déclare les siennes. */
 export const ANCRAGE_PARTIES = ["personnes", "decor", "tenues"] as const;
 export type AncragePartie = (typeof ANCRAGE_PARTIES)[number];
@@ -115,6 +118,16 @@ export interface CompilerInput {
   region?: Region;
   /** Mode avancé : ajouté en dernier, jamais avant. */
   promptLibre?: string;
+  /**
+   * Un selfie de référence est fourni : le bloc « personnes » de l'ancrage se
+   * RETIRE — sinon il écrase le visage réel de la personne (chantier 5 §2).
+   */
+  avecSelfie?: boolean;
+  /**
+   * Composite produit : ne générer QUE le décor, avec une zone libre bien
+   * éclairée où le produit détouré sera reposé (chantier 4 §2).
+   */
+  decorProduit?: boolean;
 }
 
 /**
@@ -143,6 +156,8 @@ export interface Preset {
    * à faire derrière un fond uni.
    */
   ancrage: AncragePartie[];
+  /** Image de référence acceptée par ce style (absent = aucune). */
+  reference?: ReferenceType;
   /** Couleurs de la vignette dans la grille. */
   vignette: { de: string; vers: string };
 }
