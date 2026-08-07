@@ -196,6 +196,22 @@ test("chaque région remplace matériaux et végétation ; « monde » omet le b
 });
 
 console.log("L'ancrage découpé — le défaut du 07/08 ne peut pas revenir");
+test("les 4 portraits : aucun mot de lieu, d'enseigne, de véhicule ni de végétation — même avec une année", () => {
+  const FUITES_MONDE = /sedan|bicycle|truck|automobile|motorbike|moped|taxi|minibus|neon|shop sign|storefront|mural|asphalt|rail line|telegraph|kiosk|street|facade|market|The scene is set in|mango|acacia|shea|kapok|palm|banco|laterite|corrugated|thatch|savanna|medina/i;
+  for (const id of ["portrait-pro", "portrait-studio", "portrait-traditionnel", "portrait-archive"] as const) {
+    assert.ok(!PRESETS[id].ancrage.includes("decor"), `${id} : ne déclare pas decor`);
+    for (const annee of [1916, 1965, undefined]) {
+      const p = compilerPrompt({
+        preset: id,
+        saisie: { personnages: [{ role: "un chef coutumier" }], textes: { tenue: "boubou blanc", fond: "gris-bleu", expression: "sourire" }, annee, lieu: "Conakry" },
+        format: "1:1",
+      });
+      const hit = p.match(FUITES_MONDE);
+      assert.ok(!hit, `${id}/${annee ?? "sans année"} fuit « ${hit?.[0]} »`);
+      if (annee) assert.ok(p.includes(`belong to the year ${annee}`), `${id} : l'année ancre la tenue`);
+    }
+  }
+});
 test("portrait-studio : aucun mot de végétation ni de matériau de construction", () => {
   const CONTAMINANTS = /mango|acacia|shea|kapok|palm|banco|laterite|corrugated|concrete|thatch|pirogue|savanna|medina|zellige|cedar|plantain|grassland/i;
   for (const region of REGIONS) {

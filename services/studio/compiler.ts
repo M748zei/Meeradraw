@@ -187,7 +187,7 @@ export function compilerPrompt(input: CompilerInput): string {
     input.heure ? BLOCS_HEURE[input.heure] : "",
     // Le SUJET — le seul bloc nourri par l'utilisateur (§4).
     sujet,
-    packEpoque(input.saisie.annee, input.saisie.lieu),
+    packEpoque(input.saisie.annee, input.saisie.lieu, preset.ancrage.includes("decor")),
     preset.cadre,
     // Mode Série : la clause du plan de tournage vient APRÈS le cadre du
     // preset — c'est elle qui décide du regard pour ce plan précis.

@@ -69,3 +69,8 @@
 - 05h50 — Chantier 3 : mode Série (6 plans, plan de tournage fixe, seule la
   caméra change, graines en famille, visages loin/dos/ombre), 10 crédits
   (migration studio.serie6), preuve Conakry générée.
+- 06h30 — Fuite trouvée PAR la planche : le pack d'époque entier (néon, vélos,
+  soldats 1965) injecté derrière un portrait à fond sombre. L'inventaire du monde
+  n'entre plus que si le preset prend « decor » ; sans decor, l'année n'ancre que
+  tenue/coiffure/accessoires. Test des 4 portraits (21/21). 3 cas régénérés,
+  planche republiée.

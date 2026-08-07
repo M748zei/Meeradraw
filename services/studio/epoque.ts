@@ -54,16 +54,30 @@ const PACKS: PackEpoque[] = [
 const PACK_INTEMPOREL =
   "Timeless enduring world: materials of stone, earth, wood and cloth, every object and garment consistent with the scene's own period.";
 
-export function packEpoque(annee?: number, lieu?: string): string {
+/**
+ * @param avecMonde Le preset prend-il le bloc « decor » ? L'inventaire du
+ * monde (véhicules, enseignes, néons, soldats de l'époque) n'entre QUE dans
+ * les presets à environnement — la planche du 07/08 a montré un pack 1965
+ * entier (néon, vélo, soldats) derrière un portrait à fond sombre. Pour un
+ * portrait ou un packshot, l'année n'ancre que ce qui est VISIBLE sur la
+ * personne : tenue, coiffure, accessoires. Même règle pour le lieu.
+ */
+export function packEpoque(annee?: number, lieu?: string, avecMonde = true): string {
   const morceaux: string[] = [];
   if (typeof annee === "number" && Number.isFinite(annee)) {
-    const pack = PACKS.find((p) => annee >= p.de && annee <= p.a);
-    morceaux.push(pack ? pack.elements : PACK_INTEMPOREL);
-    morceaux.push(`Every vehicle, garment, material and light source belongs to the year ${annee}.`);
-  } else {
+    if (avecMonde) {
+      const pack = PACKS.find((p) => annee >= p.de && annee <= p.a);
+      morceaux.push(pack ? pack.elements : PACK_INTEMPOREL);
+      morceaux.push(`Every vehicle, garment, material and light source belongs to the year ${annee}.`);
+    } else {
+      morceaux.push(
+        `The clothing, hairstyle and every accessory worn belong to the year ${annee}.`
+      );
+    }
+  } else if (avecMonde) {
     morceaux.push(PACK_INTEMPOREL);
   }
-  if (lieu && lieu.trim()) {
+  if (avecMonde && lieu && lieu.trim()) {
     morceaux.push(`The scene is set in ${lieu.trim()}, its architecture, landscape and light true to that place.`);
   }
   return morceaux.join(" ");
