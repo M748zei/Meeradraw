@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
+import { COOKIE_OPTIONS_SSO } from "@/lib/supabase/client";
 
 /**
  * Client Supabase côté serveur, porteur de la session du visiteur (cookies).
@@ -13,6 +14,7 @@ export async function getSupabaseServer() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      ...(COOKIE_OPTIONS_SSO ? { cookieOptions: COOKIE_OPTIONS_SSO } : {}),
       cookies: {
         getAll() {
           return cookieStore.getAll();

@@ -71,9 +71,17 @@ const nextConfig: NextConfig = {
     );
   },
   async redirects() {
-    // Les alias MeeraDraw (/studio→/dashboard, /profil, /acces) sont morts :
-    // /studio est désormais l'écran du produit, les autres cibles n'existent plus.
-    return [];
+    return [
+      // Connexion unique : le cookie de session vit sur .digiafrik.shop. Un
+      // utilisateur arrivé par l'adresse Vercel ne verrait JAMAIS la session
+      // partagée — on l'envoie définitivement sur le domaine parent.
+      {
+        source: "/:path*",
+        has: [{ type: "host", value: "meeradraw.vercel.app" }],
+        destination: "https://meeradraw.digiafrik.shop/:path*",
+        permanent: true,
+      },
+    ];
   },
   // Avoid Turbopack FS cache corruption (disk pressure) that can resolve
   // next/navigation to the react-server stub without useRouter/useParams.

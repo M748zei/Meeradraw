@@ -74,3 +74,6 @@
   n'entre plus que si le preset prend « decor » ; sans decor, l'année n'ancre que
   tenue/coiffure/accessoires. Test des 4 portraits (21/21). 3 cas régénérés,
   planche republiée.
+- 07h10 — Connexion unique : cookie sur .digiafrik.shop en prod (les deux dépôts),
+  redirection permanente meeradraw.vercel.app → meeradraw.digiafrik.shop, retour
+  au « next » après connexion côté hub. Poussé des deux côtés pour la preuve.

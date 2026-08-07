@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { safeInternalPath } from "@/lib/safe-redirect";
+import { COOKIE_OPTIONS_SSO } from "@/lib/supabase/client";
 
 /** Échange du code OAuth (Google) contre une session Supabase en cookies. */
 export async function GET(request: Request) {
@@ -15,6 +16,7 @@ export async function GET(request: Request) {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
+        ...(COOKIE_OPTIONS_SSO ? { cookieOptions: COOKIE_OPTIONS_SSO } : {}),
         cookies: {
           getAll() {
             return cookieStore.getAll();

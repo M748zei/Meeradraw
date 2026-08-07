@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { COOKIE_OPTIONS_SSO } from "@/lib/supabase/client";
 
 /**
  * Proxy (middleware) — rafraîchit la session Supabase et protège /studio.
@@ -16,6 +17,7 @@ export async function proxy(request: NextRequest) {
   if (!url || !anon) return response;
 
   const supabase = createServerClient(url, anon, {
+    ...(COOKIE_OPTIONS_SSO ? { cookieOptions: COOKIE_OPTIONS_SSO } : {}),
     cookies: {
       getAll() {
         return request.cookies.getAll();
