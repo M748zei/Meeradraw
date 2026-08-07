@@ -188,11 +188,60 @@ test("chaque région remplace matériaux et végétation ; « monde » omet le b
     foret: "kapok trees", est: "flat-topped acacias", maghreb: "zellige tiles",
   };
   for (const [region, marqueur] of Object.entries(marqueurs)) {
-    const p = compilerPrompt({ preset: "portrait-pro", saisie: {}, region: region as Region, format: "1:1" });
+    const p = compilerPrompt({ preset: "nuit-archive", saisie: saisieDemo("nuit-archive"), region: region as Region, format: "9:16" });
     assert.ok(p.includes(marqueur), `${region} → « ${marqueur} »`);
   }
   const monde = compilerPrompt({ preset: "portrait-pro", saisie: {}, region: "monde", format: "1:1" });
   assert.ok(!monde.includes("African features"));
+});
+
+console.log("L'ancrage découpé — le défaut du 07/08 ne peut pas revenir");
+test("portrait-studio : aucun mot de végétation ni de matériau de construction", () => {
+  const CONTAMINANTS = /mango|acacia|shea|kapok|palm|banco|laterite|corrugated|concrete|thatch|pirogue|savanna|medina|zellige|cedar|plantain|grassland/i;
+  for (const region of REGIONS) {
+    for (const id of ["portrait-studio", "portrait-pro", "produit-fond-uni"] as const) {
+      const p = compilerPrompt({
+        preset: id,
+        saisie: { personnages: [{ role: "une femme" }], textes: { produit: "un flacon" } },
+        region: region as Region,
+        format: "1:1",
+      });
+      const hit = p.match(CONTAMINANTS);
+      assert.ok(!hit, `${id}/${region} contaminé par « ${hit?.[0]} »`);
+    }
+  }
+});
+test("un rôle « soldat » produit une clause d'uniforme, jamais de pagne", () => {
+  const sujet = construireSujet(
+    { phrase: "des militaires attendent dans la cour", personnages: [{ role: "un soldat", action: "il monte la garde" }] },
+    PRESETS["nuit-archive"]
+  );
+  assert.ok(sujet.includes("un soldat, en uniforme complet de son armée et de son époque"), "clause d'uniforme");
+  assert.ok(!/pagne|wax|boubou|bazin/i.test(sujet), "aucune clause de pagne sur le soldat");
+});
+test("la tenue saisie par l'utilisateur gagne sur l'uniforme automatique", () => {
+  const sujet = construireSujet(
+    { personnages: [{ role: "un soldat", tenue: "uniforme de parade blanc" }] },
+    PRESETS["nuit-archive"]
+  );
+  assert.ok(sujet.includes("vêtu(e) de uniforme de parade blanc"));
+  assert.ok(!sujet.includes("de son armée et de son époque"), "l'automatisme s'efface");
+});
+test("les tenues sont subordonnées au rôle dans le bloc ancrage (affirmatif)", () => {
+  const p = compilerPrompt({ preset: "nuit-archive", saisie: saisieDemo("nuit-archive"), format: "9:16" });
+  assert.ok(p.includes("Civilians wear"), "le wax est réservé aux civils");
+  assert.ok(p.includes("every person wears the dress of their own role"), "subordination au rôle");
+  const annee1973 = compilerPrompt({ preset: "nuit-archive", saisie: { ...saisieDemo("nuit-archive"), annee: 1973 }, format: "9:16" });
+  assert.ok(annee1973.includes("olive-green fatigues and berets"), "l'uniforme vient du pack d'époque");
+});
+test("chaque preset déclare son ancrage ; plat, carte et fond n'en prennent aucun", () => {
+  for (const id of PRESET_IDS) {
+    assert.ok(Array.isArray(PRESETS[id].ancrage), `${id} : ancrage déclaré`);
+  }
+  for (const id of ["plat-restaurant", "carte-ancienne", "fond-citation"] as const) {
+    const p = compilerPrompt({ preset: id, saisie: saisieDemo(id), format: PRESETS[id].format });
+    assert.ok(!p.includes("African features") && !p.includes("Civilians wear"), `${id} : sans ancrage`);
+  }
 });
 
 console.log("Zones de texte, époque, mode avancé");

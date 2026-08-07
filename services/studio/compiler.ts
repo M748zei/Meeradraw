@@ -105,9 +105,15 @@ export function construireSujet(saisie: Saisie, preset: Preset): string {
       const tenue = nettoyerSaisie(p.tenue);
       const action = nettoyerSaisie(p.action);
       if (!role && !tenue && !action) return "";
-      return [role || "une personne", tenue ? `vêtu(e) de ${tenue}` : "", action]
-        .filter(Boolean)
-        .join(", ");
+      // La tenue se subordonne au rôle : un rôle militaire SANS tenue saisie
+      // reçoit son uniforme (les uniformes exacts viennent du pack d'époque).
+      const militaire = /\b(soldats?|militaires?|gendarmes?|polici(er|ers|ère|ères)s?|officiers?|gardes?|soldiers?|officers?)\b/i.test(role);
+      const habit = tenue
+        ? `vêtu(e) de ${tenue}`
+        : militaire
+          ? "en uniforme complet de son armée et de son époque"
+          : "";
+      return [role || "une personne", habit, action].filter(Boolean).join(", ");
     })
     .filter(Boolean);
   if (personnages.length) {
@@ -144,8 +150,9 @@ export function compilerPrompt(input: CompilerInput): string {
   const sujet = construireSujet(input.saisie, preset);
 
   const blocs = [
-    // L'ancrage africain d'abord (§5).
-    ancrageAfricain(input.region),
+    // L'ancrage africain d'abord (§5) — uniquement les parties que le preset
+    // déclare (un portrait studio ne prend que « personnes »).
+    ancrageAfricain(input.region, preset.ancrage),
     preset.rendu,
     preset.lumiere,
     input.heure ? BLOCS_HEURE[input.heure] : "",

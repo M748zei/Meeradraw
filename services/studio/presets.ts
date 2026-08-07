@@ -24,6 +24,7 @@ const LISTE: Preset[] = [
     cadre: "Bust framing on an 85mm lens, confident relaxed posture, plain blue-grey backdrop softly blurred.",
     format: "1:1",
     champs: [{ type: "personnages", max: 1 }, { type: "texte", cle: "fond", label: "Le fond", exemples: ["gris-bleu", "vert sombre"] }, { type: "texte", cle: "expression", label: "L'expression", exemples: ["sourire confiant", "regard sérieux"] }],
+    ancrage: ["personnes"],
     vignette: { de: "#2c3e50", vers: "#7f9db9" },
   }),
   P({
@@ -36,6 +37,7 @@ const LISTE: Preset[] = [
     cadre: "Bust framing on an 85mm lens, direct gaze into the camera, styled pose.",
     format: "1:1",
     champs: [{ type: "personnages", max: 1 }, { type: "texte", cle: "fond", label: "La couleur du fond", exemples: ["jaune franc", "bleu roi"] }, { type: "texte", cle: "expression", label: "L'expression", exemples: ["rire franc", "regard direct"] }],
+    ancrage: ["personnes"],
     vignette: { de: "#7b2d8b", vers: "#f2a03d" },
   }),
   P({
@@ -48,6 +50,7 @@ const LISTE: Preset[] = [
     cadre: "Three-quarter framing, grand boubou or wrapped pagne, jewelry catching the light.",
     format: "1:1",
     champs: [{ type: "personnages", max: 1 }, { type: "texte", cle: "tenue", label: "La tenue", exemples: ["grand boubou bazin bleu", "pagne tissé et bijoux d'or"] }, { type: "annee" }],
+    ancrage: ["personnes", "tenues"],
     vignette: { de: "#3a1f0e", vers: "#c98a2e" },
   }),
   P({
@@ -60,6 +63,7 @@ const LISTE: Preset[] = [
     cadre: "Bust framing against a deep dark background, gentle vignette closing the frame.",
     format: "9:16",
     champs: [{ type: "personnages", max: 1 }, { type: "texte", cle: "tenue", label: "La tenue", exemples: ["uniforme d'officier", "boubou blanc"] }, { type: "annee" }],
+    ancrage: ["personnes", "tenues"],
     vignette: { de: "#1e2a2e", vers: "#8c6b4a" },
   }),
   P({
@@ -72,6 +76,7 @@ const LISTE: Preset[] = [
     cadre: "Head and shoulders, geometric patterned background, strong silhouette read.",
     format: "1:1",
     champs: [{ type: "personnages", max: 1 }, { type: "texte", cle: "fond", label: "Le motif du fond", exemples: ["motif wax orange", "rayures kente"] }],
+    ancrage: ["personnes"],
     vignette: { de: "#0e7a5f", vers: "#f0c53c" },
   }),
   P({
@@ -84,6 +89,7 @@ const LISTE: Preset[] = [
     cadre: "Waist-up framing, the two leaning close in easy complicity, blurred outdoor background.",
     format: "1:1",
     champs: [{ type: "personnages", max: 2 }, { type: "texte", cle: "tenues", label: "Les tenues", exemples: ["assortis en wax violet", "tenue de ville"] }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#8a4a2b", vers: "#f2b56b" },
   }),
 
@@ -98,6 +104,7 @@ const LISTE: Preset[] = [
     cadre: "Product centered on a 50mm lens, smooth solid gradient backdrop.",
     format: "1:1",
     champs: [{ type: "texte", cle: "produit", label: "Le produit", exemples: ["un flacon d'huile de karité", "une paire de sandales en cuir"] }, { type: "texte", cle: "couleur", label: "La couleur du fond", exemples: ["beige sable", "vert d'eau"] }, { type: "texte", cle: "support", label: "Le support", exemples: ["socle en bois", "pierre plate"] }],
+    ancrage: ["personnes"],
     vignette: { de: "#1f3a4d", vers: "#68c3c9" },
   }),
   P({
@@ -110,6 +117,7 @@ const LISTE: Preset[] = [
     cadre: "The product held in hand or resting on a market stall, close framing, lively blurred surroundings.",
     format: "1:1",
     champs: [{ type: "texte", cle: "produit", label: "Le produit", exemples: ["un pot de beurre de karité", "un sac en raphia"] }, { type: "texte", cle: "couleur", label: "Sa couleur", exemples: ["ambre", "indigo"] }, { type: "texte", cle: "support", label: "Où on le voit", exemples: ["tenu en main", "posé sur l'étal"] }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#5c3a12", vers: "#d9a441" },
   }),
   P({
@@ -122,6 +130,7 @@ const LISTE: Preset[] = [
     cadre: "Wide shot of the storefront, hand-painted sign, animated street life passing in front.",
     format: "4:5",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Une devanture fraîchement repeinte, la gérante sur le pas de la porte"] }, { type: "texte", cle: "enseigne", label: "Le commerce", exemples: ["boutique de tissus", "salon de coiffure"] }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#0d6e8a", vers: "#f2c14e" },
   }),
   P({
@@ -135,6 +144,7 @@ const LISTE: Preset[] = [
     format: "9:16",
     zoneTexte: "haut",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Une promo sur les perruques, mannequin souriante en bas de l'affiche"] }, { type: "personnages", max: 1 }, { type: "objets", max: 2 }],
+    ancrage: ["personnes", "tenues"],
     vignette: { de: "#b3352c", vers: "#f7d154" },
   }),
   P({
@@ -147,6 +157,7 @@ const LISTE: Preset[] = [
     cadre: "Medium shot of a team at work in a modern African office, laptops and screens, engaged postures.",
     format: "16:9",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["L'équipe en réunion autour d'un ordinateur portable"] }, { type: "personnages", max: 3 }, { type: "lieu" }],
+    ancrage: ["personnes", "tenues"],
     vignette: { de: "#31475a", vers: "#9fb8c9" },
   }),
   P({
@@ -159,6 +170,7 @@ const LISTE: Preset[] = [
     cadre: "45-degree view of an African dish, wooden table, close appetizing framing.",
     format: "1:1",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Le plat fumant posé sur la table en bois du maquis"] }, { type: "texte", cle: "plat", label: "Le plat", exemples: ["thiéboudienne", "attiéké poisson braisé"] }, { type: "lieu" }],
+    ancrage: [],
     vignette: { de: "#6e2b12", vers: "#e8973a" },
   }),
 
@@ -173,6 +185,7 @@ const LISTE: Preset[] = [
     cadre: "Medium shot, ceremonial attire in full detail, decorated courtyard or hall around them.",
     format: "4:5",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Les mariés sortent sous les youyous dans la cour décorée"] }, { type: "personnages", max: 3 }, { type: "texte", cle: "tenues", label: "Les tenues", exemples: ["bazin blanc brodé or", "wax assorti bleu"] }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#7a3803", vers: "#f0b13c" },
   }),
   P({
@@ -185,6 +198,7 @@ const LISTE: Preset[] = [
     cadre: "Close framing on light fabrics and cradling hands, intimate and quiet.",
     format: "1:1",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["La grand-mère porte le bébé, la famille se penche autour"] }, { type: "personnages", max: 3 }, { type: "texte", cle: "tenues", label: "Les tenues", exemples: ["blanc et dentelle", "boubous clairs"] }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#8a6b52", vers: "#f2e3c9" },
   }),
   P({
@@ -197,6 +211,7 @@ const LISTE: Preset[] = [
     cadre: "Wide group shot in the family courtyard, generations gathered, relaxed and proud.",
     format: "4:5",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Trois générations assises devant la maison familiale"] }, { type: "personnages", max: 3 }, { type: "texte", cle: "tenues", label: "Les tenues", exemples: ["wax assorti pour tous", "tenues du dimanche"] }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#4a5d3a", vers: "#d9c27a" },
   }),
   P({
@@ -209,6 +224,7 @@ const LISTE: Preset[] = [
     cadre: "Medium shot around the table, balloons and decorations filling the scene.",
     format: "1:1",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["L'enfant souffle ses bougies, les cousins autour de la table"] }, { type: "personnages", max: 3 }, { type: "texte", cle: "tenues", label: "Les tenues", exemples: ["robe de fête rose", "chemise à motifs"] }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#8b2d6e", vers: "#f2c14e" },
   }),
   P({
@@ -222,6 +238,7 @@ const LISTE: Preset[] = [
     format: "4:5",
     zoneTexte: "bas",
     champs: [{ type: "personnages", max: 1 }, { type: "texte", cle: "tenue", label: "La tenue", exemples: ["boubou blanc", "uniforme"] }, { type: "annee" }],
+    ancrage: ["personnes", "tenues"],
     vignette: { de: "#22262b", vers: "#6b7280" },
   }),
 
@@ -237,6 +254,7 @@ const LISTE: Preset[] = [
     format: "9:16",
     zoneTexte: "haut",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Une colombe au-dessus des collines au lever du jour"] }, { type: "lieu" }],
+    ancrage: ["personnes", "decor"],
     vignette: { de: "#2b4a6e", vers: "#e8c97a" },
   }),
   P({
@@ -250,6 +268,7 @@ const LISTE: Preset[] = [
     format: "1:1",
     zoneTexte: "centre",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Un dégradé profond bleu nuit, motif discret en bordure"] }, { type: "personnages", max: 1 }],
+    ancrage: [],
     vignette: { de: "#1c1a2e", vers: "#5b4a8a" },
   }),
   P({
@@ -262,6 +281,7 @@ const LISTE: Preset[] = [
     cadre: "Wide shot, a banco mosque or a church anchoring the horizon, worshippers in silhouette.",
     format: "9:16",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Les fidèles quittent la mosquée à la tombée du jour"] }, { type: "annee" }, { type: "lieu" }],
+    ancrage: ["personnes", "decor"],
     vignette: { de: "#3a2440", vers: "#e88b4a" },
   }),
 
@@ -276,6 +296,7 @@ const LISTE: Preset[] = [
     cadre: "35mm lens at chest height, wide framing, the subject at one third of frame height seen from three-quarters or from the back, one or two figures carry the scene, any further people remain distant silhouettes in shadow, wet reflective ground catching the lamp, fine drizzle, deep crushed blacks, low-lift shadows, narrow highlight range, strong contrast between the lit pool and the surrounding darkness, gentle vignette.",
     format: "9:16",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Un homme seul marche vers l'agence de la banque, sous la pluie", "Une silhouette attend sous le lampadaire du marché"] }, { type: "personnages", max: 2 }, { type: "objets", max: 3 }, { type: "annee" }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#0b2530", vers: "#c97b1e" },
   }),
   P({
@@ -288,6 +309,7 @@ const LISTE: Preset[] = [
     cadre: "35mm lens at chest height, wide framing, the subject at one third of frame height seen from three-quarters or from the back, golden dust hanging in the air, ochre sky.",
     format: "9:16",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Un cavalier rentre au village, le soleil dans le dos", "Une caravane passe la dune"] }, { type: "personnages", max: 3 }, { type: "objets", max: 3 }, { type: "annee" }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#7a3803", vers: "#f0b13c" },
   }),
   P({
@@ -301,6 +323,7 @@ const LISTE: Preset[] = [
     format: "9:16",
     zoneTexte: "bandeaux",
     champs: [{ type: "personnages", max: 3 }, { type: "annee" }, { type: "lieu" }],
+    ancrage: ["personnes", "tenues"],
     vignette: { de: "#31261c", vers: "#b03a24" },
   }),
   P({
@@ -313,6 +336,7 @@ const LISTE: Preset[] = [
     cadre: "Documentary framing with a slight motion blur, the honesty of a snapshot.",
     format: "4:5",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Deux hommes signent un accord dans une salle bondée", "Le marché un jour de pluie"] }, { type: "personnages", max: 3 }, { type: "objets", max: 3 }, { type: "annee" }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#3a2f22", vers: "#a98a5c" },
   }),
   P({
@@ -325,6 +349,7 @@ const LISTE: Preset[] = [
     cadre: "Wide shot over savanna or a dirt track, high horizon, dust whitening the distance.",
     format: "9:16",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Des camions traversent le grand marché à midi", "La foule attend devant la gare routière"] }, { type: "personnages", max: 3 }, { type: "objets", max: 3 }, { type: "annee" }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#8a6b35", vers: "#d9c9a3" },
   }),
   P({
@@ -337,6 +362,7 @@ const LISTE: Preset[] = [
     cadre: "Top-down map view, inked routes and annotations, a compass rose, worn folds in the paper.",
     format: "4:5",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Les routes des caravanes entre Agadez et Tombouctou", "Le fleuve et ses comptoirs"] }, { type: "annee" }, { type: "lieu" }],
+    ancrage: [],
     vignette: { de: "#5c4a2e", vers: "#d9c9a3" },
   }),
 
@@ -352,6 +378,7 @@ const LISTE: Preset[] = [
     format: "16:9",
     zoneTexte: "droite",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Il découvre la vérité, les mains sur la tête"] }, { type: "personnages", max: 1 }],
+    ancrage: ["personnes", "tenues"],
     vignette: { de: "#b3352c", vers: "#2c3e50" },
   }),
   P({
@@ -365,6 +392,7 @@ const LISTE: Preset[] = [
     format: "9:16",
     zoneTexte: "haut",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Un homme de dos regarde la ville depuis la colline à l'aube"] }, { type: "personnages", max: 1 }],
+    ancrage: ["personnes", "decor"],
     vignette: { de: "#16303a", vers: "#5b8a9a" },
   }),
   P({
@@ -377,6 +405,7 @@ const LISTE: Preset[] = [
     cadre: "Wide street shot of an African city at night, moving traffic, wet reflections on the asphalt.",
     format: "16:9",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Le carrefour et ses enseignes sous la pluie"] }, { type: "objets", max: 3 }, { type: "lieu" }],
+    ancrage: ["personnes", "decor", "tenues"],
     vignette: { de: "#12122e", vers: "#e84a8a" },
   }),
   P({
@@ -389,6 +418,7 @@ const LISTE: Preset[] = [
     cadre: "Ultra-wide view across savanna, river, desert or forest, layered depth to the horizon.",
     format: "16:9",
     champs: [{ type: "phrase", label: "Ta scène, en une phrase", exemples: ["Le fleuve au couchant, les pirogues rentrent"] }, { type: "lieu" }],
+    ancrage: ["decor"],
     vignette: { de: "#2e4a2b", vers: "#e8b45c" },
   }),
 ];

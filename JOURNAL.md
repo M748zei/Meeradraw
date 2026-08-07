@@ -52,3 +52,9 @@
   ~1,4 Mo webp). Test de ressemblance rejoué : mêmes graines avant/après —
   noirs fermés ✔, lumière près du sujet ✔ (lanterne en main), figures mieux
   hiérarchisées (partiel). Écrans v2 vérifiés à 360 px. Rien poussé.
+- 03h20 — Défaut à l'image (soldat en pagne, studio au village) : l'ancrage
+  global contaminait rôles et presets sans décor. Découpé en personnes/décor/
+  tenues, déclaré par preset, tenues subordonnées au rôle, uniformes dans les
+  packs d'époque. 5 tests neufs (17/17). 18 vignettes régénérées, Conakry
+  rejouée : uniformes complets, wax aux seuls civils, fond studio uni. Commit
+  local, pas poussé.

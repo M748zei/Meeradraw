@@ -67,6 +67,10 @@ export type Heure = (typeof HEURES)[number];
 export const REGIONS = ["ouest", "sahel", "cote", "foret", "est", "maghreb", "monde"] as const;
 export type Region = (typeof REGIONS)[number];
 
+/** Les trois parties de l'ancrage africain — chaque preset déclare les siennes. */
+export const ANCRAGE_PARTIES = ["personnes", "decor", "tenues"] as const;
+export type AncragePartie = (typeof ANCRAGE_PARTIES)[number];
+
 /** Plage vide réservée par les presets [zone de texte]. */
 export type ZoneTexte = "haut" | "bas" | "centre" | "droite" | "bandeaux";
 
@@ -133,6 +137,12 @@ export interface Preset {
   zoneTexte?: ZoneTexte;
   /** Les questions que ce style pose à l'étape 2 (§3 du parcours v2). */
   champs: Champ[];
+  /**
+   * Les parties de l'ancrage africain que ce style prend : un portrait studio
+   * et un packshot ne prennent que « personnes » — le décor village n'a rien
+   * à faire derrière un fond uni.
+   */
+  ancrage: AncragePartie[];
   /** Couleurs de la vignette dans la grille. */
   vignette: { de: string; vers: string };
 }

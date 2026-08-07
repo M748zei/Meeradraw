@@ -67,3 +67,14 @@ Générées par le preset lui-même (sujets de démonstration = les exemples
 déclarés du preset), une seule passe, aucune sélection. produit-fond-uni
 montre du monde derrière le produit là où le preset demande un fond uni —
 c'est ce que l'utilisateur obtiendra, la vignette reste.
+
+## D10 — Ancrage découpé : répartition des parties par preset
+Le brief fixait portraits studio et packshots = « personnes » seul. Pour
+les 27 autres, réparti selon ce que le style montre : scènes complètes =
+les trois ; portraits à fond sombre = personnes + tenues ; silhouettes et
+horizons (motivation, scène-priere, affiche-religieuse) = personnes +
+décor ; plat-restaurant, carte-ancienne et fond-citation = aucun (une
+assiette, une carte et un fond abstrait n'ont ni visage ni village).
+Détail dans presets.ts. Rôles militaires détectés (soldat, gendarme,
+policier, officier, garde) → uniforme automatique SI aucune tenue saisie ;
+la tenue saisie gagne toujours.
