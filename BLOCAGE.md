@@ -12,7 +12,22 @@ dashboard Supabase (`arijliuqbprqgqztuseh`) + URL de redirection
 `https://meeradraw.vercel.app/auth/callback`. En attendant, le code par email
 fonctionne.
 
-## B3 — La preuve « débit + remboursement » en production exige ta connexion
+## B3 — Connexion unique : mécanique FAITE et vérifiée, preuve finale à la charge d'un humain
+État vérifié en production le 07/08 :
+- cookie de session posé sur `.digiafrik.shop` (production uniquement, aucun
+  domain en localhost) dans les DEUX dépôts — hub `1b82233`, MeeraDraw
+  `9300f46`, déploiements Ready ;
+- `meeradraw.vercel.app/*` → 308 permanent → `meeradraw.digiafrik.shop/*`
+  (sortie curl : `vercel.app/studio → https://meeradraw.digiafrik.shop/studio (308)`) ;
+- retour au paramètre `next` après connexion, des deux côtés (chemins internes).
+
+**Preuve finale à la charge d'un humain** : se connecter UNE fois sur
+digiafrik.shop, puis ouvrir meeradraw.digiafrik.shop dans le même navigateur —
+le solde doit s'afficher sans nouvelle connexion. (Attention : une session
+ouverte AVANT ce déploiement porte l'ancien cookie limité à digiafrik.shop —
+il faut une connexion fraîche pour obtenir le cookie parent.)
+
+## B4 — La preuve « débit + remboursement » en production exige ta connexion
 Se connecter exige de saisir le code reçu par email — c'est exclu pour moi.
 Une fois le solde fal rechargé, le test de 2 minutes sur ton téléphone :
 1. https://meeradraw.vercel.app/login → code email → /studio
