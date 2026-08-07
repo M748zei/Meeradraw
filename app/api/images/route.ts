@@ -16,15 +16,31 @@ import { FORMATS, HEURES, PRESET_IDS, REGIONS } from "@/services/studio/types";
 
 export const maxDuration = 300;
 
-const schema = z.object({
-  scene: z.string().min(8, "Décris ta scène en une phrase (8 caractères minimum).").max(300),
+const saisieSchema = z.object({
+  phrase: z.string().max(300).optional(),
+  personnages: z
+    .array(
+      z.object({
+        role: z.string().max(80).optional(),
+        tenue: z.string().max(120).optional(),
+        action: z.string().max(120).optional(),
+      })
+    )
+    .max(3)
+    .optional(),
+  objets: z.array(z.string().max(120)).max(3).optional(),
+  textes: z.record(z.string().max(40), z.string().max(160)).optional(),
   annee: z.coerce.number().int().min(1400).max(2100).optional(),
   lieu: z.string().max(80).optional(),
+});
+
+const schema = z.object({
   preset: z.enum(PRESET_IDS),
+  saisie: saisieSchema,
   heure: z.enum(HEURES).optional(),
   format: z.enum(FORMATS),
   variantes: z.union([z.literal(1), z.literal(2), z.literal(4)]),
-  // Mode avancé (§2) — replié pour l'utilisateur ordinaire.
+  // Mode avancé — replié pour l'utilisateur ordinaire.
   region: z.enum(REGIONS).optional(),
   promptLibre: z.string().max(500).optional(),
   modele: z.enum(MODELE_IDS).optional(),
@@ -48,7 +64,17 @@ export async function POST(request: Request) {
     }
 
     // L'utilisateur ne voit jamais ce prompt — c'est la recette du preset.
-    const prompt = compilerPrompt(input);
+    // compilerPrompt jette si la phrase manque alors que le preset la déclare.
+    let prompt: string;
+    try {
+      prompt = compilerPrompt(input);
+    } catch (err) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        err instanceof Error ? err.message : "Entrée invalide.",
+        400
+      );
+    }
 
     // Débit d'abord — la même ref sert au remboursement (idempotence des deux côtés).
     const action = actionPourVariantes(input.variantes);

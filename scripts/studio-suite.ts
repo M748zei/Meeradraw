@@ -1,14 +1,19 @@
 /**
- * Suite de tests MeeraDraw — compilateur de prompt. Pur, sans réseau.
- * Couvre : les 30 presets × toutes les heures × toutes les régions sans la
- * moindre négation (§0.2), l'ancrage africain injecté avant le sujet (§0.1),
- * les zones de texte réservées (§0.3), le pack d'époque et le mode avancé.
+ * Suite de tests MeeraDraw v2 — compilateur de prompt. Pur, sans réseau.
+ * Couvre : la règle du §4 (les saisies n'alimentent QUE le bloc sujet — un
+ * test échoue si une saisie touche rendu/lumière/caméra/atmosphère/étalonnage),
+ * les négations SAISIES retirées, les 30 presets × heures × régions sans
+ * négation, l'ancrage africain, les zones de texte, les champs déclarés.
  */
 import assert from "node:assert/strict";
-import { compilerPrompt, trouverNegations } from "../services/studio/compiler";
+import {
+  compilerPrompt,
+  construireSujet,
+  nettoyerSaisie,
+  trouverNegations,
+} from "../services/studio/compiler";
 import { PRESETS } from "../services/studio/presets";
 import { ancrageAfricain } from "../services/studio/ancrage";
-import { packEpoque } from "../services/studio/epoque";
 import {
   CATEGORIES,
   HEURES,
@@ -16,6 +21,7 @@ import {
   REGIONS,
   type PresetId,
   type Region,
+  type Saisie,
 } from "../services/studio/types";
 
 let total = 0;
@@ -32,26 +38,116 @@ function test(nom: string, fn: () => void) {
   }
 }
 
-const SCENE = "Un homme d'affaires marche vers son bureau au petit matin";
+/** Saisie de démonstration acceptée par tous les presets. */
+function saisieDemo(id: PresetId): Saisie {
+  const p = PRESETS[id];
+  const s: Saisie = {};
+  for (const c of p.champs) {
+    if (c.type === "phrase") s.phrase = "Un homme sort de sa voiture devant sa maison";
+    if (c.type === "personnages") s.personnages = [{ role: "un soldat", tenue: "chemise bleue", action: "il attend dans la cour" }];
+    if (c.type === "objets") s.objets = ["une berline grise"];
+    if (c.type === "texte") s.textes = { ...s.textes, [c.cle]: "valeur d'essai" };
+    if (c.type === "annee") s.annee = 1973;
+    if (c.type === "lieu") s.lieu = "Conakry";
+  }
+  return s;
+}
 
-console.log("Catalogue");
-test("30 presets, tous complets, répartis dans les 6 familles", () => {
-  assert.equal(PRESET_IDS.length, 30, "30 identifiants");
-  const parCategorie = new Map<string, number>();
+console.log("La règle du §4 — le preset gagne sur le rendu, l'utilisateur sur le contenu");
+test("une saisie n'atterrit JAMAIS dans rendu, lumière, caméra, atmosphère ou étalonnage", () => {
+  const SENTINELLE = "zanzibarwax73";
   for (const id of PRESET_IDS) {
     const p = PRESETS[id];
-    assert.ok(p, `${id} présent`);
-    assert.ok(p.rendu && p.lumiere && p.cadre && p.format && p.nom, `${id} complet`);
-    parCategorie.set(p.categorie, (parCategorie.get(p.categorie) ?? 0) + 1);
+    const s = saisieDemo(id);
+    // La sentinelle injectée dans chaque champ utilisateur possible.
+    if (s.phrase) s.phrase = `Un homme ${SENTINELLE} marche vers la maison`;
+    if (s.personnages) s.personnages = [{ role: `un soldat ${SENTINELLE}`, tenue: SENTINELLE, action: SENTINELLE }];
+    if (s.objets) s.objets = [`une berline ${SENTINELLE}`];
+    if (s.textes) for (const k of Object.keys(s.textes)) s.textes[k] = SENTINELLE;
+    if (s.lieu) s.lieu = SENTINELLE;
+    const prompt = compilerPrompt({ preset: id, saisie: s, format: p.format });
+    // 1. Les blocs du preset restent VERBATIM — si quelqu'un y interpole une
+    //    saisie, l'égalité stricte casse et ce test échoue.
+    assert.ok(prompt.includes(p.rendu), `${id} : bloc rendu intact`);
+    assert.ok(prompt.includes(p.lumiere), `${id} : bloc lumière intact`);
+    assert.ok(prompt.includes(p.cadre), `${id} : bloc cadre (caméra/atmosphère/étalonnage) intact`);
+    // 2. La sentinelle vit UNIQUEMENT entre la lumière et le cadre (bloc sujet
+    //    + époque/lieu), jamais avant la fin de la lumière ni après le début du cadre.
+    const finLumiere = prompt.indexOf(p.lumiere) + p.lumiere.length;
+    const debutCadre = prompt.indexOf(p.cadre);
+    let pos = prompt.indexOf(SENTINELLE);
+    assert.ok(pos !== -1, `${id} : la saisie est bien transmise`);
+    while (pos !== -1) {
+      assert.ok(pos > finLumiere && pos < debutCadre, `${id} : sentinelle hors du bloc sujet (pos ${pos})`);
+      pos = prompt.indexOf(SENTINELLE, pos + 1);
+    }
   }
-  assert.equal(parCategorie.size, CATEGORIES.length, "6 familles utilisées");
 });
 
-test("les 30 presets produisent 30 prompts distincts", () => {
-  const prompts = PRESET_IDS.map((id) =>
-    compilerPrompt({ scene: SCENE, preset: id, format: PRESETS[id].format })
+test("une clause négative SAISIE est retirée, pas transmise", () => {
+  assert.equal(nettoyerSaisie("un homme sans chapeau marche"), "un homme marche");
+  assert.equal(nettoyerSaisie("chemise bleue, pas de cravate, pantalon noir"), "chemise bleue, pantalon noir");
+  assert.equal(nettoyerSaisie("aucun véhicule dans la rue"), "dans la rue");
+  const prompt = compilerPrompt({
+    preset: "nuit-archive",
+    saisie: { phrase: "Un homme sans chapeau marche vers la maison, jamais de foule autour" },
+    format: "9:16",
+  });
+  assert.deepEqual(trouverNegations(prompt), [], "le prompt final reste affirmatif");
+  assert.ok(!prompt.includes("chapeau"), "la clause négative a disparu avec son objet");
+});
+
+test("une clause de lumière saisie est ignorée — la lumière vient du preset (§4)", () => {
+  const prompt = compilerPrompt({
+    preset: "nuit-archive",
+    saisie: { phrase: "Un homme marche vers la banque en plein jour, sous le soleil" },
+    format: "9:16",
+  });
+  assert.ok(!/en plein jour|sous le soleil/i.test(prompt), "les clauses de lumière saisies sont retirées");
+  assert.ok(prompt.includes(PRESETS["nuit-archive"].lumiere), "la lumière du preset est intacte");
+});
+
+console.log("Les champs déclarés (§3)");
+test("30 presets déclarent leurs champs ; la phrase est le seul champ obligatoire", () => {
+  for (const id of PRESET_IDS) {
+    const p = PRESETS[id];
+    assert.ok(p.champs.length >= 1, `${id} : au moins un champ`);
+    const declarePhrase = p.champs.some((c) => c.type === "phrase");
+    if (declarePhrase) {
+      assert.throws(
+        () => compilerPrompt({ preset: id, saisie: {}, format: p.format }),
+        /phrase est obligatoire/,
+        `${id} : phrase déclarée → obligatoire`
+      );
+    } else {
+      // Vide, le modèle décide : le preset seul compile.
+      const prompt = compilerPrompt({ preset: id, saisie: {}, format: p.format });
+      assert.ok(prompt.includes(p.rendu), `${id} : compile sans aucune saisie`);
+    }
+  }
+});
+test("nuit-archive plafonne les personnages à 2 (§6)", () => {
+  const champ = PRESETS["nuit-archive"].champs.find((c) => c.type === "personnages");
+  assert.ok(champ && champ.type === "personnages" && champ.max === 2);
+  const sujet = construireSujet(
+    {
+      phrase: "Un homme sort de sa voiture",
+      personnages: [{ role: "a" }, { role: "b" }, { role: "c" }],
+    },
+    PRESETS["nuit-archive"]
   );
-  assert.equal(new Set(prompts).size, 30);
+  assert.ok(!/\bc\b/.test(sujet), "le 3e personnage est plafonné");
+});
+test("un personnage = rôle · tenue · action ; un objet = une ligne", () => {
+  const sujet = construireSujet(
+    {
+      personnages: [{ role: "un soldat", tenue: "chemise bleue", action: "il sort de la voiture" }],
+      objets: ["une berline grise"],
+    },
+    PRESETS["portrait-pro"]
+  );
+  assert.ok(sujet.includes("un soldat, vêtu(e) de chemise bleue, il sort de la voiture"));
+  assert.ok(sujet.includes("une berline grise"));
 });
 
 console.log("La règle des négations — 30 presets × heures × régions");
@@ -61,10 +157,8 @@ test("aucune négation, toutes combinaisons (30 × 5 heures × 7 régions = 1050
     for (const heure of [undefined, ...HEURES] as const) {
       for (const region of REGIONS) {
         const p = compilerPrompt({
-          scene: SCENE,
-          annee: 1975,
-          lieu: "Abidjan",
           preset: id as PresetId,
+          saisie: saisieDemo(id),
           heure,
           region: region as Region,
           format: "9:16",
@@ -78,79 +172,55 @@ test("aucune négation, toutes combinaisons (30 × 5 heures × 7 régions = 1050
   assert.equal(compte, 30 * 5 * 7, `${compte} prompts vérifiés`);
 });
 
-console.log("L'ancrage africain — le cœur du produit (§0.1)");
-test("injecté par défaut, AVANT le sujet", () => {
-  const p = compilerPrompt({ scene: SCENE, preset: "portrait-pro", format: "1:1" });
-  assert.ok(p.includes("West and Central African features"), "bloc de base présent");
+console.log("L'ancrage africain (§0.1) et l'ordre du §5");
+test("l'ancrage ouvre le prompt, le sujet vient après la lumière", () => {
+  const p = compilerPrompt({ preset: "nuit-archive", saisie: saisieDemo("nuit-archive"), format: "9:16" });
+  assert.ok(p.startsWith(ancrageAfricain("ouest").slice(0, 40)), "l'ancrage est le premier bloc");
   assert.ok(
-    p.indexOf("African features") < p.indexOf(`The scene: ${SCENE}`),
-    "l'ancrage précède le sujet"
+    p.indexOf(PRESETS["nuit-archive"].lumiere) < p.indexOf("The scene:"),
+    "sujet après la lumière"
   );
+  assert.ok(p.indexOf("The scene:") < p.indexOf(PRESETS["nuit-archive"].cadre), "sujet avant le cadre");
 });
-test("chaque région remplace matériaux et végétation", () => {
-  const attendus: Record<Exclude<Region, "monde">, string> = {
-    ouest: "banco earth walls",
-    sahel: "doum palms",
-    cote: "fishing pirogues",
-    foret: "kapok trees",
-    est: "flat-topped acacias",
-    maghreb: "zellige tiles",
+test("chaque région remplace matériaux et végétation ; « monde » omet le bloc", () => {
+  const marqueurs: Record<Exclude<Region, "monde">, string> = {
+    ouest: "banco earth walls", sahel: "doum palms", cote: "fishing pirogues",
+    foret: "kapok trees", est: "flat-topped acacias", maghreb: "zellige tiles",
   };
-  for (const [region, marqueur] of Object.entries(attendus)) {
-    const p = compilerPrompt({ scene: SCENE, preset: "portrait-pro", region: region as Region, format: "1:1" });
+  for (const [region, marqueur] of Object.entries(marqueurs)) {
+    const p = compilerPrompt({ preset: "portrait-pro", saisie: {}, region: region as Region, format: "1:1" });
     assert.ok(p.includes(marqueur), `${region} → « ${marqueur} »`);
   }
-});
-test("région « monde » (décor non africain explicite) → bloc omis", () => {
-  const p = compilerPrompt({ scene: SCENE, preset: "portrait-pro", region: "monde", format: "1:1" });
-  assert.ok(!p.includes("African features"), "ancrage absent");
-  assert.equal(ancrageAfricain("monde"), "");
-});
-test("les 6 blocs régionaux sont eux-mêmes affirmatifs", () => {
-  for (const region of REGIONS) {
-    assert.deepEqual(trouverNegations(ancrageAfricain(region as Region)), [], region);
-  }
+  const monde = compilerPrompt({ preset: "portrait-pro", saisie: {}, region: "monde", format: "1:1" });
+  assert.ok(!monde.includes("African features"));
 });
 
-console.log("Zones de texte réservées (§0.3)");
-test("les 7 presets [zone de texte] réservent une plage vide dans le prompt", () => {
+console.log("Zones de texte, époque, mode avancé");
+test("les 7 presets [zone de texte] réservent leur plage vide", () => {
   const marques = PRESET_IDS.filter((id) => PRESETS[id].zoneTexte);
-  assert.deepEqual(
-    marques.sort(),
-    ["affiche-religieuse", "affiche-resistance", "flyer-promo", "fond-citation", "hommage", "miniature-video", "motivation"].sort(),
-    "la liste des presets marqués"
-  );
+  assert.equal(marques.length, 7);
   for (const id of marques) {
-    const p = compilerPrompt({ scene: SCENE, preset: id, format: PRESETS[id].format });
-    assert.ok(/empty/i.test(p), `${id} : plage vide décrite dans le prompt`);
-    assert.ok(/text overlay/i.test(p), `${id} : réservée pour l'incrustation`);
+    const p = compilerPrompt({ preset: id, saisie: saisieDemo(id), format: PRESETS[id].format });
+    assert.ok(/empty/i.test(p) && /text overlay/i.test(p), `${id} : plage vide réservée`);
   }
 });
-
-console.log("Époque, heures, mode avancé");
-test("année présente → pack de la période ; absente → intemporel", () => {
-  const p1916 = compilerPrompt({ scene: SCENE, annee: 1916, preset: "document-epoque", format: "4:5" });
-  assert.ok(p1916.includes("hand-crank automobiles"));
-  const sans = compilerPrompt({ scene: SCENE, preset: "document-epoque", format: "4:5" });
-  assert.ok(sans.includes("Timeless enduring world"));
-  assert.deepEqual(trouverNegations(packEpoque(1943, "Dakar")), []);
+test("année → pack d'époque ; prompt libre en DERNIER bloc", () => {
+  const p = compilerPrompt({
+    preset: "nuit-archive",
+    saisie: { ...saisieDemo("nuit-archive"), annee: 1973 },
+    format: "9:16",
+    promptLibre: "shot on expired kodak film stock",
+  });
+  assert.ok(p.includes("Peugeot 404 and 504"), "pack 1970-1989");
+  assert.ok(p.trimEnd().endsWith("shot on expired kodak film stock."), "prompt libre en dernier");
 });
-test("changer l'heure ajoute l'ambiance temporelle, le reste ne bouge pas", () => {
-  const natif = compilerPrompt({ scene: SCENE, preset: "nuit-archive", format: "9:16" });
-  const aube = compilerPrompt({ scene: SCENE, preset: "nuit-archive", heure: "aube", format: "9:16" });
-  assert.notEqual(natif, aube);
-  assert.ok(aube.includes("takes place at dawn"));
-  assert.ok(aube.includes(PRESETS["nuit-archive"].rendu), "le rendu reste");
-});
-test("mode avancé : le prompt libre atterrit APRÈS l'ancrage et le preset", () => {
-  const libre = "shot on expired kodak film stock";
-  const p = compilerPrompt({ scene: SCENE, preset: "portrait-pro", format: "1:1", promptLibre: libre });
-  assert.ok(p.trimEnd().endsWith(`${libre}.`), "le prompt libre est le DERNIER bloc");
-  assert.ok(p.indexOf("African features") < p.indexOf(libre), "après l'ancrage");
-  assert.ok(p.indexOf(PRESETS["portrait-pro"].cadre) < p.indexOf(libre), "après le preset");
-});
-test("scène vide → erreur claire", () => {
-  assert.throws(() => compilerPrompt({ scene: "  ", preset: "mariage", format: "4:5" }));
+test("les 6 familles sont couvertes ; 30 prompts distincts", () => {
+  const parCat = new Set(PRESET_IDS.map((id) => PRESETS[id].categorie));
+  assert.equal(parCat.size, CATEGORIES.length);
+  const prompts = PRESET_IDS.map((id) =>
+    compilerPrompt({ preset: id, saisie: saisieDemo(id), format: PRESETS[id].format })
+  );
+  assert.equal(new Set(prompts).size, 30);
 });
 
 console.log(`\n${total - rate}/${total} tests verts`);

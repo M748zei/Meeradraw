@@ -15,18 +15,19 @@ import {
   REGIONS,
   type Format,
   type Heure,
+  type Personnage,
   type PresetId,
   type Region,
+  type Saisie,
   type Variantes,
   type ZoneTexte,
 } from "@/services/studio/types";
 
 /**
- * Les trois écrans de MeeraDraw — une colonne, cibles de doigt, pensé pour
- * 360 px. Pas de champ de prompt libre visible : une phrase, un preset, un
- * cadre. Le style vient du preset, l'ancrage africain vient de la région.
- * Le « Mode avancé » (replié) porte le 5 % : prompt libre, modèle, région,
- * graine — c'est l'étage qui rend la formation vendable.
+ * Le parcours v2 (§1) : LE STYLE → LES DÉTAILS → LE CADRE. C'est le style qui
+ * décide de ce qu'on demande : l'étape 2 se construit à partir des champs que
+ * le preset déclare. Aucun champ obligatoire sauf la phrase quand elle est là.
+ * Une colonne, cibles de doigt, pensé pour 360 px.
  */
 
 const COUTS: Record<Variantes, number> = { 1: 2, 2: 3, 4: 6 };
@@ -57,7 +58,6 @@ const FORMAT_LIBELLES: Record<Format, string> = {
   "1:1": "Carré",
   "16:9": "Paysage",
 };
-/** Position verticale par défaut du texte selon la zone réservée du preset. */
 const ZONE_Y: Record<ZoneTexte, number> = {
   haut: 16,
   bas: 85,
@@ -65,12 +65,6 @@ const ZONE_Y: Record<ZoneTexte, number> = {
   droite: 50,
   bandeaux: 90,
 };
-const EXEMPLES = [
-  "Un homme d'affaires marche vers son bureau au petit matin",
-  "Une commerçante fière devant sa boutique de tissus",
-  "Un mariage sous les manguiers en fin d'après-midi",
-  "Un homme seul marche vers l'agence de la banque, la nuit, sous la pluie",
-];
 
 type EtatGen =
   | { phase: "saisie" }
@@ -82,14 +76,14 @@ interface VarianteImage {
   occupee?: boolean;
 }
 
+const SAISIE_VIDE: Saisie = {};
+
 export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null }) {
   const router = useRouter();
   const [ecran, setEcran] = useState<1 | 2 | 3>(1);
-  const [scene, setScene] = useState("");
-  const [annee, setAnnee] = useState("");
-  const [lieu, setLieu] = useState("");
-  const [preset, setPreset] = useState<PresetId>("portrait-pro");
-  const [format, setFormat] = useState<Format>("1:1");
+  const [preset, setPreset] = useState<PresetId>("nuit-archive");
+  const [saisie, setSaisie] = useState<Saisie>(SAISIE_VIDE);
+  const [format, setFormat] = useState<Format>(PRESETS["nuit-archive"].format);
   const [variantes, setVariantes] = useState<Variantes>(2);
   const [etat, setEtat] = useState<EtatGen>({ phase: "saisie" });
   const [resultats, setResultats] = useState<VarianteImage[]>([]);
@@ -97,7 +91,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
   const [edition, setEdition] = useState<string | null>(null);
   const [heurePar, setHeurePar] = useState<Record<number, Heure | undefined>>({});
   const [secondes, setSecondes] = useState(0);
-  // Mode avancé — fermé par défaut, l'utilisateur ordinaire ne le voit jamais.
+  // Mode avancé — fermé par défaut, la seule échappatoire à la règle du §4.
   const [avance, setAvance] = useState(false);
   const [promptLibre, setPromptLibre] = useState("");
   const [region, setRegion] = useState<Region>("ouest");
@@ -105,10 +99,23 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
   const [graine, setGraine] = useState("");
   const [derniereGraine, setDerniereGraine] = useState<number | null>(null);
 
-  const sceneValide = scene.trim().length >= 8;
+  const lePreset = PRESETS[preset];
+  const declarePhrase = lePreset.champs.some((c) => c.type === "phrase");
+  const phraseValide = !declarePhrase || (saisie.phrase ?? "").trim().length >= 8;
+
+  function majSaisie(delta: Partial<Saisie>) {
+    setSaisie((s) => ({ ...s, ...delta }));
+  }
+  function majPersonnage(index: number, delta: Partial<Personnage>) {
+    setSaisie((s) => {
+      const liste = [...(s.personnages ?? [])];
+      liste[index] = { ...liste[index], ...delta };
+      return { ...s, personnages: liste };
+    });
+  }
 
   async function appeler(corps: Record<string, unknown>): Promise<string[] | null> {
-    const timer = setInterval(() => setSecondes((s) => s + 1), 1000);
+    const timer = setInterval(() => setSecondes((n) => n + 1), 1000);
     try {
       const reponse = await fetch("/api/images", {
         method: "POST",
@@ -145,10 +152,8 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
 
   function corpsCommun() {
     return {
-      scene: scene.trim(),
-      annee: annee.trim() ? Number(annee.trim()) : undefined,
-      lieu: lieu.trim() || undefined,
       preset,
+      saisie,
       format,
       ...(region !== "ouest" ? { region } : {}),
       ...(promptLibre.trim() ? { promptLibre: promptLibre.trim() } : {}),
@@ -168,7 +173,6 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
     }
   }
 
-  /** Régénérer UNE variante (1 image = 2 crédits), heure éventuelle comprise. */
   async function regenerer(index: number, heure?: Heure) {
     const heureFinale = heure ?? heurePar[index];
     setResultats((r) => r.map((v, i) => (i === index ? { ...v, occupee: true } : v)));
@@ -185,8 +189,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
 
   function prochaineHeure(index: number) {
     const cycle: (Heure | undefined)[] = [undefined, ...HEURES];
-    const actuelle = cycle.indexOf(heurePar[index]);
-    const suivante = cycle[(actuelle + 1) % cycle.length];
+    const suivante = cycle[(cycle.indexOf(heurePar[index]) + 1) % cycle.length];
     setHeurePar((h) => ({ ...h, [index]: suivante }));
     void regenerer(index, suivante);
   }
@@ -195,69 +198,8 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
 
   return (
     <div className="space-y-5 pb-10">
-      {/* ── Écran 1 — la scène ─────────────────────────────────────────── */}
+      {/* ── Écran 1 — LE STYLE ─────────────────────────────────────────── */}
       {ecran === 1 ? (
-        <section className="space-y-4">
-          <div>
-            <label htmlFor="scene" className="mb-1.5 block text-sm font-bold text-ink">
-              Ta scène, en une phrase
-            </label>
-            <Textarea
-              id="scene"
-              rows={3}
-              maxLength={300}
-              placeholder="Exemple : Une commerçante fière devant sa boutique de tissus"
-              value={scene}
-              onChange={(e) => setScene(e.target.value)}
-            />
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {EXEMPLES.map((ex) => (
-                <button
-                  key={ex}
-                  type="button"
-                  onClick={() => setScene(ex)}
-                  className="rounded-full bg-cream-100 px-3 py-1.5 text-left text-xs text-ink-muted transition active:scale-95"
-                >
-                  {ex.length > 46 ? `${ex.slice(0, 44)}…` : ex}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label htmlFor="annee" className="mb-1.5 block text-sm font-bold text-ink">
-                Année <span className="font-normal text-ink-muted">(facultatif)</span>
-              </label>
-              <Input
-                id="annee"
-                inputMode="numeric"
-                maxLength={4}
-                placeholder="1975"
-                value={annee}
-                onChange={(e) => setAnnee(e.target.value.replace(/\D/g, ""))}
-              />
-            </div>
-            <div>
-              <label htmlFor="lieu" className="mb-1.5 block text-sm font-bold text-ink">
-                Lieu <span className="font-normal text-ink-muted">(facultatif)</span>
-              </label>
-              <Input
-                id="lieu"
-                maxLength={80}
-                placeholder="Abidjan"
-                value={lieu}
-                onChange={(e) => setLieu(e.target.value)}
-              />
-            </div>
-          </div>
-          <Button className="w-full" size="lg" disabled={!sceneValide} onClick={() => setEcran(2)}>
-            Choisir le style
-          </Button>
-        </section>
-      ) : null}
-
-      {/* ── Écran 2 — le style : 30 presets, 6 familles ────────────────── */}
-      {ecran === 2 ? (
         <section className="space-y-5">
           {CATEGORIES.map((cat) => (
             <div key={cat.id}>
@@ -273,23 +215,38 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
                       onClick={() => {
                         setPreset(id);
                         setFormat(p.format);
+                        setSaisie(SAISIE_VIDE);
+                        setEcran(2);
                       }}
                       className={`rounded-2xl border-2 p-0.5 text-left transition active:scale-[0.98] ${
                         actif ? "border-amber-500" : "border-transparent"
                       }`}
                     >
                       <div
-                        className="relative flex h-16 items-end rounded-xl p-2"
+                        className="relative flex h-32 items-end overflow-hidden rounded-xl p-2"
                         style={{
                           background: `linear-gradient(140deg, ${p.vignette.de}, ${p.vignette.vers})`,
                         }}
                       >
+                        {/* La vignette est une image réellement générée par ce
+                            preset (script generer-vignettes), servie en statique.
+                            Si elle manque, le dégradé reste. */}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`/presets/${id}.webp`}
+                          alt=""
+                          className="absolute inset-0 h-full w-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                        <span className="absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/75 to-transparent" />
                         {p.zoneTexte ? (
-                          <span className="absolute right-1.5 top-1.5 rounded bg-black/40 px-1.5 py-0.5 text-[9px] font-semibold text-white">
+                          <span className="absolute right-1.5 top-1.5 rounded bg-black/50 px-1.5 py-0.5 text-[9px] font-semibold text-white">
                             zone de texte
                           </span>
                         ) : null}
-                        <span className="text-[13px] font-bold leading-tight text-white drop-shadow">
+                        <span className="relative text-[13px] font-bold leading-tight text-white drop-shadow">
                           {p.nom}
                         </span>
                       </div>
@@ -302,18 +259,199 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
               </div>
             </div>
           ))}
+        </section>
+      ) : null}
+
+      {/* ── Écran 2 — LES DÉTAILS (déclarés par le style choisi) ───────── */}
+      {ecran === 2 ? (
+        <section className="space-y-4">
+          <div className="flex items-center gap-2">
+            <span
+              className="h-10 w-10 shrink-0 rounded-xl bg-cover bg-center"
+              style={{
+                backgroundImage: `url(/presets/${preset}.webp), linear-gradient(140deg, ${lePreset.vignette.de}, ${lePreset.vignette.vers})`,
+              }}
+            />
+            <div>
+              <p className="text-sm font-bold text-ink">{lePreset.nom}</p>
+              <p className="text-xs text-ink-muted">
+                Tout est facultatif{declarePhrase ? ", sauf la phrase" : ""} — vide, le modèle
+                décide ; rempli, il obéit.
+              </p>
+            </div>
+          </div>
+
+          {lePreset.champs.map((champ, ci) => {
+            if (champ.type === "phrase") {
+              return (
+                <div key={ci}>
+                  <label htmlFor="phrase" className="mb-1.5 block text-sm font-bold text-ink">
+                    {champ.label}
+                  </label>
+                  <Textarea
+                    id="phrase"
+                    rows={3}
+                    maxLength={300}
+                    placeholder={`Exemple : ${champ.exemples[0] ?? ""}`}
+                    value={saisie.phrase ?? ""}
+                    onChange={(e) => majSaisie({ phrase: e.target.value })}
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {champ.exemples.map((ex) => (
+                      <button
+                        key={ex}
+                        type="button"
+                        onClick={() => majSaisie({ phrase: ex })}
+                        className="rounded-full bg-cream-100 px-3 py-1.5 text-left text-xs text-ink-muted transition active:scale-95"
+                      >
+                        {ex.length > 46 ? `${ex.slice(0, 44)}…` : ex}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            }
+            if (champ.type === "personnages") {
+              const liste = saisie.personnages ?? [];
+              return (
+                <div key={ci} className="space-y-2">
+                  <p className="text-sm font-bold text-ink">
+                    Personnages <span className="font-normal text-ink-muted">(jusqu'à {champ.max}, facultatif)</span>
+                  </p>
+                  {liste.map((pers, pi) => (
+                    <div key={pi} className="grid grid-cols-3 gap-1.5">
+                      <Input
+                        placeholder="Rôle — un soldat"
+                        maxLength={80}
+                        value={pers.role ?? ""}
+                        onChange={(e) => majPersonnage(pi, { role: e.target.value })}
+                      />
+                      <Input
+                        placeholder="Tenue — chemise bleue"
+                        maxLength={120}
+                        value={pers.tenue ?? ""}
+                        onChange={(e) => majPersonnage(pi, { tenue: e.target.value })}
+                      />
+                      <Input
+                        placeholder="Action — il sort"
+                        maxLength={120}
+                        value={pers.action ?? ""}
+                        onChange={(e) => majPersonnage(pi, { action: e.target.value })}
+                      />
+                    </div>
+                  ))}
+                  {liste.length < champ.max ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        majSaisie({ personnages: [...liste, {}] })
+                      }
+                      className="rounded-xl bg-cream-100 px-3 py-2 text-xs font-semibold text-ink active:scale-95"
+                    >
+                      + Ajouter un personnage
+                    </button>
+                  ) : null}
+                </div>
+              );
+            }
+            if (champ.type === "objets") {
+              const liste = saisie.objets ?? [];
+              return (
+                <div key={ci} className="space-y-2">
+                  <p className="text-sm font-bold text-ink">
+                    Objets <span className="font-normal text-ink-muted">(jusqu'à {champ.max}, facultatif)</span>
+                  </p>
+                  {liste.map((obj, oi) => (
+                    <Input
+                      key={oi}
+                      placeholder="Exemple : une berline grise"
+                      maxLength={120}
+                      value={obj}
+                      onChange={(e) =>
+                        majSaisie({
+                          objets: liste.map((o, j) => (j === oi ? e.target.value : o)),
+                        })
+                      }
+                    />
+                  ))}
+                  {liste.length < champ.max ? (
+                    <button
+                      type="button"
+                      onClick={() => majSaisie({ objets: [...liste, ""] })}
+                      className="rounded-xl bg-cream-100 px-3 py-2 text-xs font-semibold text-ink active:scale-95"
+                    >
+                      + Ajouter un objet
+                    </button>
+                  ) : null}
+                </div>
+              );
+            }
+            if (champ.type === "texte") {
+              return (
+                <div key={ci}>
+                  <label className="mb-1.5 block text-sm font-bold text-ink">
+                    {champ.label} <span className="font-normal text-ink-muted">(facultatif)</span>
+                  </label>
+                  <Input
+                    maxLength={160}
+                    placeholder={`Exemple : ${champ.exemples[0] ?? ""}`}
+                    value={saisie.textes?.[champ.cle] ?? ""}
+                    onChange={(e) =>
+                      majSaisie({ textes: { ...saisie.textes, [champ.cle]: e.target.value } })
+                    }
+                  />
+                </div>
+              );
+            }
+            if (champ.type === "annee") {
+              return (
+                <div key={ci}>
+                  <label htmlFor="annee" className="mb-1.5 block text-sm font-bold text-ink">
+                    Année <span className="font-normal text-ink-muted">(facultatif)</span>
+                  </label>
+                  <Input
+                    id="annee"
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder="1973"
+                    value={saisie.annee ? String(saisie.annee) : ""}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, "");
+                      majSaisie({ annee: v ? Number(v) : undefined });
+                    }}
+                  />
+                </div>
+              );
+            }
+            // lieu
+            return (
+              <div key={ci}>
+                <label htmlFor="lieu" className="mb-1.5 block text-sm font-bold text-ink">
+                  Lieu <span className="font-normal text-ink-muted">(facultatif)</span>
+                </label>
+                <Input
+                  id="lieu"
+                  maxLength={80}
+                  placeholder="Conakry"
+                  value={saisie.lieu ?? ""}
+                  onChange={(e) => majSaisie({ lieu: e.target.value })}
+                />
+              </div>
+            );
+          })}
+
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => setEcran(1)}>
               Retour
             </Button>
-            <Button className="flex-1" size="lg" onClick={() => setEcran(3)}>
+            <Button className="flex-1" size="lg" disabled={!phraseValide} onClick={() => setEcran(3)}>
               Choisir le cadre
             </Button>
           </div>
         </section>
       ) : null}
 
-      {/* ── Écran 3 — le cadre + mode avancé replié ────────────────────── */}
+      {/* ── Écran 3 — LE CADRE + mode avancé replié ────────────────────── */}
       {ecran === 3 ? (
         <section className="space-y-4">
           <div>
@@ -359,7 +497,6 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
             </div>
           </div>
 
-          {/* Mode avancé — fermé par défaut. Le 5 % qui le cherche le trouve. */}
           <div className="rounded-2xl border border-cream-200 bg-white">
             <button
               type="button"
@@ -444,7 +581,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
               className="flex-1"
               size="lg"
               onClick={generer}
-              disabled={generationEnCours || !sceneValide}
+              disabled={generationEnCours || !phraseValide}
             >
               {etat.phase === "generation"
                 ? `Création en cours… ${secondes}s`
@@ -475,7 +612,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
         </div>
       ) : null}
 
-      {/* ── Résultats : variantes côte à côte ──────────────────────────── */}
+      {/* ── Résultats ──────────────────────────────────────────────────── */}
       {resultats.length ? (
         <section className="space-y-3">
           <h2 className="text-sm font-bold text-ink">Tes images</h2>
@@ -532,7 +669,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
       {edition ? (
         <EditeurTexte
           url={edition}
-          yInitial={PRESETS[preset].zoneTexte ? ZONE_Y[PRESETS[preset].zoneTexte!] : 75}
+          yInitial={lePreset.zoneTexte ? ZONE_Y[lePreset.zoneTexte] : 75}
           onFermer={() => setEdition(null)}
         />
       ) : null}

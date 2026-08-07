@@ -70,18 +70,46 @@ export type Region = (typeof REGIONS)[number];
 /** Plage vide réservée par les presets [zone de texte]. */
 export type ZoneTexte = "haut" | "bas" | "centre" | "droite" | "bandeaux";
 
-export interface CompilerInput {
-  /** La scène décrite par l'utilisateur, une phrase en français. */
-  scene: string;
+/**
+ * Un champ que le preset déclare (§3 du parcours v2) : c'est le style qui
+ * décide de ce qu'on demande. Aucun champ obligatoire sauf la phrase quand
+ * elle est déclarée. Vide, le modèle décide ; rempli, il obéit.
+ */
+export type Champ =
+  | { type: "phrase"; label: string; exemples: string[] }
+  | { type: "personnages"; max: number }
+  | { type: "objets"; max: number }
+  | { type: "texte"; cle: string; label: string; exemples: string[] }
+  | { type: "annee" }
+  | { type: "lieu" };
+
+/** Un personnage = trois cases courtes, pas une dissertation. */
+export interface Personnage {
+  role?: string;
+  tenue?: string;
+  action?: string;
+}
+
+/** Ce que l'utilisateur a saisi à l'étape 2 — n'alimente QUE le bloc sujet. */
+export interface Saisie {
+  phrase?: string;
+  personnages?: Personnage[];
+  objets?: string[];
+  /** Valeurs des champs texte, par clé déclarée (fond, tenue, produit…). */
+  textes?: Record<string, string>;
   annee?: number;
   lieu?: string;
+}
+
+export interface CompilerInput {
   preset: PresetId;
+  saisie: Saisie;
   /** Si absente, le preset garde sa lumière native. */
   heure?: Heure;
   format: Format;
   /** Défaut : "ouest" (le bloc d'ancrage de base). */
   region?: Region;
-  /** Mode avancé : ajouté APRÈS l'ancrage et le preset, jamais avant. */
+  /** Mode avancé : ajouté en dernier, jamais avant. */
   promptLibre?: string;
 }
 
@@ -103,6 +131,8 @@ export interface Preset {
   format: Format;
   /** Présent sur les presets [zone de texte]. */
   zoneTexte?: ZoneTexte;
+  /** Les questions que ce style pose à l'étape 2 (§3 du parcours v2). */
+  champs: Champ[];
   /** Couleurs de la vignette dans la grille. */
   vignette: { de: string; vers: string };
 }
