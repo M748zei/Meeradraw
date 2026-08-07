@@ -87,6 +87,8 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
   const [saisie, setSaisie] = useState<Saisie>(SAISIE_VIDE);
   const [format, setFormat] = useState<Format>(PRESETS["nuit-archive"].format);
   const [variantes, setVariantes] = useState<Variantes>(2);
+  const [serie, setSerie] = useState(false);
+  const [nomsPlans, setNomsPlans] = useState<string[] | null>(null);
   const [etat, setEtat] = useState<EtatGen>({ phase: "saisie" });
   const [resultats, setResultats] = useState<VarianteImage[]>([]);
   const [solde, setSolde] = useState<number | null>(soldeInitial);
@@ -162,6 +164,7 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
         router.refresh();
       }
       if (typeof json.data.graine === "number") setDerniereGraine(json.data.graine);
+      setNomsPlans(Array.isArray(json.data.plans) ? (json.data.plans as string[]) : null);
       return json.data.urls as string[];
     } catch {
       setEtat({
@@ -191,10 +194,12 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
     };
   }
 
+  const coutTotal = serie ? 10 : couts[variantes];
+
   async function generer() {
     setSecondes(0);
     setEtat({ phase: "generation" });
-    const urls = await appeler({ ...corpsCommun(), variantes });
+    const urls = await appeler({ ...corpsCommun(), ...(serie ? { serie: true } : {}), variantes });
     if (urls) {
       setResultats(urls.map((url) => ({ url })));
       setHeurePar({});
@@ -571,9 +576,12 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
                 <button
                   key={v}
                   type="button"
-                  onClick={() => setVariantes(v)}
+                  onClick={() => {
+                    setVariantes(v);
+                    setSerie(false);
+                  }}
                   className={`min-h-12 rounded-xl text-sm font-semibold transition active:scale-95 ${
-                    variantes === v
+                    !serie && variantes === v
                       ? "bg-amber-500 text-white shadow-soft"
                       : "border border-cream-200 bg-white text-ink-muted"
                   }`}
@@ -583,6 +591,23 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
                 </button>
               ))}
             </div>
+            {!referenceDataUrl ? (
+              <button
+                type="button"
+                onClick={() => setSerie(!serie)}
+                className={`mt-1.5 w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition active:scale-[0.99] ${
+                  serie
+                    ? "bg-amber-500 text-white shadow-soft"
+                    : "border border-cream-200 bg-white text-ink"
+                }`}
+              >
+                Série de 6 plans — 10 crédits
+                <span className={`block text-[10px] font-normal ${serie ? "opacity-90" : "text-ink-muted"}`}>
+                  Le même moment en 6 images : ensemble, large, taille, détail,
+                  contre-champ, fin. Un reel entier en une phrase.
+                </span>
+              </button>
+            ) : null}
           </div>
 
           <div className="rounded-2xl border border-cream-200 bg-white">
@@ -673,12 +698,12 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
             >
               {etat.phase === "generation"
                 ? `Création en cours… ${secondes}s`
-                : `Générer — ${couts[variantes]} crédits`}
+                : `Générer — ${coutTotal} crédits`}
             </Button>
           </div>
-          {solde !== null && solde < couts[variantes] ? (
+          {solde !== null && solde < coutTotal ? (
             <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              Ton solde ({solde}) ne couvre pas les {couts[variantes]} crédits — recharge avec le
+              Ton solde ({solde}) ne couvre pas les {coutTotal} crédits — recharge avec le
               bouton en haut.
             </p>
           ) : null}
@@ -710,6 +735,11 @@ export function GenerateurStudio({ soldeInitial }: { soldeInitial: number | null
           <div className={`grid gap-3 ${resultats.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
             {resultats.map((v, i) => (
               <figure key={`${v.url}-${i}`} className="space-y-1.5">
+                {nomsPlans?.[i] ? (
+                  <figcaption className="text-[11px] font-semibold text-ink-muted">
+                    {i + 1}. {nomsPlans[i]}
+                  </figcaption>
+                ) : null}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={v.url}

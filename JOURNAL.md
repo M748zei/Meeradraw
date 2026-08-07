@@ -63,3 +63,9 @@
   bloc « personnes » retiré quand selfie — testé). Tarifs 3/5/9 en base. Test dur
   passé → presets photo ouverts. 4 défauts vus à l'image et corrigés. 20/20.
   Commit local, pas poussé.
+- 05h40 — Chantier 2 : 90/90 images de contrôle (30 presets × 3 cas déclarés,
+  une passe, graines fixes), planche publiée en artifact, specs des 30 écrites
+  (docs/SPECS-PRESETS.md). RIEN réglé avant la séance de jugement, comme demandé.
+- 05h50 — Chantier 3 : mode Série (6 plans, plan de tournage fixe, seule la
+  caméra change, graines en famille, visages loin/dos/ombre), 10 crédits
+  (migration studio.serie6), preuve Conakry générée.

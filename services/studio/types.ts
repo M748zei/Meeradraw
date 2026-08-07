@@ -128,6 +128,8 @@ export interface CompilerInput {
    * éclairée où le produit détouré sera reposé (chantier 4 §2).
    */
   decorProduit?: boolean;
+  /** Mode Série : la clause de caméra du plan de tournage (remplace le regard du preset pour CE plan). */
+  planCamera?: string;
 }
 
 /**

@@ -189,6 +189,9 @@ export function compilerPrompt(input: CompilerInput): string {
     sujet,
     packEpoque(input.saisie.annee, input.saisie.lieu),
     preset.cadre,
+    // Mode Série : la clause du plan de tournage vient APRÈS le cadre du
+    // preset — c'est elle qui décide du regard pour ce plan précis.
+    input.planCamera?.trim() ?? "",
     // Mode avancé : la seule échappatoire, toujours en dernier.
     input.promptLibre?.trim() ?? "",
   ];
@@ -199,6 +202,52 @@ export function compilerPrompt(input: CompilerInput): string {
     .map((b) => b.replace(/\.?$/, "."))
     .join(" ");
 }
+
+/**
+ * Le plan de tournage du mode Série (chantier 3) : six plans du même moment.
+ * Le preset ne bouge pas, le sujet ne bouge pas, la graine reste en famille —
+ * SEULE la clause de caméra change. La règle qui ne bouge pas : les visages
+ * restent loin, de dos ou dans l'ombre — c'est ce qui rend la série possible
+ * (la cohérence de PERSONNAGE est impossible, on ne la promet jamais).
+ */
+export const PLAN_TOURNAGE: { id: string; nom: string; camera: string }[] = [
+  {
+    id: "ensemble",
+    nom: "Plan d'ensemble",
+    camera:
+      "THIS SHOT: extreme wide establishing shot of the location itself, architecture and sky dominating the frame, any figures tiny and distant.",
+  },
+  {
+    id: "large",
+    nom: "Plan large",
+    camera:
+      "THIS SHOT: wide shot, the subject small at one third of frame height inside the full setting, seen from behind or three-quarters back.",
+  },
+  {
+    id: "taille",
+    nom: "Plan taille",
+    camera:
+      "THIS SHOT: medium waist-up shot of the subject seen from three-quarters behind or from the back, the face turned away from camera.",
+  },
+  {
+    id: "detail",
+    nom: "Détail",
+    camera:
+      "THIS SHOT: close-up detail of hands, an object or a trace of the action, shallow depth of field, framed below the shoulders.",
+  },
+  {
+    id: "contrechamp",
+    nom: "Contre-champ",
+    camera:
+      "THIS SHOT: reverse angle from the subject's position, showing what they are looking at or those waiting for them, distant figures or silhouettes in shadow.",
+  },
+  {
+    id: "fin",
+    nom: "Plan de fin",
+    camera:
+      "THIS SHOT: closing wide shot, the place after the moment, emptied, or the subject walking away small in the distance.",
+  },
+];
 
 /**
  * Négations interdites dans un prompt compilé (§0.2) — vérifiées par la suite

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireUser } from "@/lib/api-auth";
 import { apiError, apiSuccess, AppError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit-store";
-import { compilerPrompt } from "@/services/studio/compiler";
+import { compilerPrompt, PLAN_TOURNAGE } from "@/services/studio/compiler";
 import {
   actionPourVariantes,
   genererImageStudio,
@@ -46,6 +46,8 @@ const schema = z.object({
   heure: z.enum(HEURES).optional(),
   format: z.enum(FORMATS),
   variantes: z.union([z.literal(1), z.literal(2), z.literal(4)]),
+  // Mode Série (chantier 3) : 6 plans du même moment, seule la caméra change.
+  serie: z.boolean().optional(),
   // Mode avancé — replié pour l'utilisateur ordinaire.
   region: z.enum(REGIONS).optional(),
   promptLibre: z.string().max(500).optional(),
@@ -117,11 +119,23 @@ export async function POST(request: Request) {
       }
     }
 
+    // La série ne se combine pas avec une image de référence (v1).
+    if (input.serie && input.reference) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "La série de 6 plans ne se combine pas encore avec une image de référence.",
+        400
+      );
+    }
+
     // Débit d'abord — la même ref sert au remboursement (idempotence des deux côtés).
     // Avec référence : 3 crédits l'image au lieu de 2 (packs 5 et 9).
-    const action = input.reference
-      ? `studio.imageref${input.variantes}`
-      : actionPourVariantes(input.variantes);
+    // Série : 10 crédits les 6 plans (au lieu de 12 à l'unité).
+    const action = input.serie
+      ? "studio.serie6"
+      : input.reference
+        ? `studio.imageref${input.variantes}`
+        : actionPourVariantes(input.variantes);
     const ref = `studio:${randomUUID()}`;
     const debit = await debiterAction(supabase, action, ref);
     if (!debit.ok) {
@@ -182,9 +196,23 @@ export async function POST(request: Request) {
       };
     }
 
-    const resultats = await Promise.allSettled(
-      Array.from({ length: input.variantes }, (_, i) => genererUne(graine + i * 7919))
-    );
+    // Série : 6 plans, même graine de famille, seule la clause de caméra
+    // change (plan de tournage fixe). Sinon : N variantes indépendantes.
+    const resultats = input.serie
+      ? await Promise.allSettled(
+          PLAN_TOURNAGE.map((plan, i) => {
+            const promptPlan = compilerPrompt({ ...input, planCamera: plan.camera });
+            return genererImageStudio({
+              prompt: promptPlan,
+              format: input.format,
+              seed: graine + i * 31,
+              endpoint,
+            }).then((r) => r.url);
+          })
+        )
+      : await Promise.allSettled(
+          Array.from({ length: input.variantes }, (_, i) => genererUne(graine + i * 7919))
+        );
     const urls = resultats
       .filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled")
       .map((r) => r.value);
@@ -220,7 +248,8 @@ export async function POST(request: Request) {
     // vaut toujours : aucune limite silencieuse).
     return apiSuccess({
       urls,
-      demandees: input.variantes,
+      plans: input.serie ? PLAN_TOURNAGE.map((p) => p.nom) : undefined,
+      demandees: input.serie ? 6 : input.variantes,
       livrees: urls.length,
       ref,
       graine,
